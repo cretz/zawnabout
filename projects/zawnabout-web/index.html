@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#5faeeb" />
+    <title>zawnabout</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="welcome" class="card center hidden">
+      <h1>zawnabout</h1>
+      <p class="lead">You're a little dragon with a big sky. Go anywhere!</p>
+      <div id="controls"></div>
+      <p class="hint" id="start-hint">Press any key or tap to start</p>
+    </div>
+
+    <button id="help-btn" class="round" aria-label="Controls">?</button>
+
+    <div id="touch" class="hidden">
+      <div id="stick-zone"><div id="stick-base"><div id="stick-knob"></div></div></div>
+      <div id="buttons">
+        <button class="pad small" data-action="brake">Brake</button>
+        <button class="pad small" data-action="tuck">Dive</button>
+        <button class="pad big" data-action="flap">Flap</button>
+      </div>
+    </div>
+
+    <div id="debug" class="hidden">
+      <div class="debug-head">
+        <strong>debug</strong>
+        <span class="debug-actions">
+          <button id="debug-copy">copy</button>
+          <button id="debug-reset">reset</button>
+          <button id="debug-hide">hide</button>
+        </span>
+      </div>
+      <pre id="debug-state"></pre>
+      <input id="debug-cmd" placeholder="command, e.g. spawn 0 60 0 0 20" autocomplete="off" />
+      <pre id="debug-out"></pre>
+      <div id="debug-params"></div>
+    </div>
+
+    <div id="nogpu" class="card center hidden">
+      <h1>Oh no!</h1>
+      <p>This browser can't show the dragon yet. It needs WebGPU, which recent Chrome, Edge and Safari have.</p>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

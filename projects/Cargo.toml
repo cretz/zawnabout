@@ -1,0 +1,25 @@
+[workspace]
+resolver = "3"
+members = ["zawnabout-sim", "zawnabout-game", "zawnabout-native", "zawnabout-web"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/cretz/zawnabout"
+publish = false
+
+[workspace.dependencies]
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = "0.34"
+# No gles: WebGPU in the browser and native backends only.
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "webgpu", "dx12", "metal", "vulkan"] }
+zawnabout-game = { path = "zawnabout-game" }
+zawnabout-sim = { path = "zawnabout-sim" }
+
+[workspace.lints.clippy]
+too_many_arguments = "allow"
+
+# Release only, native and wasm alike. Debug builds are too slow to judge a game by.
+[profile.release]
+panic = "abort"
