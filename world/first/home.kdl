@@ -1,0 +1,521 @@
+// Home island. Center at world -1800 800. About 4.5km east to west, 3.4km north to south.
+// A mountain spine on the north with a sea loch biting in, a waterfall plateau on the west,
+// the meadow in the middle, a river delta and canal city on the south bay, a hill city on the
+// east and a ragged peninsula on the south west. A whole second world underneath.
+
+land base=40 jag=30 {
+    // North coast, west to east. Sea cliffs under the spine, cut by the gull loch.
+    p -2050 -1150 edge=cliff
+    p -1850 -1350
+    p -1650 -1300
+    p -1560 -1150
+    p -1500 -950 sharp=#true
+    p -1400 -850 sharp=#true
+    p -1300 -950
+    p -1250 -1200
+    p -1180 -1420
+    p -950 -1500
+    p -700 -1480
+    p -500 -1600
+    p -300 -1640
+    p -50 -1700 sharp=#true
+    p 150 -1640
+    p 350 -1620
+    p 550 -1700 sharp=#true
+    p 750 -1580
+    p 950 -1560
+    p 1150 -1450
+    p 1400 -1420
+    p 1600 -1250
+    // East coast with a long headland and coves.
+    p 1750 -1100 edge=rocky
+    p 1950 -1050 sharp=#true
+    p 2000 -850
+    p 1850 -700 sharp=#true
+    p 1950 -500
+    p 2150 -350
+    p 2350 -250
+    p 2300 -120 sharp=#true
+    p 2100 -80
+    p 2050 150
+    p 2100 350 edge=cliff
+    p 2020 600
+    p 1900 800
+    p 1850 950 edge=beach
+    p 1750 1150
+    p 1550 1250
+    p 1350 1400
+    p 1150 1500
+    // Kettle bay, a river estuary.
+    p 900 1450
+    p 650 1300
+    p 500 1150
+    p 350 1000
+    p 200 900 sharp=#true
+    p 0 850
+    p -150 900
+    p -300 1050
+    p -350 1250
+    p -450 1450
+    // South west peninsula.
+    p -600 1550 edge=rocky
+    p -850 1500
+    p -1050 1650
+    p -1300 1750 sharp=#true
+    p -1450 1650
+    p -1500 1450
+    p -1700 1300
+    p -1900 1150
+    // West coast, the plateau's sea cliff.
+    p -2050 950 edge=cliff
+    p -2150 700
+    p -2100 450
+    p -2250 250
+    p -2200 0
+    p -2150 -200
+    p -2250 -450
+    p -2200 -700
+    p -2100 -950
+}
+
+// Mountains
+
+ridge spine width=700 {
+    note "Runs along the north coast, so the north face is one long sea cliff."
+    p -1700 -1150 h=260
+    p -1100 -1250 h=420
+    p -700 -1150 h=500
+    p -300 -1300 h=640
+    p 200 -1200 h=820
+    p 700 -1250 h=620
+    p 1100 -1050 h=520
+    p 1500 -950 h=330
+    p 1850 -850 h=150
+}
+ridge east-spur width=450 {
+    note "Spur off the summit running south east. The thick wood covers its west flank."
+    p 250 -1150 h=780
+    p 600 -800 h=460
+    p 900 -550 h=280
+    p 1100 -300 h=120
+}
+ridge loch-spur width=300 {
+    p -1050 -1200 h=400
+    p -1150 -950 h=330
+    p -1250 -800 h=280
+}
+mountain hearthpeak x=200 z=-1200 h=820 r=420 shape=crag stretch=1.6 rot=-10 {
+    note "Highest point on home. Visible from everywhere on the island."
+    beacon summit-beacon x=200 z=-1200
+    perch summit-perch x=240 z=-1180
+}
+
+// The hidden tarn sits in a cirque of crags on the spine. Only seen from above.
+mountain tarn-crags x=-650 z=-950 h=520 r=320 shape=crater rim=520 inner=200 floor=445 stretch=1.3 rot=25
+lake mirror-tarn level=430 {
+    note "Hidden lake. The river starts here, so following it uphill finds it."
+    p -800 -1020
+    p -620 -1110
+    p -500 -960
+    p -560 -840
+    p -720 -860
+}
+
+plateau highfall top=260 edge=cliff jag=20 {
+    note "Meets the sea on the west as a 260m cliff. The sunset tiers city hangs off that face."
+    p -2400 -750
+    p -1800 -800
+    p -1450 -700
+    p -1150 -720
+    p -900 -650
+    p -800 -480
+    p -720 -300 sharp=#true
+    p -760 100
+    p -850 200
+    p -1000 380
+    p -1300 330
+    p -1600 450
+    p -2000 380
+    p -2400 400
+}
+
+hill terrace-mound x=1500 z=350 h=190 r=420 stretch=1.6 rot=30
+
+// Water
+
+river long-river w=30 {
+    p -650 -950
+    p -780 -820
+    falls tarn-falls h=150
+    p -830 -740
+    p -1000 -600
+    p -1080 -420
+    p -940 -230
+    falls high-falls h=210
+    p -730 -150
+    p -600 -60
+    p -450 120
+    p -200 330
+    p -80 520
+    p 0 700
+    branch fern-brook w=12 {
+        note "Comes down off the east spur through the thick wood. Stilt houses along its lower bank."
+        p 700 -650
+        p 500 -350
+        p 250 -100
+        p 50 150
+        p -200 330
+    }
+    branch mill-brook w=10 {
+        p 1150 50
+        p 800 250
+        p 450 380
+        p 100 560
+        p -80 520
+    }
+    // The delta. The river splits across the canal city into the bay.
+    branch delta-west w=18 {
+        p 0 700
+        p -120 800
+        p -230 960
+    }
+    branch delta-mid w=18 {
+        p 0 700
+        p 20 860
+    }
+    branch delta-east w=18 {
+        p 0 700
+        p 130 780
+        p 220 920
+    }
+}
+valley long-valley w=380 depth=30 {
+    p -650 -60
+    p -450 120
+    p -200 330
+    p 0 750
+}
+valley fern-vale w=200 depth=20 {
+    p 700 -650
+    p 500 -350
+    p 250 -100
+    p 50 150
+}
+
+// Land cover
+
+meadow home-meadow {
+    note "Where you start. Wide open, soft, safe."
+    p -550 120
+    p -250 20
+    p 50 80
+    p 180 330
+    p 30 560
+    p -200 520
+    p -450 600
+}
+forest tall-woods kind=open trees=round {
+    note "Huge trees far apart. Weave between trunks at speed."
+    p 300 -150
+    p 700 -250
+    p 1000 -50
+    p 1100 250
+    p 800 500
+    p 550 380
+    p 250 400
+}
+forest thick-wood kind=dense trees=pine {
+    note "Dense pines on the east spur's west flank. The bell sink hides in here."
+    p 150 -950
+    p 600 -1000
+    p 1000 -850
+    p 950 -500
+    p 650 -320
+    p 400 -500
+    p 200 -600
+}
+forest plateau-pines kind=open trees=pine {
+    p -2100 -600
+    p -1600 -650
+    p -1200 -550
+    p -1100 -150
+    p -1350 200
+    p -1750 250
+    p -2050 50
+}
+forest peninsula-scrub kind=open trees=round {
+    p -1500 1250
+    p -1050 1300
+    p -900 1450
+    p -1250 1650
+    p -1450 1550
+}
+
+// Places
+
+village home-village tech=mid {
+    note "Small, friendly, first people you meet."
+    p -350 230
+    p -50 170
+    p 30 400
+    p -250 460
+    beacon home-beacon x=-180 z=320
+}
+
+village brook-houses style=stilts tech=mid {
+    note "Little houses on stilts strung along the fern brook."
+    p 300 -150
+    p 450 -300
+    p 200 50
+    p 0 230
+    p -100 200
+    p 100 0
+}
+
+city kettle-harbor style=canal tech=mid {
+    note "Canal city on the river delta at the head of the bay. Bridges, houseboats, a market on the water. Ferries leave from the outer quays."
+    p -700 1450
+    p -550 900
+    p -250 650
+    p 150 620
+    p 450 850
+    p 750 1200
+    p 950 1450
+    p 650 1350
+    p 400 1050
+    p 150 880
+    p -150 900
+    p -350 1150
+    p -450 1450
+    canal kettle-ring w=20 level=0 {
+        p -230 960
+        p -260 760
+        p -50 640
+        p 200 700
+        p 220 920
+    }
+    canal kettle-cross w=14 level=0 {
+        p -120 800
+        p 20 760
+        p 130 780
+    }
+    canal kettle-east w=16 level=0 {
+        p 220 920
+        p 400 950
+        p 550 1150
+    }
+    site kettle-docks kind=docks x=350 z=1080
+    site kettle-light kind=lighthouse x=1150 z=1500
+}
+
+city terrace-hill style=hill tech=mid {
+    note "Inland city stepping up a long hill. Rooftops make good perches."
+    p 1050 0
+    p 1500 -100
+    p 1950 200
+    p 1900 550
+    p 1600 800
+    p 1150 650
+    tier y=60
+    tier y=100
+    tier y=140
+    tier y=180
+}
+
+city sunset-tiers style=cliff tech=mid {
+    note "Stacked on ledges down the west sea cliff. Looks into the sunset."
+    p -2350 -550
+    p -1900 -550
+    p -1900 350
+    p -2350 350
+    shelf tier-40 y=40 depth=30 w=40 {
+        p -2235 -450
+        p -2190 -200
+        p -2215 0
+        p -2240 250
+    }
+    shelf tier-90 y=90 depth=30 w=40 {
+        p -2220 -450
+        p -2175 -200
+        p -2200 0
+        p -2225 250
+    }
+    shelf tier-140 y=140 depth=30 w=40 {
+        p -2205 -450
+        p -2160 -200
+        p -2185 0
+        p -2210 250
+    }
+    shelf tier-190 y=190 depth=30 w=40 {
+        p -2190 -450
+        p -2145 -200
+        p -2170 0
+        p -2195 250
+    }
+}
+
+road meadow-harbor w=10 {
+    p -150 300
+    p -200 550
+    p -150 700
+}
+road meadow-hill w=10 {
+    p 0 300
+    p 450 450
+    p 900 380
+    p 1250 350
+}
+road meadow-plateau w=10 {
+    note "Cut into the plateau's south face, climbing to the tiers."
+    p -300 200 40
+    p -800 50 500
+    p -1150 150 450
+    p -1450 260 480
+    p -1950 260 0
+}
+
+// Small caves on their own
+
+dugout fern-dugout x=-480 y=55 z=600 facing=east r=25 {
+    note "Tiny cave in the valley wall near the meadow. The first secret most people find."
+}
+dugout tiers-cellar x=-2180 y=20 z=-100 facing=west r=30 {
+    note "Below the lowest tier, just above the waves."
+}
+dugout loch-cave x=-1400 y=30 z=-860 facing=north r=35 {
+    note "At the head of the gull loch, under the plateau cliff."
+}
+dugout gull-nook-1 x=-950 y=70 z=-1480 facing=north r=22
+dugout gull-nook-2 x=-600 y=110 z=-1530 facing=north r=22
+dugout gull-nook-3 x=-200 y=60 z=-1655 facing=north r=22
+dugout gull-nook-4 x=400 y=140 z=-1625 facing=north r=22
+dugout gull-nook-5 x=900 y=90 z=-1550 facing=north r=22
+roost gull-cliffs {
+    note "North cliff face and the loch walls. Seabirds later."
+    p -1850 -1350
+    p -1250 -1200
+    p 1400 -1420
+}
+
+caves tarn {
+    note "Isolated. A crack behind the hidden tarn."
+    mouth tarn-crack kind=cliff w=24 tight=#true hidden=#true {
+        p -650 445 -1110
+        p -650 460 -1190
+    }
+    cavern tarn-cave x=-650 y=480 z=-1250 w=120 h=60 d=100 shape=dome glow=0.4
+}
+
+// The deep: the big underground system. Joined to the crescent by the deep road (world.kdl).
+
+caves deep {
+    cavern great-hall x=300 y=-700 z=-100 w=2300 h=520 d=1500 rot=-6 shape=hall glow=0.3 {
+        note "As open as the sky. Bank, climb, dive between pillars. An underground city sits on the floor."
+        pillar hall-pillar-1 x=-300 z=-400 r=60
+        pillar hall-pillar-2 x=500 z=-550 r=80
+        pillar hall-pillar-3 x=950 z=200 r=70
+        pillar hall-pillar-4 x=1200 z=-300 r=50
+        pillar hall-pillar-5 x=50 z=-150 r=90
+        city lantern-hollow style=cavern tech=mid y=-950 {
+            p -650 50
+            p -100 -50
+            p 250 150
+            p 150 550
+            p -400 500
+        }
+        beacon hall-beacon-1 x=-200 y=-950 z=250
+        beacon hall-beacon-2 x=1000 y=-950 z=-300
+    }
+
+    cavern glass-lake x=-1550 y=-560 z=250 w=900 h=380 d=1000 rot=15 shape=dome glow=0.35 {
+        note "Crystal glow off still water. The underground river leaves from the south end."
+        lake glass-lake-water level=-680 {
+            p -1900 0
+            p -1500 -100
+            p -1250 200
+            p -1350 550
+            p -1750 600
+        }
+        beacon glass-beacon x=-1850 y=-670 z=300
+    }
+
+    cavern drop-hall x=1700 y=-1050 z=1150 w=800 h=900 d=700 rot=20 shape=shaft glow=0.25 {
+        note "Tall shaft. The river falls almost 800m. The deep road leaves from the bottom."
+        beacon drop-beacon x=1500 y=-1490 z=1200
+    }
+
+    cavern north-vault x=0 y=-1100 z=-2300 w=2600 h=600 d=1300 rot=-8 shape=hall glow=0.25 {
+        note "Under the north sea. Huge and empty, with a sea stack as its only door to the sky."
+        beacon north-vault-beacon x=-400 y=-1390 z=-2250
+    }
+
+    passage west-run w=180 {
+        p -800 -700 100
+        p -1150 -620 200
+    }
+    passage river-run w=170 {
+        p -1500 -680 700
+        p -900 -720 950
+        p 0 -730 1000
+        p 800 -700 1050
+        p 1350 -680 1100
+    }
+    river glass-river w=40 {
+        p -1500 -690 700
+        p -900 -695 950
+        p 0 -700 1000
+        p 800 -702 1050
+        falls deep-falls h=775
+        p 1350 -705 1100
+        p 1500 -1480 1150
+    }
+    passage east-run w=200 {
+        p 1350 -650 400
+        p 1550 -680 800
+    }
+    passage spine-run w=200 {
+        note "Down from the great hall's north end, under the sea cliffs, into the north vault."
+        p 0 -750 -800
+        p -150 -900 -1300
+        p 0 -1050 -1700
+    }
+
+    mouth north-mouth kind=cliff w=140 light=#true {
+        note "Big obvious mouth in the north sea cliff. The easy way in."
+        p 200 -650 -800
+        p -100 -400 -1050
+        p 250 -150 -1250
+        p 100 60 -1450
+        p 150 90 -1680
+    }
+    mouth falls-door kind=waterfall w=70 hidden=#true light=#true {
+        note "Behind the high falls. Light comes through the water curtain."
+        p -1300 -420 0
+        p -1050 -200 -100
+        p -850 20 -150
+        p -760 70 -150
+    }
+    mouth bell-sink kind=sinkhole w=90 hidden=#true light=#true {
+        note "Hidden in the thick wood. A single beam of daylight into the great hall."
+        p 700 600 -700
+        p 680 -100 -650
+        p 650 -450 -550
+    }
+    mouth sea-gate kind=cliff w=70 {
+        note "Low in the east sea cliff, out of the drop hall."
+        p 1950 -800 1100
+        p 2050 -300 950
+        p 1960 45 860
+    }
+    mouth north-stack-door kind=stack w=60 hidden=#true light=#true {
+        note "Through a lone sea stack off the north coast, straight down into the north vault."
+        p 600 90 -2600
+        p 600 -300 -2560
+        p 550 -800 -2450
+    }
+}
+
+spire north-stack x=600 z=-2600 h=95 r=70 top=flat {
+    note "Lone stack off the north cliffs. Hollow in the middle."
+    perch north-stack-top x=640 y=95 z=-2620
+}

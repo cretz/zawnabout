@@ -1,0 +1,6 @@
+# Tap-to-land on open ground: hop across the start meadow and stand there.
+land-at -2150 1050
+wait-until landed 20
+expect near -2150 10 1050 30
+expect ground
+shot land-meadow.png

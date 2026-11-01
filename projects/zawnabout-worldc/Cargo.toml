@@ -1,0 +1,13 @@
+[package]
+name = "zawnabout-worldc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+kdl = "6.7"
+
+[lints]
+workspace = true

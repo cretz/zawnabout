@@ -10,6 +10,7 @@
   "scripts": {
     "wasm": "node scripts/build-wasm.mjs",
     "dev": "pnpm wasm && vite",
+    "dev:lan": "pnpm wasm && node scripts/lan-cert.mjs && vite --host --mode lan",
     "build": "pnpm wasm && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

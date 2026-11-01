@@ -1,0 +1,198 @@
+// Crescent island. Center at world 2600 -2000. A broken ring about 3.4km across around a sea
+// lagoon. The main body wraps west and north with a hooked spit on the south. Two low keys close
+// the east side, with narrow channels between them.
+// The most modern place in the world: a canal city on the lagoon, the airport on the north arm.
+
+land crescent-main base=12 jag=25 {
+    // North arm tip, then the outer shore going west and round to the south hook.
+    p 1250 -1050 edge=beach sharp=#true
+    p 1000 -1250
+    p 700 -1380
+    p 400 -1520
+    p 100 -1500
+    p -200 -1600
+    p -550 -1520
+    p -800 -1350 edge=rocky
+    p -1050 -1250 edge=cliff
+    p -1300 -1050
+    p -1550 -850
+    p -1600 -550
+    p -1750 -300 sharp=#true
+    p -1650 -50
+    p -1700 200
+    p -1550 450 edge=rocky
+    p -1450 700
+    p -1250 900 edge=beach
+    p -1050 1150
+    p -800 1300
+    p -500 1400
+    p -200 1550
+    p 100 1500
+    p 350 1580
+    p 600 1450
+    p 800 1300 sharp=#true
+    // Lagoon shore, back west and round to the north arm tip.
+    p 650 1200 edge=beach
+    p 500 1150
+    p 300 1150
+    p 50 1100
+    p -250 1080
+    p -500 950
+    p -700 800 edge=rocky
+    p -900 550
+    p -1000 300
+    p -1050 0
+    p -1000 -300
+    p -900 -550 edge=beach
+    p -700 -800
+    p -400 -950
+    p -100 -1050
+    p 250 -1000
+    p 550 -1080
+    p 850 -950
+    p 1100 -900
+}
+land north-key base=6 jag=20 {
+    p 1350 -850 edge=beach
+    p 1600 -650
+    p 1700 -350 edge=rocky
+    p 1550 -200
+    p 1350 -450
+    p 1200 -700
+}
+land south-key base=6 jag=20 {
+    p 1600 -50 edge=beach
+    p 1650 200
+    p 1500 550
+    p 1300 800 sharp=#true
+    p 1150 750
+    p 1300 450
+    p 1400 100
+}
+
+mountain moon-hill x=-1250 z=-200 h=320 r=420 shape=crater rim=320 inner=180 floor=272 stretch=1.5 rot=10 {
+    note "The back of the ring. Its outer face is a sea cliff, its top hides a pool."
+}
+lake sky-pool level=262 {
+    note "Hidden lake in the hill's crater. Looks like a dark spot from the city."
+    p -1350 -330
+    p -1180 -340
+    p -1130 -150
+    p -1230 -50
+    p -1350 -120
+}
+dugout pool-nook x=-1250 y=275 z=-370 facing=north r=20
+
+spire the-eye x=100 z=0 h=40 r=90 top=flat {
+    note "Ring of rock in the middle of the lagoon. Looks like a reef with a hole."
+}
+
+forest key-palms kind=open trees=palm {
+    p 1200 -900
+    p 1750 -650
+    p 1700 300
+    p 1300 850
+    p 1100 0
+}
+
+// Places
+
+city moonharbor style=modern tech=modern {
+    note "The most advanced city. Towers along the lagoon, lit at night, canals running inland between them."
+    p -1500 350
+    p -1000 200
+    p -850 550
+    p -650 850
+    p -250 1100
+    p -100 1450
+    p -700 1350
+    p -1200 1000
+    canal moon-canal-1 w=24 level=0 {
+        p -800 700
+        p -1000 850
+        p -1250 900
+    }
+    canal moon-canal-2 w=20 level=0 {
+        p -400 1000
+        p -600 1150
+        p -900 1100
+        p -1000 850
+    }
+    canal moon-canal-3 w=16 level=0 {
+        p -950 400
+        p -1200 500
+        p -1250 700
+    }
+    site moon-tower kind=tower x=-1050 z=650 {
+        note "Tall TV tower. Highest perch in the city."
+    }
+    site moon-marina kind=marina x=-600 z=950
+    site seaplane-base kind=seaplane x=-500 z=700
+}
+
+site crescent-airport kind=airport x=100 z=-1250 {
+    note "1980s airport. Terminal and tower on the lagoon side of the runway."
+    runway main-runway w=60 {
+        p -550 -1300
+        p 750 -1200
+    }
+}
+
+village south-key-village tech=modern {
+    note "Beach houses and a yacht club on the south key."
+    p 1400 0
+    p 1650 150
+    p 1450 600
+    p 1250 600
+    site yacht-club kind=marina x=1300 z=500
+}
+
+site channel-bridge kind=bridge x=1000 z=1000 {
+    note "Road bridge over the main channel, hook to south key. Tall enough to fly under."
+}
+site key-bridge kind=bridge x=1500 z=-120
+site north-bridge kind=bridge x=1250 z=-900
+
+road crescent-road w=14 {
+    note "Ring road from the south hook round the city and north arm, over three bridges and back."
+    p 650 1350
+    p 300 1350
+    p -200 1300
+    p -600 1150
+    p -1000 800
+    p -1250 400
+    p -1150 -50
+    p -1100 -500
+    p -850 -950
+    p -400 -1150
+    p 300 -1080
+    p 1000 -1050
+    p 1250 -800
+    p 1450 -500
+    p 1500 -120
+    p 1500 200
+    p 1350 600
+    p 1200 800
+    p 700 1250
+    p 650 1350
+}
+
+// The vault under the lagoon. Part of the deep, reached from home by the deep road.
+
+caves vault {
+    cavern lagoon-vault x=0 y=-750 z=0 w=1900 h=450 d=1700 rot=-15 shape=dome glow=0.3 {
+        note "Blue glow. Daylight drops through the eye in one beam."
+        beacon vault-beacon x=-300 y=-970 z=200
+    }
+    mouth eye-shaft kind=chimney w=50 hidden=#true light=#true {
+        p 100 60 0
+        p 100 -100 0
+        p 120 -520 30
+    }
+    mouth hill-door kind=cliff w=90 light=#true {
+        note "Opens in the outer face of moon hill."
+        p -900 -600 0
+        p -1300 -250 -150
+        p -1800 90 -300
+    }
+}

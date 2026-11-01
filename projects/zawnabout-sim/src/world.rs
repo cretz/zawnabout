@@ -1,7 +1,10 @@
-//! The static world: ground shape and placed props. Generated from a seed so every
-//! peer builds the identical world.
+//! The static world: terrain from the world files plus placed props. Built the same way
+//! on every peer, so every peer has the identical world.
 
-use glam::Vec3;
+use glam::{Quat, Vec3};
+
+use crate::shape::{Frustum, Shape, place, spire_tiers};
+use crate::terrain::{CoverKind, Density, Terrain, Trees};
 
 /// Small deterministic PRNG (SplitMix64). Not for anything but placement.
 #[derive(Clone, Debug)]
@@ -28,26 +31,6 @@ impl Rng {
     pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
         lo + (hi - lo) * self.f32()
     }
-}
-
-fn hash2(seed: u64, x: i32, z: i32) -> f32 {
-    let mut r = Rng::new(seed ^ ((x as u64) << 32) ^ (z as u32 as u64));
-    r.f32()
-}
-
-/// Smooth value noise in `[0, 1]`.
-fn value_noise(seed: u64, x: f32, z: f32) -> f32 {
-    let (xi, zi) = (x.floor(), z.floor());
-    let (fx, fz) = (x - xi, z - zi);
-    let (sx, sz) = (fx * fx * (3.0 - 2.0 * fx), fz * fz * (3.0 - 2.0 * fz));
-    let (xi, zi) = (xi as i32, zi as i32);
-    let a = hash2(seed, xi, zi);
-    let b = hash2(seed, xi + 1, zi);
-    let c = hash2(seed, xi, zi + 1);
-    let d = hash2(seed, xi + 1, zi + 1);
-    let top = a + (b - a) * sx;
-    let bottom = c + (d - c) * sx;
-    top + (bottom - top) * sz
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -85,106 +68,339 @@ pub struct Prop {
     pub variant: u8,
 }
 
+/// A solid part of a prop.
+#[derive(Clone, Copy, Debug)]
+pub struct Collider {
+    pub prop: u32,
+    pub shape: Shape,
+}
+
+/// A good spot to land, marked for tap-to-land.
+#[derive(Clone, Copy, Debug)]
+pub struct Perch {
+    /// Stable id from the world files, such as `home/summit-perch`.
+    pub id: &'static str,
+    pub pos: Vec3,
+    pub radius: f32,
+}
+
+/// Size of a collision grid cell (m).
+const CELL: f32 = 40.0;
+
 #[derive(Clone, Debug)]
 pub struct World {
     pub seed: u64,
+    pub terrain: Terrain,
     /// The playable square spans `-half_size..half_size` on X and Z.
     pub half_size: f32,
+    /// Width of the soft band inside the edge where a breeze turns you back.
+    pub edge: f32,
+    /// Height where the air starts pushing back down.
+    pub sky: f32,
     pub props: Vec<Prop>,
+    pub colliders: Vec<Collider>,
+    pub perches: Vec<Perch>,
+    grid: Vec<Vec<u32>>,
+    grid_n: usize,
+}
+
+/// Where the tree on top of a spire stands, relative to the spire's cap center.
+pub fn spire_tree_offset(cap_radius: f32) -> Vec3 {
+    Vec3::new(cap_radius * 0.55, 0.3, 0.0)
 }
 
 impl World {
     pub fn generate(seed: u64) -> Self {
+        let terrain = Terrain::default();
+        let def = terrain.def;
         let mut world = World {
             seed,
-            half_size: 1500.0,
+            half_size: terrain.half_size(),
+            edge: def.edge,
+            sky: def.sky,
+            terrain,
             props: Vec::new(),
+            colliders: Vec::new(),
+            perches: Vec::new(),
+            grid: Vec::new(),
+            grid_n: 0,
         };
         world.place_props();
+        world.build_colliders();
+        for m in def.marks.iter().filter(|m| m.kind == "perch") {
+            let (x, z) = (m.pos[0], m.pos[2]);
+            // Perches on or near the ground sit exactly on its rough surface.
+            let ground = world.terrain.height(x, z);
+            let y = if m.ground || (ground - m.pos[1]).abs() < 10.0 {
+                ground
+            } else {
+                m.pos[1]
+            };
+            world.perches.push(Perch {
+                id: m.id,
+                pos: Vec3::new(x, y, z),
+                radius: 4.0,
+            });
+        }
         world
     }
 
-    /// Gentle rolling ground. Mostly flat on purpose for now.
+    fn build_colliders(&mut self) {
+        for p in &self.props {
+            let s = p.scale;
+            let mut add = |shape| self.colliders.push(Collider { prop: p.id, shape });
+            let trunk = |h: f32| {
+                Shape::Frustum(Frustum {
+                    base: p.pos,
+                    height: h * s,
+                    r0: 0.4 * s,
+                    r1: 0.28 * s,
+                    spin: 0.0,
+                })
+            };
+            match p.kind {
+                PropKind::Spire => {
+                    let tiers = spire_tiers(p.variant as u32 % 3);
+                    let mut cap = tiers[0];
+                    for t in &tiers {
+                        cap = place(t, p.pos, p.yaw, s);
+                        add(Shape::Frustum(cap));
+                    }
+                    let top = Vec3::new(cap.base.x, cap.top(), cap.base.z);
+                    let tree =
+                        top + Quat::from_rotation_y(p.yaw) * (spire_tree_offset(cap.r1 / s) * s);
+                    add(Shape::Sphere {
+                        center: tree + Vec3::Y * 4.6 * s,
+                        radius: 2.3 * s,
+                    });
+                }
+                PropKind::RoundTree => {
+                    add(trunk(3.2));
+                    add(Shape::Sphere {
+                        center: p.pos + Vec3::Y * 4.6 * s,
+                        radius: 2.3 * s,
+                    });
+                }
+                PropKind::PineTree => {
+                    add(trunk(2.0));
+                    let tiers = 3 + (p.variant as u32 % 3);
+                    add(Shape::Frustum(Frustum {
+                        base: p.pos + Vec3::Y * 1.6 * s,
+                        height: ((tiers - 1) as f32 * 1.7 + 2.6) * s,
+                        r0: 2.2 * s,
+                        r1: 0.0,
+                        spin: 0.0,
+                    }));
+                }
+                PropKind::Rock => {
+                    add(Shape::Sphere {
+                        center: p.pos + Vec3::Y * 0.5 * s,
+                        radius: 1.1 * s,
+                    });
+                }
+                PropKind::Bush | PropKind::Flower | PropKind::Cloud => {}
+            }
+        }
+        self.grid_n = ((self.half_size * 2.0 + 800.0) / CELL).ceil() as usize;
+        self.grid = vec![Vec::new(); self.grid_n * self.grid_n];
+        for (i, c) in self.colliders.iter().enumerate() {
+            let (center, r) = c.shape.footprint();
+            let (x0, z0) = self.cell(center.x - r, center.y - r);
+            let (x1, z1) = self.cell(center.x + r, center.y + r);
+            for z in z0..=z1 {
+                for x in x0..=x1 {
+                    self.grid[z * self.grid_n + x].push(i as u32);
+                }
+            }
+        }
+    }
+
+    fn cell(&self, x: f32, z: f32) -> (usize, usize) {
+        let off = self.half_size + 400.0;
+        let f = |v: f32| (((v + off) / CELL).floor().max(0.0) as usize).min(self.grid_n - 1);
+        (f(x), f(z))
+    }
+
+    /// Colliders that might touch `(x, z)`.
+    pub fn near(&self, x: f32, z: f32) -> impl Iterator<Item = &Collider> {
+        let (cx, cz) = self.cell(x, z);
+        self.grid[cz * self.grid_n + cx]
+            .iter()
+            .map(|i| &self.colliders[*i as usize])
+    }
+
+    /// Height of the highest standable surface at `(x, z)` that is not above `below`.
+    /// Water counts as a surface for now, so a dragon can rest on it.
+    pub fn support(&self, x: f32, z: f32, below: f32) -> f32 {
+        let ground = self.terrain.support(x, z, below);
+        let mut best = ground;
+        if let Some(w) = self.terrain.water(x, z, ground)
+            && w <= below
+        {
+            best = w;
+        }
+        for c in self.near(x, z) {
+            if let Some(h) = c.shape.support(x, z)
+                && h <= below
+                && h > best
+            {
+                best = h;
+            }
+        }
+        best
+    }
+
+    /// Pushes a sphere out of every prop it overlaps, ignoring the ground.
+    pub fn push_out_props(&self, mut p: Vec3, r: f32) -> (Vec3, Vec3) {
+        let mut normal = Vec3::ZERO;
+        for c in self.near(p.x, p.z) {
+            if let Some((n, depth)) = c.shape.push_out(p, r) {
+                p += n * depth;
+                normal += n;
+            }
+        }
+        (p, normal.normalize_or_zero())
+    }
+
+    /// Pushes a sphere out of the ground and every prop it overlaps. Returns the
+    /// corrected center and the summed outward normal (zero when nothing was hit).
+    pub fn push_out(&self, mut p: Vec3, r: f32) -> (Vec3, Vec3) {
+        let mut normal = Vec3::ZERO;
+        if let Some((n, depth)) = self.terrain.push_out(p, r) {
+            p += n * depth;
+            normal += n;
+        }
+        for c in self.near(p.x, p.z) {
+            if let Some((n, depth)) = c.shape.push_out(p, r) {
+                p += n * depth;
+                normal += n;
+            }
+        }
+        (p, normal.normalize_or_zero())
+    }
+
     pub fn ground_height(&self, x: f32, z: f32) -> f32 {
-        let broad = value_noise(self.seed, x / 260.0, z / 260.0) - 0.5;
-        let fine = value_noise(self.seed ^ 0xA5A5, x / 70.0, z / 70.0) - 0.5;
-        broad * 9.0 + fine * 1.6
+        self.terrain.height(x, z)
     }
 
     pub fn ground_normal(&self, x: f32, z: f32) -> Vec3 {
-        let e = 1.0;
-        let dx = self.ground_height(x + e, z) - self.ground_height(x - e, z);
-        let dz = self.ground_height(x, z + e) - self.ground_height(x, z - e);
-        Vec3::new(-dx, 2.0 * e, -dz).normalize()
+        self.terrain.normal(x, z)
+    }
+
+    fn push(&mut self, kind: PropKind, pos: Vec3, scale: f32, variant: u8) {
+        let id = self.props.len() as u32;
+        let yaw = (id as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
+        self.props.push(Prop {
+            id,
+            kind,
+            pos,
+            yaw,
+            scale,
+            variant,
+        });
+    }
+
+    /// The ground height at a dry, gentle enough spot, or none.
+    fn dry_spot(&self, x: f32, z: f32, min_up: f32) -> Option<f32> {
+        let h = self.terrain.height(x, z);
+        if h < 1.8 || self.terrain.water(x, z, h).is_some() {
+            return None;
+        }
+        (self.terrain.normal(x, z).y >= min_up).then_some(h)
+    }
+
+    /// Calls `f` at one jittered point per `spacing` square over the cover's bounds.
+    fn scatter(
+        rng: &mut Rng,
+        pts: &[[f32; 2]],
+        spacing: f32,
+        mut f: impl FnMut(&mut Rng, f32, f32),
+    ) {
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for p in pts {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        let mut z = lo[1];
+        while z < hi[1] {
+            let mut x = lo[0];
+            while x < hi[0] {
+                let (px, pz) = (x + rng.range(0.0, spacing), z + rng.range(0.0, spacing));
+                f(rng, px, pz);
+                x += spacing;
+            }
+            z += spacing;
+        }
     }
 
     fn place_props(&mut self) {
         let mut rng = Rng::new(self.seed ^ 0x5EED);
-        let h = self.half_size;
-        let push = |world: &mut World, kind, x: f32, z: f32, y_off: f32, scale, variant| {
-            let y = world.ground_height(x, z) + y_off;
-            let id = world.props.len() as u32;
-            let yaw = (id as f32 * 2.399_963).rem_euclid(std::f32::consts::TAU);
-            world.props.push(Prop {
-                id,
-                kind,
-                pos: Vec3::new(x, y, z),
-                yaw,
-                scale,
-                variant,
-            });
-        };
-
-        // Groves: trees cluster where a low-frequency noise is high, leaving open meadows.
-        for _ in 0..9000 {
-            let (x, z) = (rng.range(-h, h), rng.range(-h, h));
-            let grove = value_noise(self.seed ^ 0x6407E, x / 180.0, z / 180.0);
-            if grove < 0.58 || rng.f32() > (grove - 0.58) * 3.5 {
-                continue;
-            }
-            let kind = if value_noise(self.seed ^ 0x914E, x / 400.0, z / 400.0) > 0.5 {
-                PropKind::PineTree
-            } else {
-                PropKind::RoundTree
+        let def = self.terrain.def;
+        let mut placed = Vec::new();
+        for cover in def.covers {
+            let mine = |x: f32, z: f32| {
+                self.terrain
+                    .cover(x, z)
+                    .is_some_and(|c| std::ptr::eq(c, cover))
             };
-            let v = (rng.next_u64() % 3) as u8;
-            push(self, kind, x, z, -0.3, rng.range(0.8, 1.5), v);
-        }
-        for _ in 0..1400 {
-            let (x, z) = (rng.range(-h, h), rng.range(-h, h));
-            let v = (rng.next_u64() % 3) as u8;
-            push(self, PropKind::Bush, x, z, -0.2, rng.range(0.7, 1.4), v);
-        }
-        for _ in 0..700 {
-            let (x, z) = (rng.range(-h, h), rng.range(-h, h));
-            let v = (rng.next_u64() % 3) as u8;
-            push(self, PropKind::Rock, x, z, -0.4, rng.range(0.6, 2.6), v);
-        }
-        // Tall spires to weave between and judge speed against.
-        for _ in 0..60 {
-            let (x, z) = (rng.range(-h * 0.9, h * 0.9), rng.range(-h * 0.9, h * 0.9));
-            let v = (rng.next_u64() % 3) as u8;
-            push(self, PropKind::Spire, x, z, -1.0, rng.range(0.8, 1.8), v);
-        }
-        // Flower patches.
-        for _ in 0..260 {
-            let (cx, cz) = (rng.range(-h, h), rng.range(-h, h));
-            let v = (rng.next_u64() % 4) as u8;
-            for _ in 0..24 {
-                let (x, z) = (cx + rng.range(-14.0, 14.0), cz + rng.range(-14.0, 14.0));
-                push(self, PropKind::Flower, x, z, 0.0, rng.range(1.8, 2.8), v);
+            match cover.kind {
+                CoverKind::Forest => {
+                    let (spacing, scale, min_up) = match (cover.density, cover.trees) {
+                        (Density::Open, Trees::Palm) => (34.0, (1.0, 1.5), 0.8),
+                        (Density::Open, _) => (48.0, (2.6, 4.0), 0.8),
+                        (Density::Rain, _) => (20.0, (1.8, 2.8), 0.7),
+                        (Density::Dense, _) => (15.0, (1.3, 2.2), 0.7),
+                    };
+                    let kind = match cover.trees {
+                        Trees::Pine => PropKind::PineTree,
+                        _ => PropKind::RoundTree,
+                    };
+                    Self::scatter(&mut rng, cover.pts, spacing, |rng, x, z| {
+                        let s = rng.range(scale.0, scale.1);
+                        let v = (rng.next_u64() % 3) as u8;
+                        if mine(x, z)
+                            && let Some(h) = self.dry_spot(x, z, min_up)
+                        {
+                            placed.push((kind, Vec3::new(x, h - 0.3, z), s, v));
+                        }
+                    });
+                }
+                CoverKind::Meadow => {
+                    Self::scatter(&mut rng, cover.pts, 40.0, |rng, cx, cz| {
+                        let v = (rng.next_u64() % 4) as u8;
+                        if rng.f32() > 0.55 || !mine(cx, cz) {
+                            return;
+                        }
+                        for _ in 0..10 {
+                            let x = cx + rng.range(-12.0, 12.0);
+                            let z = cz + rng.range(-12.0, 12.0);
+                            let s = rng.range(1.8, 2.8);
+                            if let Some(h) = self.dry_spot(x, z, 0.8) {
+                                placed.push((PropKind::Flower, Vec3::new(x, h, z), s, v));
+                            }
+                        }
+                    });
+                }
+                CoverKind::Town => {}
             }
         }
-        for _ in 0..170 {
+        for (kind, pos, s, v) in placed {
+            self.push(kind, pos, s, v);
+        }
+        let h = self.half_size;
+        // A light scatter of fair weather clouds until real weather arrives.
+        for _ in 0..450 {
             let (x, z) = (rng.range(-h, h), rng.range(-h, h));
+            let pos = Vec3::new(x, rng.range(300.0, 1100.0), z);
+            let s = rng.range(2.0, 5.0);
             let v = (rng.next_u64() % 3) as u8;
             let id = self.props.len() as u32;
             self.props.push(Prop {
                 id,
                 kind: PropKind::Cloud,
-                pos: Vec3::new(x, rng.range(140.0, 300.0), z),
+                pos,
                 yaw: rng.range(0.0, std::f32::consts::TAU),
-                scale: rng.range(1.0, 2.6),
+                scale: s,
                 variant: v,
             });
         }

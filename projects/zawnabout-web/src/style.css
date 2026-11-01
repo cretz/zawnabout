@@ -127,6 +127,202 @@ button {
   cursor: pointer;
 }
 
+#minimap {
+  position: fixed;
+  /* Above the touch stick area, so a tap on the map never moves the stick. */
+  z-index: 3;
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  width: 170px;
+  height: 170px;
+  border-radius: 18px;
+  border: 3px solid var(--cream);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+
+/* On touch screens the corners below hold the stick and buttons. */
+#minimap.top {
+  right: auto;
+  bottom: auto;
+  left: max(14px, env(safe-area-inset-left));
+  top: max(14px, env(safe-area-inset-top));
+}
+
+#minimap.big {
+  width: min(380px, 70vmin);
+  height: min(380px, 70vmin);
+}
+
+.round.third {
+  right: calc(max(14px, env(safe-area-inset-right)) + 108px);
+  font-size: 20px;
+}
+
+.round.second {
+  right: calc(max(14px, env(safe-area-inset-right)) + 54px);
+  font-size: 20px;
+}
+
+.round.on {
+  background: var(--coral);
+  color: var(--cream);
+}
+
+/* Notes mode: a bar across the top, the note list on the right, a note dialog. */
+#notes-bar {
+  position: fixed;
+  z-index: 2;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(720px, calc(100vw - 140px));
+  padding: 8px 14px;
+  border-radius: 14px;
+  background: var(--cream);
+  box-shadow: var(--shadow);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+#notes-bar button,
+.notes-head button,
+.note-buttons button,
+.note-actions button {
+  border: none;
+  border-radius: 10px;
+  padding: 4px 10px;
+  background: var(--apricot);
+  color: var(--ink);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+#notes-panel {
+  position: fixed;
+  top: calc(max(14px, env(safe-area-inset-top)) + 58px);
+  right: max(14px, env(safe-area-inset-right));
+  bottom: max(14px, env(safe-area-inset-bottom));
+  width: min(320px, calc(100vw - 28px));
+  padding: 12px;
+  overflow-y: auto;
+}
+
+.notes-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+#notes-where {
+  flex: 1;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.notes-empty {
+  font-size: 14px;
+  opacity: 0.8;
+}
+
+.note {
+  padding: 8px 0;
+  border-top: 2px solid #f1e5d2;
+  font-size: 14px;
+}
+
+.note.done {
+  opacity: 0.55;
+}
+
+.note-meta {
+  margin: 2px 0 4px;
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+.note .reply {
+  margin: 4px 0;
+  padding: 4px 8px;
+  border-left: 3px solid var(--coral);
+  font-size: 13px;
+}
+
+.note-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+#note-dialog {
+  width: min(460px, calc(100vw - 28px));
+}
+
+#note-near {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+#note-text {
+  width: 100%;
+  box-sizing: border-box;
+  border: 2px solid var(--apricot);
+  border-radius: 10px;
+  padding: 8px;
+  font-family: var(--font);
+  font-size: 16px;
+  color: var(--ink);
+  resize: vertical;
+}
+
+.note-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.note-actions .primary {
+  background: var(--coral);
+  color: var(--cream);
+}
+
+#notes-panel.collapsed #notes-list {
+  display: none;
+}
+
+#notes-panel.collapsed {
+  bottom: auto;
+}
+
+.notes-head strong {
+  cursor: pointer;
+}
+
+/* Phones: a smaller map, a compact bar and the note list as a short sheet near the top,
+   clear of the stick and buttons at the bottom. */
+@media (max-width: 640px) {
+  #minimap {
+    width: 110px;
+    height: 110px;
+  }
+
+  #notes-bar {
+    top: calc(max(14px, env(safe-area-inset-top)) + 124px);
+    max-width: calc(100vw - 28px);
+    font-size: 12px;
+  }
+
+  #notes-panel {
+    top: calc(max(14px, env(safe-area-inset-top)) + 214px);
+    left: max(14px, env(safe-area-inset-left));
+    right: max(14px, env(safe-area-inset-right));
+    bottom: auto;
+    width: auto;
+    max-height: 32vh;
+  }
+}
+
 /* Touch controls: a floating stick on the left, big friendly buttons on the right. */
 #touch {
   position: fixed;

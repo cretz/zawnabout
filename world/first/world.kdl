@@ -1,0 +1,131 @@
+// The first world. A 12km square island chain, about as big below ground as above.
+
+world first {
+    bounds -6000 -6000 6000 6000
+    edge 600
+    sky 3000
+    deep -1600
+    sea level=0 floor=-90
+    spawn island=home x=-200 z=320
+    note "Fly from the home meadow in any direction and hit something worth seeing within a minute."
+    note "Sky is tall for big cloud formations and storms. Leave room up high for sky cities later."
+}
+
+// Islands, placed by their center. Moving one moves everything on it.
+
+island home file=home.kdl x=-1800 z=800 {
+    note "Biggest island, about 4.2km by 3.4km. Every kind of place in one spot."
+}
+island crescent file=crescent.kdl x=2600 z=-2000 {
+    note "Second biggest. A ring around a sea lagoon. The most modern city and the airport."
+}
+island twins file=twins.kdl x=-1200 z=-4300 {
+    note "Old stone island and seafaring island joined by a natural land bridge."
+}
+island fang file=fang.kdl x=3600 z=3300 {
+    note "Tallest peak, an old crater with a lake, rainforest, simpler folk."
+}
+island needles file=needles.kdl x=-4300 z=3600 {
+    note "Cluster of sea spires. Perches, ledges, birds."
+}
+island atoll file=atoll.kdl x=-4300 z=-2700 {
+    note "Low lopsided palm ring. A sea cave hides a grotto under the rocky islet."
+}
+
+// Open ocean finds.
+
+spire lone-rock x=5200 z=900 h=26 r=24 top=flat {
+    note "Flat landing rock far out in open sea. A calm place to rest."
+    perch lone-rock-top x=5200 y=26 z=900
+    beacon lone-rock-beacon x=5205 y=26 z=895
+}
+
+spire turtle-back x=-1500 z=4600 h=4 r=60 {
+    note "Long reef rock barely above the water. Good for skimming low."
+}
+
+spire lighthouse-rock x=1500 z=-3800 h=30 r=40 top=flat {
+    site lighthouse-rock-light kind=lighthouse x=1500 z=-3800
+    note "Lone lighthouse between the twins and the crescent."
+}
+
+site wreck-shoal kind=wreck x=-4300 z=-800 {
+    note "Shallow reef with an old wreck, between the atoll and home."
+}
+
+// A plain sea stack with a non-obvious hole on its lee side into a cave system of its own.
+spire drowned-stack x=1000 z=4900 h=55 r=45 top=point {
+    note "Looks like nothing. The hole faces away from home."
+}
+caves sunken {
+    note "Isolated. Only reachable through the drowned stack."
+    mouth stack-hole kind=stack w=30 hidden=#true light=#true {
+        p 1030 20 4930
+        p 1010 -40 4900
+        p 960 -180 4820
+        p 900 -330 4700
+    }
+    cavern sunken-hall x=820 y=-480 z=4500 w=1500 h=360 d=1200 rot=25 shape=dome glow=0.25 {
+        note "One big quiet dome with a pool. Light from the stack hole falls in a single beam."
+        lake sunken-pool level=-640 x=700 z=4450 r=320
+        beacon sunken-beacon x=950 y=-600 z=4600
+    }
+}
+
+// The long road under the sea joining the home caves to the crescent caves.
+passage deep-road w=220 {
+    note "About 4km of huge tunnel under the seabed, opening into the road hall halfway. Beacons along it."
+    p -100 -1400 1950
+    p 600 -1150 300
+    p 1000 -1000 -450
+    p 2100 -800 -1600
+    p 2600 -750 -2000
+    beacon deep-road-1 x=600 y=-1240 z=300
+}
+
+cavern road-hall x=1000 y=-1000 z=-450 w=1500 h=420 d=1200 rot=40 shape=hall glow=0.25 {
+    note "Halfway along the deep road, under the sea. A place to stop and look around."
+    beacon road-hall-beacon x=800 y=-1190 z=-350
+}
+
+// Vehicle routes, reserved for later.
+
+route ferry-loop kind=ferry {
+    note "Home harbor to tidewater to moonharbor and back."
+    p -1800 1750
+    p -1800 2700
+    p -4200 1800
+    p -4200 -1000
+    p -2200 -3300
+    p -300 -3650
+    p 1000 -3000
+    p 3700 -800
+    p 3550 -1000
+    p 2000 -1400
+    p 3550 -1000
+    p 3700 -800
+    p 1500 600
+    p 0 2500
+    p -1800 2700
+    p -1800 1750
+}
+route seaplane-hop kind=seaplane {
+    p 2600 -2000 0
+    p 0 -400 200
+    p -1800 1700 0
+    p -3500 -1000 250
+    p -4300 -2700 0
+}
+route airliner-approach kind=plane {
+    note "Long straight approach onto the crescent runway from the open sea to the east."
+    p 5200 -3060 500
+    p 4200 -3135 200
+    p 3350 -3200 15
+}
+route yacht-lane kind=yacht {
+    p 3750 -1000
+    p 4600 600
+    p 3600 1900
+    p 2300 1000
+    p 3750 -1000
+}

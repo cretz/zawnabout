@@ -31,6 +31,8 @@ zawnabout_sim::params! {
         roll: f32 = 0.22, [0, 1],
         /// Swings the camera around the dragon (degrees). For looking around and screenshots.
         orbit: f32 = 0.0, [-180, 180],
+        /// Extra height when hovering or creeping, to see the spot below (m).
+        hover_height: f32 = 4.0, [0, 20],
         /// Distance behind when on the ground (m).
         ground_distance: f32 = 10.0, [3, 60],
     }
@@ -94,17 +96,40 @@ impl Camera {
         }
         self.dir = self.dir.lerp(want, ease(p.follow)).normalize_or(want);
 
-        let air = if t.mode == Mode::Air { 1.0 } else { 0.0 };
+        // Slow flight (hovering, creeping up on a spot) pulls in close and looks down.
+        let slow = if t.mode == Mode::Air {
+            1.0 - ((speed - 4.0) / 8.0).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let air = if t.mode == Mode::Air { 1.0 - slow } else { 0.0 };
         let dist = p.ground_distance
             + (p.distance - p.ground_distance) * air
-            + speed * p.distance_per_speed;
+            + speed.min(p.fast_speed) * p.distance_per_speed;
         let back = Quat::from_rotation_y(p.orbit.to_radians()) * self.dir;
-        let want_pos = t.pos - back * dist + Vec3::Y * p.height;
+        let want_pos = t.pos - back * dist + Vec3::Y * (p.height + slow * p.hover_height);
         self.pos = self.pos.lerp(want_pos, ease(p.catch_up));
-        let floor = world.ground_height(self.pos.x, self.pos.z) + 1.2;
+        // Stay out of spires and rocks, and above whatever is underneath.
+        self.pos = world.push_out(self.pos, 1.0).0;
+        let floor = world.support(self.pos.x, self.pos.z, self.pos.y) + 1.2;
         self.pos.y = self.pos.y.max(floor);
-        let ahead = if p.orbit == 0.0 { p.look_ahead } else { 0.0 };
-        self.look = t.pos + self.dir * ahead + Vec3::Y * 1.0;
+        // Keep the view of the dragon clear: if ground rises between them, move in.
+        let from = t.pos + Vec3::Y * 1.0;
+        let steps = 24;
+        for i in 1..=steps {
+            let q = from.lerp(self.pos, i as f32 / steps as f32);
+            if world.support(q.x, q.z, q.y + 0.5) > q.y - 0.8 {
+                let back = from.lerp(self.pos, (i - 1) as f32 / steps as f32);
+                self.pos = back + Vec3::Y * 0.5;
+                break;
+            }
+        }
+        let ahead = if p.orbit == 0.0 {
+            p.look_ahead * (1.0 - slow)
+        } else {
+            0.0
+        };
+        self.look = t.pos + self.dir * ahead + Vec3::Y * (1.0 - 2.0 * slow);
 
         let fast = ((speed - 12.0) / (p.fast_speed - 12.0)).clamp(0.0, 1.0);
         self.fov += (p.fov + (p.fov_fast - p.fov) * fast * fast - self.fov) * ease(3.0);
@@ -116,11 +141,12 @@ impl Camera {
         let fwd = (self.look - self.pos).normalize_or(Vec3::Z);
         let up = Quat::from_axis_angle(fwd, self.roll) * Vec3::Y;
         let view = glam::camera::rh::view::look_at_mat4(self.pos, self.look, up);
+        // Reversed depth (near and far swapped) keeps precision over the whole world.
         glam::camera::rh::proj::directx::perspective(
             self.fov.to_radians(),
             aspect.max(0.1),
+            20000.0,
             0.3,
-            6000.0,
         ) * view
     }
 }

@@ -3,10 +3,11 @@
 
 use std::fmt::Write;
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use zawnabout_sim::{DT, Dragon, EntityId, Mode, ParamDef, Params, Sim};
 
 use crate::camera::{Camera, CameraParams, Target};
+use crate::feedback::{Feedback, FreeCam, Pin, json_str};
 use crate::input::{Action, Bindings, ControlParams, InputState};
 use crate::pose::DragonVisual;
 
@@ -20,12 +21,29 @@ zawnabout_sim::params! {
         /// Light bands for the toon look (0 is smooth).
         bands: f32 = 4.0, [0, 8],
         /// Fog start (m).
-        fog_start: f32 = 300.0, [10, 3000],
+        fog_start: f32 = 900.0, [10, 6000],
         /// Fog end (m).
-        fog_end: f32 = 1400.0, [50, 6000],
+        fog_end: f32 = 9000.0, [50, 16000],
+        /// How far trees, flowers and clouds draw (m).
+        prop_range: f32 = 1600.0, [200, 9000],
+        /// Trees nearer than this get their full detail mesh (m).
+        detail_range: f32 = 450.0, [0, 4000],
         /// Blob shadow strength.
         shadow: f32 = 0.5, [0, 1],
+        /// Show rings on nearby landing spots.
+        landing_rings: bool = true, [0, 1],
+        /// How far away landing rings show (m).
+        ring_range: f32 = 450.0, [50, 2000],
     }
+}
+
+/// A ring drawn on the ground or a perch.
+#[derive(Clone, Copy, Debug)]
+pub struct Marker {
+    pub pos: Vec3,
+    pub radius: f32,
+    /// True for where a swoop is heading.
+    pub destination: bool,
 }
 
 struct Trace {
@@ -44,6 +62,10 @@ pub struct Game {
     pub look: LookParams,
     pub camera: Camera,
     pub visuals: Vec<(EntityId, DragonVisual)>,
+    /// A landing spot picked by a tap, sent with the next tick's input.
+    pub land_request: Option<Vec3>,
+    /// Notes mode: frozen world, free camera, pins.
+    pub feedback: Feedback,
     pub paused: bool,
     pub time: f64,
     acc: f32,
@@ -63,7 +85,9 @@ fn list<P: Params>(p: &P, out: &mut Vec<(String, f32, ParamDef)>) {
 impl Game {
     pub fn new(seed: u64) -> Self {
         let mut sim = Sim::new(seed);
-        let player = sim.spawn_dragon(0.0, 0.0, 0.0);
+        // Face north, toward the mountains.
+        let spawn = sim.world.terrain.spawn();
+        let player = sim.spawn_dragon(spawn.x, spawn.y, std::f32::consts::PI);
         let visuals = sim
             .dragons
             .iter()
@@ -79,6 +103,8 @@ impl Game {
             look: LookParams::default(),
             camera: Camera::default(),
             visuals,
+            land_request: None,
+            feedback: Feedback::default(),
             paused: false,
             time: 0.0,
             acc: 0.0,
@@ -112,6 +138,17 @@ impl Game {
 
     /// Advances by real elapsed time in fixed ticks.
     pub fn advance(&mut self, dt: f32) {
+        if self.feedback.active {
+            // The world stays frozen. Only the free camera moves.
+            let dt = dt.clamp(0.0, 0.25);
+            self.feedback.cam.update(&self.input, dt);
+            // Stay above ground and water, so the view never ends up inside rock.
+            let p = self.feedback.cam.pos;
+            let floor = self.sim.world.support(p.x, p.z, p.y) + 2.0;
+            self.feedback.cam.pos.y = p.y.max(floor);
+            self.sync_free_cam();
+            return;
+        }
         if self.paused {
             return;
         }
@@ -126,7 +163,8 @@ impl Game {
     }
 
     fn tick(&mut self) {
-        let input = self.input.sample(DT, &self.bindings, &self.controls);
+        let mut input = self.input.sample(DT, &self.bindings, &self.controls);
+        input.land_at = self.land_request.take();
         self.sim.step(&[(self.player, input)]);
         for d in &self.sim.dragons {
             match self.visuals.iter_mut().find(|(id, _)| *id == d.id) {
@@ -177,6 +215,235 @@ impl Game {
             mode: d.mode,
         };
         self.camera.update(dt, target, &self.sim.world, &self.cam);
+    }
+
+    /// The camera ray through normalized screen coordinates (0..1, origin top left).
+    fn ray(&self, nx: f32, ny: f32, aspect: f32) -> (Vec3, Vec3) {
+        let inv = self.camera.view_proj(aspect).inverse();
+        let (x, y) = (nx * 2.0 - 1.0, 1.0 - ny * 2.0);
+        // Reversed depth: 1 is the near plane, 0 the far one.
+        let near = inv.project_point3(Vec3::new(x, y, 1.0));
+        let dir = (inv.project_point3(Vec3::new(x, y, 0.0)) - near).normalize();
+        (near, dir)
+    }
+
+    /// The first surface along a ray, water included.
+    fn surface_hit(&self, near: Vec3, dir: Vec3) -> Option<Vec3> {
+        let world = &self.sim.world;
+        let mut t = 0.0;
+        while t < 9000.0 {
+            let at = near + dir * t;
+            let floor = world.support(at.x, at.z, at.y);
+            if at.y <= floor {
+                return Some(Vec3::new(at.x, floor, at.z));
+            }
+            t += 1.0 + t * 0.01;
+        }
+        None
+    }
+
+    /// The world point under normalized screen coordinates (0..1, origin top left): a
+    /// perch when one is near the ray, else the first surface hit. Returns the spot and how
+    /// close counts as arriving.
+    pub fn pick(&self, nx: f32, ny: f32, aspect: f32) -> Option<(Vec3, f32)> {
+        let (near, dir) = self.ray(nx, ny, aspect);
+        let world = &self.sim.world;
+        let perch = world
+            .perches
+            .iter()
+            .filter_map(|p| {
+                let t = (p.pos - near).dot(dir);
+                let miss = (near + dir * t - p.pos).length();
+                (t > 0.0 && miss < p.radius + t * 0.04).then_some((t, p))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, p)) = perch {
+            return Some((p.pos, p.radius));
+        }
+        self.surface_hit(near, dir).map(|p| (p, 2.0))
+    }
+
+    /// Enters or leaves notes mode. Entering freezes everything and starts the free
+    /// camera where the game camera is.
+    pub fn set_feedback(&mut self, on: bool) {
+        if on == self.feedback.active {
+            return;
+        }
+        self.input.clear();
+        self.feedback.draft = None;
+        if on {
+            let dir = (self.camera.look - self.camera.pos).normalize_or(Vec3::Z);
+            self.feedback.cam = FreeCam {
+                pos: self.camera.pos,
+                yaw: dir.x.atan2(dir.z),
+                pitch: dir.y.clamp(-1.0, 1.0).asin(),
+                boost: 0.0,
+            };
+            self.feedback.active = true;
+            self.sync_free_cam();
+        } else {
+            self.feedback.active = false;
+            self.camera.reset();
+            self.update_camera(0.0);
+        }
+    }
+
+    fn sync_free_cam(&mut self) {
+        let cam = self.feedback.cam;
+        self.camera.pos = cam.pos;
+        self.camera.look = cam.pos + cam.forward();
+        self.camera.roll = 0.0;
+    }
+
+    /// Turns the free camera by a mouse or finger drag in pixels.
+    pub fn feedback_look(&mut self, dx: f32, dy: f32) {
+        self.feedback.cam.look(Vec2::new(-dx, -dy) * 0.004);
+        self.sync_free_cam();
+    }
+
+    /// Places the free camera exactly, in notes mode: position, yaw and pitch (radians).
+    pub fn feedback_view(&mut self, pos: Vec3, yaw: f32, pitch: f32) {
+        self.set_feedback(true);
+        self.feedback.cam = FreeCam {
+            pos,
+            yaw,
+            pitch,
+            boost: 0.0,
+        };
+        self.sync_free_cam();
+    }
+
+    /// Picks the surface under the cursor in notes mode and describes it as JSON:
+    /// `spot`, `view` (x, y, z, yaw, pitch) and `near` (named places around it).
+    pub fn feedback_pick(&mut self, nx: f32, ny: f32, aspect: f32) -> Option<String> {
+        let (near, dir) = self.ray(nx, ny, aspect);
+        let spot = self.surface_hit(near, dir)?;
+        self.feedback.draft = Some(spot);
+        let cam = self.feedback.cam;
+        let near: Vec<String> = self
+            .sim
+            .world
+            .terrain
+            .describe(spot.x, spot.z)
+            .iter()
+            .map(|s| json_str(s))
+            .collect();
+        Some(format!(
+            r#"{{"spot":[{:.1},{:.1},{:.1}],"view":[{:.1},{:.1},{:.1},{:.4},{:.4}],"near":[{}]}}"#,
+            spot.x,
+            spot.y,
+            spot.z,
+            cam.pos.x,
+            cam.pos.y,
+            cam.pos.z,
+            cam.yaw,
+            cam.pitch,
+            near.join(",")
+        ))
+    }
+
+    /// Replaces the drawn pins: positions as x, y, z triples and one done flag each.
+    pub fn set_pins(&mut self, xyz: &[f32], done: &[u8]) {
+        self.feedback.draft = None;
+        self.feedback.pins = xyz
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .zip(done)
+            .map(|(p, d)| Pin {
+                pos: Vec3::new(p[0], p[1], p[2]),
+                done: *d != 0,
+            })
+            .collect();
+    }
+
+    /// Taps or clicks the screen: flies to and lands on whatever is there.
+    pub fn tap(&mut self, nx: f32, ny: f32, aspect: f32) -> bool {
+        match self.pick(nx, ny, aspect) {
+            Some((target, _)) => {
+                self.land_request = Some(target);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Rings to draw: nearby perches and the swoop destination, or note pins in notes
+    /// mode (open ones warm, done ones pale).
+    pub fn markers(&self) -> Vec<Marker> {
+        let mut out = Vec::new();
+        if self.feedback.active {
+            let pins = self.feedback.pins.iter().map(|p| (p.pos, !p.done));
+            let draft = self.feedback.draft.map(|p| (p, true));
+            for (pos, open) in pins.chain(draft) {
+                out.push(Marker {
+                    pos,
+                    radius: 4.0,
+                    destination: open,
+                });
+            }
+            return out;
+        }
+        let at = self.player_dragon().pos;
+        if self.look.landing_rings {
+            for p in &self.sim.world.perches {
+                if p.pos.distance(at) < self.look.ring_range && p.pos.distance(at) > 4.0 {
+                    out.push(Marker {
+                        pos: p.pos,
+                        radius: p.radius,
+                        destination: false,
+                    });
+                }
+            }
+        }
+        let swoop = self.player_dragon().swoop.as_ref().map(|s| s.target);
+        if let Some(target) = swoop.or(self.land_request) {
+            out.push(Marker {
+                pos: target,
+                radius: 2.5,
+                destination: true,
+            });
+        }
+        out
+    }
+
+    /// Evaluates a playbook condition such as `landed` or `near 0 0 0 5`.
+    pub fn check(&self, words: &[&str]) -> Result<bool, String> {
+        let d = self.player_dragon();
+        let feet = d.pos - Vec3::Y * self.sim.flight.stand_height;
+        let num = |i: usize| -> Result<f32, String> {
+            words
+                .get(i)
+                .ok_or_else(|| format!("missing argument {i}"))?
+                .parse::<f32>()
+                .map_err(|e| e.to_string())
+        };
+        Ok(match words {
+            ["landed"] => {
+                d.mode == Mode::Ground && d.swoop.is_none() && self.land_request.is_none()
+            }
+            ["ground"] => d.mode == Mode::Ground,
+            ["air"] => d.mode == Mode::Air,
+            ["near", ..] => feet.distance(Vec3::new(num(1)?, num(2)?, num(3)?)) <= num(4)?,
+            ["on-perch", id] => {
+                let p = self
+                    .sim
+                    .world
+                    .perches
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .ok_or("no such perch")?;
+                d.mode == Mode::Ground
+                    && Vec2::new(feet.x - p.pos.x, feet.z - p.pos.z).length() <= p.radius + 1.0
+                    && (feet.y - p.pos.y).abs() < 1.5
+            }
+            ["speed-above", _] => d.speed() > num(1)?,
+            ["speed-below", _] => d.speed() < num(1)?,
+            ["height-above", _] => {
+                feet.y - self.sim.world.support(feet.x, feet.z, feet.y) > num(1)?
+            }
+            _ => return Err(format!("unknown condition: {}", words.join(" "))),
+        })
     }
 
     pub fn params(&self) -> Vec<(String, f32, ParamDef)> {
@@ -303,6 +570,46 @@ impl Game {
                 Ok("all tunables back to defaults".into())
             }
             ["state"] => Ok(self.state()),
+            // land-at x z: fly to the top surface at (x, z) and land.
+            ["land-at", _, _] => {
+                let (x, z) = (num(1)?, num(2)?);
+                let y = self.sim.world.support(x, z, 1.0e4);
+                self.land_request = Some(Vec3::new(x, y, z));
+                Ok(format!("flying to ({x:.1},{y:.1},{z:.1})"))
+            }
+            ["land-perch", id] => {
+                let p = *self
+                    .sim
+                    .world
+                    .perches
+                    .iter()
+                    .find(|p| p.id == *id)
+                    .ok_or("no such perch")?;
+                self.land_request = Some(p.pos);
+                Ok(format!("flying to perch {id}"))
+            }
+            ["perches", ..] => {
+                let n = if words.len() > 1 { num(1)? as usize } else { 5 };
+                let at = self.player_dragon().pos;
+                let mut list: Vec<_> = self.sim.world.perches.iter().collect();
+                list.sort_by(|a, b| a.pos.distance(at).total_cmp(&b.pos.distance(at)));
+                Ok(list
+                    .iter()
+                    .take(n)
+                    .map(|p| {
+                        format!(
+                            "perch {} at ({:.1},{:.1},{:.1}) r={:.1} dist={:.0}",
+                            p.id,
+                            p.pos.x,
+                            p.pos.y,
+                            p.pos.z,
+                            p.radius,
+                            p.pos.distance(at)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
             ["hold", "pitch", _] => {
                 o.pitch = Some(num(2)?);
                 Ok(String::new())
@@ -378,6 +685,56 @@ impl Game {
                 });
                 Ok(String::new())
             }
+            // place x y z heading: in the air at an exact spot, such as inside a cave.
+            ["place", ..] => {
+                let pos = Vec3::new(num(1)?, num(2)?, num(3)?);
+                let heading = num(4).unwrap_or(0.0).to_radians();
+                let player = self.player;
+                let d = self.sim.dragon_mut(player).expect("player dragon exists");
+                *d = Dragon::new(player, pos, heading);
+                d.mode = Mode::Air;
+                let d = d.clone();
+                if let Some((_, v)) = self.visuals.iter_mut().find(|(id, _)| *id == player) {
+                    v.snap(&d);
+                }
+                self.camera.reset();
+                self.update_camera(0.0);
+                Ok(self.state())
+            }
+            // goto x z height heading: flying at height over the ground, for looking around.
+            ["goto", ..] => {
+                let (x, z, h) = (num(1)?, num(2)?, num(3).unwrap_or(60.0));
+                let heading = num(4).unwrap_or(180.0).to_radians();
+                self.spawn_player(Vec3::new(x, h, z), heading, 25.0);
+                Ok(self.state())
+            }
+            // goto-mark id height: same, over a named place from the world files.
+            ["goto-mark", id, ..] => {
+                let m = self
+                    .sim
+                    .world
+                    .terrain
+                    .def
+                    .marks
+                    .iter()
+                    .find(|m| m.id == *id)
+                    .ok_or("no such mark")?;
+                let h = num(2).unwrap_or(60.0);
+                let heading = num(3).unwrap_or(180.0).to_radians();
+                self.spawn_player(Vec3::new(m.pos[0], h, m.pos[2]), heading, 25.0);
+                Ok(self.state())
+            }
+            // notes on|off: notes mode, everything frozen with a free camera.
+            ["notes", state] => {
+                self.set_feedback(*state == "on");
+                Ok(String::new())
+            }
+            // view x y z yaw pitch: the free camera exactly, as saved in a note.
+            ["view", ..] => {
+                let pos = Vec3::new(num(1)?, num(2)?, num(3)?);
+                self.feedback_view(pos, num(4)?, num(5)?);
+                Ok(String::new())
+            }
             ["camera", "reset"] => {
                 self.camera.reset();
                 Ok(String::new())
@@ -390,7 +747,7 @@ impl Game {
     /// starts in flight at `speed` along `heading`.
     pub fn spawn_player(&mut self, pos: Vec3, heading: f32, speed: f32) {
         let flight = self.sim.flight.clone();
-        let ground = self.sim.world.ground_height(pos.x, pos.z);
+        let ground = self.sim.world.support(pos.x, pos.z, 1.0e4);
         let player = self.player;
         let d = self.sim.dragon_mut(player).expect("player dragon exists");
         *d = Dragon::new(

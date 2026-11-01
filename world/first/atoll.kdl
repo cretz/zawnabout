@@ -1,0 +1,96 @@
+// Atoll. Center at world -4300 -2700. A low, lopsided ring of palm islets about 1.9km by 1.1km
+// around a shallow lagoon, with a small rocky islet off center. A sea cave on a lone outer rock
+// dives under the reef and comes up in a grotto right under that islet.
+
+land motu-north base=4 jag=15 {
+    p -650 -350 edge=beach
+    p -300 -480
+    p 50 -450
+    p 400 -520
+    p 700 -380
+    p 650 -300
+    p 350 -380
+    p 0 -350
+    p -350 -360
+    p -600 -250
+}
+land motu-east base=4 jag=15 {
+    p 900 -150 edge=beach
+    p 1000 100
+    p 850 300
+    p 780 250
+    p 880 80
+    p 820 -100
+}
+land motu-southeast base=3 jag=10 {
+    p 550 400 edge=beach
+    p 650 450
+    p 500 520
+    p 430 470
+}
+land motu-south base=4 jag=15 {
+    p -100 450 edge=beach
+    p 200 480
+    p 150 560
+    p -200 560
+    p -450 500
+    p -400 430
+}
+land motu-west base=4 jag=15 {
+    p -850 -100 edge=beach
+    p -950 100
+    p -800 300
+    p -700 280
+    p -820 100
+    p -760 -60
+}
+land heart base=25 jag=10 {
+    note "Small rocky islet in the lagoon, off center."
+    p 60 -90 edge=rocky
+    p 160 -40
+    p 140 60
+    p 40 90
+    p -50 30
+    p -30 -60
+}
+
+forest atoll-palms kind=open trees=palm {
+    note "Palms on every islet. Trees only grow on land, so this outline can be loose."
+    p -1000 -550
+    p 1050 -550
+    p 1050 600
+    p -1000 600
+}
+
+village palm-ring style=stilts tech=simple {
+    note "Island folk on the north islet and out over the lagoon on stilts. Canoes, nets, a generator or two."
+    p -300 -470
+    p 400 -540
+    p 450 -300
+    p -300 -250
+    beacon palm-ring-beacon x=50 z=-430
+}
+
+spire gull-rock x=-1050 z=-350 h=35 r=30 top=flat {
+    note "Lone rock on the outer reef. The sea cave is at its foot."
+    perch gull-rock-top x=-1050 y=35 z=-350
+}
+
+caves grotto {
+    note "Isolated. In through the gull rock, out through the crack in the heart islet."
+    mouth gull-throat kind=cliff w=30 hidden=#true {
+        p -1040 22 -340
+        p -950 -40 -280
+        p -600 -120 -150
+        p -150 -100 -50
+    }
+    cavern hidden-grotto x=50 y=-70 z=0 w=200 h=80 d=180 shape=dome glow=0.35 {
+        note "Sunlit pool under the heart islet. A treasure spot."
+        lake grotto-pool level=-100 x=50 z=0 r=70
+        beacon grotto-beacon x=-10 y=-105 z=40
+    }
+    mouth heart-crack kind=chimney w=24 tight=#true hidden=#true light=#true {
+        p 50 -40 0
+        p 60 30 5
+    }
+}

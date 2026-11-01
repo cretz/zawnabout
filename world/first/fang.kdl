@@ -1,0 +1,159 @@
+// Fang. Center at world 3600 3300. The tallest peak in the world, an old dormant crater on top
+// with a lake inside, rainforest on the slopes and a stilt village on the shore. Old lava flows
+// pushed lobes out into the sea, so the coast is all fingers and coves.
+
+land base=10 jag=35 {
+    p -100 -1150 edge=cliff
+    p 250 -1100
+    p 500 -1250 sharp=#true
+    p 700 -1050
+    p 850 -850
+    p 1150 -700 edge=rocky
+    p 1200 -450
+    p 1050 -250
+    p 1250 -50
+    p 1350 150 sharp=#true
+    p 1150 350
+    p 1050 600 edge=beach
+    p 900 850
+    p 650 950
+    p 400 850 sharp=#true
+    p 250 1050
+    p 100 1250
+    p -150 1150
+    p -400 1050 edge=beach
+    p -650 950
+    p -900 700
+    p -1050 450
+    p -1250 250 edge=rocky sharp=#true
+    p -1200 0
+    p -1050 -200
+    p -1150 -450 edge=cliff
+    p -900 -750
+    p -600 -900
+    p -350 -1050
+}
+
+mountain fang-peak x=0 z=0 h=950 r=950 shape=crater rim=950 inner=260 floor=790 stretch=1.15 rot=30 {
+    note "Dormant. Leave room to wake it up as a volcano later."
+    perch fang-rim x=0 z=-300
+    beacon fang-beacon x=200 z=-150
+}
+ridge fang-spur-east width=350 {
+    p 300 -100 h=800
+    p 800 -150 h=350
+    p 1250 -50 h=60
+}
+ridge fang-spur-north width=300 {
+    p 100 -300 h=800
+    p 400 -800 h=380
+    p 500 -1200 h=80
+}
+ridge fang-spur-west width=350 {
+    p -300 50 h=780
+    p -800 200 h=300
+    p -1200 250 h=40
+}
+lake crater-lake level=775 {
+    note "Hidden lake inside the crater. Only seen from above the rim."
+    p -170 -60
+    p 0 -190
+    p 180 -90
+    p 150 120
+    p -60 170
+}
+
+gorge mist-gorge w=120 {
+    note "Notch in the south rim where the crater lake spills out, down to the sea."
+    p 0 200 depth=220
+    p 50 500 depth=150
+    p 0 800 depth=80
+    p 100 1250 depth=30
+}
+river mist-river w=25 {
+    p 0 0
+    p 0 230
+    falls mist-falls h=300
+    p 30 500
+    p 0 800
+    p 100 1280
+}
+river canopy-creek w=14 {
+    note "Comes down the west flank to the village. Stilt houses along both banks."
+    p -500 -300
+    p -800 -100
+    p -1000 50
+    p -1230 120
+}
+
+spire fang-stack x=1450 z=-50 h=70 r=40 top=flat
+arch fang-arch w=40 thick=25 {
+    note "Sea arch from the east shore out to a stack. Fly under it."
+    p 1200 60 -80
+    p 1430 60 -50
+}
+
+forest fang-jungle kind=rain trees=jungle {
+    note "Thick rainforest on the lower slopes, all the way round."
+    p -100 -1050
+    p 600 -1100
+    p 1100 -500
+    p 1250 150
+    p 900 800
+    p 200 1150
+    p -600 900
+    p -1150 300
+    p -1000 -500
+}
+
+village canopy style=stilts tech=simple {
+    note "Stilt houses over the water, along the creek and on platforms in the trees. Lanterns, few machines."
+    p -1350 -100
+    p -1050 -150
+    p -800 -150
+    p -750 50
+    p -1000 350
+    p -1300 350
+    beacon canopy-beacon x=-1000 z=100
+}
+
+dugout fang-nook-1 x=-500 y=60 z=-930 facing=north r=22
+dugout fang-nook-2 x=-200 y=140 z=-1090 facing=north r=22
+dugout fang-nook-3 x=250 y=90 z=-1080 facing=north r=22
+dugout fang-nook-4 x=550 y=120 z=-1150 facing=north r=22
+dugout fang-nook-5 x=-850 y=40 z=-760 facing=north r=22
+dugout fang-nook-6 x=1100 y=60 z=-650 facing=east r=22
+
+// Old lava tube and the magma chamber under it. Isolated from every other system.
+
+caves old-tube {
+    mouth crater-vent kind=cliff w=50 hidden=#true light=#true {
+        note "Dark opening low in the crater wall, just above the lake."
+        p 150 820 100
+        p 300 700 200
+    }
+    passage tube w=60 {
+        p 300 700 200
+        p 500 500 0
+        p 400 350 -300
+    }
+    cavern ember-hall x=200 y=300 z=-400 w=600 h=250 d=500 rot=25 shape=dome glow=0.3 {
+        note "Old lava chamber. Warm colors."
+        beacon ember-beacon x=200 y=180 z=-400
+    }
+    mouth tube-mouth kind=cliff w=60 hidden=#true {
+        p 300 250 -650
+        p 300 60 -1000
+        p 300 45 -1200
+    }
+    passage tube-deep w=90 {
+        p 250 180 -450
+        p 450 0 -300
+        p 300 -250 -100
+        p 100 -430 0
+    }
+    cavern fang-deep x=0 y=-650 z=100 w=1800 h=450 d=1500 rot=20 shape=hall glow=0.3 {
+        note "The emptied magma chamber. Huge, warm glow from the walls, the deepest heat in the world."
+        beacon fang-deep-beacon x=-300 y=-860 z=300
+    }
+}

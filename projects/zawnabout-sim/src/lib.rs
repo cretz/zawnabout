@@ -3,12 +3,15 @@
 
 pub mod dragon;
 pub mod params;
+pub mod shape;
+pub mod swoop;
+pub mod terrain;
 pub mod world;
 
 pub use dragon::{Dragon, DragonInput, EntityId, FlightParams, Mode};
 pub use glam;
 pub use params::{ParamDef, Params};
-pub use world::{Prop, PropKind, World};
+pub use world::{Collider, Perch, Prop, PropKind, World};
 
 use glam::Vec3;
 
@@ -41,7 +44,7 @@ impl Sim {
     pub fn spawn_dragon(&mut self, x: f32, z: f32, heading: f32) -> EntityId {
         let id = EntityId(self.next_id);
         self.next_id += 1;
-        let y = self.world.ground_height(x, z) + self.flight.stand_height;
+        let y = self.world.support(x, z, 1.0e4) + self.flight.stand_height;
         self.dragons
             .push(Dragon::new(id, Vec3::new(x, y, z), heading));
         id
@@ -73,6 +76,10 @@ impl Sim {
 mod tests {
     use super::*;
 
+    // Open sea well inside the edge, so tests fly over flat water with nothing to hit.
+    const TEST_X: f32 = 4800.0;
+    const TEST_Z: f32 = -4800.0;
+
     fn run(sim: &mut Sim, id: EntityId, secs: f32, input: DragonInput) {
         let mut first = true;
         for _ in 0..(secs * TICK_HZ as f32) as u32 {
@@ -88,7 +95,7 @@ mod tests {
     #[test]
     fn hands_off_glide_settles() {
         let mut sim = Sim::new(1);
-        let id = sim.spawn_dragon(0.0, 0.0, 0.0);
+        let id = sim.spawn_dragon(TEST_X, TEST_Z, 0.0);
         let d = sim.dragon_mut(id).unwrap();
         d.mode = Mode::Air;
         d.pos.y = 300.0;
@@ -97,7 +104,7 @@ mod tests {
         let d = sim.dragon(id).unwrap();
         assert_eq!(d.mode, Mode::Air);
         let speed = d.speed();
-        assert!((14.0..24.0).contains(&speed), "glide speed {speed}");
+        assert!((24.0..44.0).contains(&speed), "glide speed {speed}");
         let sink = -d.vel.y;
         assert!((0.5..4.0).contains(&sink), "sink {sink}");
     }
@@ -105,7 +112,7 @@ mod tests {
     #[test]
     fn takeoff_with_held_flap_climbs() {
         let mut sim = Sim::new(1);
-        let id = sim.spawn_dragon(0.0, 0.0, 0.0);
+        let id = sim.spawn_dragon(TEST_X, TEST_Z, 0.0);
         run(&mut sim, id, 0.3, DragonInput::default());
         let start = sim.dragon(id).unwrap().pos.y;
         let input = DragonInput {
@@ -123,7 +130,7 @@ mod tests {
     #[test]
     fn tucked_dive_is_fast_and_lands_with_a_tumble() {
         let mut sim = Sim::new(1);
-        let id = sim.spawn_dragon(0.0, 0.0, 0.0);
+        let id = sim.spawn_dragon(TEST_X, TEST_Z, 0.0);
         let d = sim.dragon_mut(id).unwrap();
         d.mode = Mode::Air;
         d.pos.y = 380.0;
@@ -147,10 +154,42 @@ mod tests {
     }
 
     #[test]
+    fn brake_and_flap_hovers() {
+        let mut sim = Sim::new(1);
+        let id = sim.spawn_dragon(TEST_X, TEST_Z, 0.0);
+        let d = sim.dragon_mut(id).unwrap();
+        d.mode = Mode::Air;
+        d.pos.y = 100.0;
+        d.vel = Vec3::new(0.0, 0.0, 20.0);
+        let brake = DragonInput {
+            brake: true,
+            ..Default::default()
+        };
+        run(&mut sim, id, 3.0, brake);
+        let start = sim.dragon(id).unwrap().pos;
+        run(
+            &mut sim,
+            id,
+            5.0,
+            DragonInput {
+                flap: true,
+                ..brake
+            },
+        );
+        let d = sim.dragon(id).unwrap();
+        assert!(d.speed() < 3.0, "hover speed {}", d.speed());
+        assert!(
+            (d.pos - start).length() < 12.0,
+            "drifted {}",
+            (d.pos - start).length()
+        );
+    }
+
+    #[test]
     fn same_inputs_same_result() {
         let make = || {
             let mut sim = Sim::new(7);
-            let id = sim.spawn_dragon(10.0, 20.0, 1.0);
+            let id = sim.spawn_dragon(TEST_X + 10.0, TEST_Z + 20.0, 1.0);
             let input = DragonInput {
                 flap: true,
                 flap_taps: 1,

@@ -18,7 +18,32 @@
       <p class="hint" id="start-hint">Press any key or tap to start</p>
     </div>
 
+    <canvas id="minimap" class="hidden" title="Map (click to enlarge)"></canvas>
+
     <button id="help-btn" class="round" aria-label="Controls">?</button>
+    <button id="notes-btn" class="round second" aria-label="Notes mode" title="Notes mode (N)">&#9998;</button>
+    <button id="full-btn" class="round third hidden" aria-label="Full screen" title="Full screen">&#x26F6;</button>
+
+    <div id="notes-bar" class="hidden">
+      <strong>Notes mode</strong>, everything is paused. <span id="notes-help"></span>
+      <button id="notes-exit">Back to flying</button>
+    </div>
+    <div id="notes-panel" class="card hidden">
+      <div class="notes-head">
+        <strong>Notes</strong>
+        <span id="notes-where"></span>
+        <button id="notes-download" class="hidden">Download</button>
+      </div>
+      <div id="notes-list"></div>
+    </div>
+    <div id="note-dialog" class="card center hidden">
+      <p id="note-near"></p>
+      <textarea id="note-text" rows="5" placeholder="What would you like here?"></textarea>
+      <div class="note-actions">
+        <button id="note-cancel">Cancel</button>
+        <button id="note-save" class="primary">Save note</button>
+      </div>
+    </div>
 
     <div id="touch" class="hidden">
       <div id="stick-zone"><div id="stick-base"><div id="stick-knob"></div></div></div>

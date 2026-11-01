@@ -21,6 +21,8 @@ pub enum Part {
     Leg,
     Arm(usize),
     Hand(usize),
+    /// Dizzy stars after a bonk.
+    Star,
 }
 
 /// Wing joint angles (left side, mirrored for right).
@@ -78,6 +80,7 @@ pub struct DragonVisual {
     stride: f32,
     roll: f32,
     squash: f32,
+    bonk: f32,
     time: f32,
     was_ground: bool,
     seed: u32,
@@ -100,6 +103,7 @@ impl DragonVisual {
             stride: d.stride,
             roll: 0.0,
             squash: 0.0,
+            bonk: f32::MAX,
             time: 0.0,
             was_ground: d.mode == Mode::Ground,
             seed: d.id.0,
@@ -122,8 +126,10 @@ impl DragonVisual {
         turn_rate /= dt;
         self.prev_heading = d.heading;
 
+        self.bonk = d.bonk;
         let ground = d.mode == Mode::Ground;
-        let height = d.pos.y - p.stand_height - world.ground_height(d.pos.x, d.pos.z);
+        let feet = d.pos.y - p.stand_height;
+        let height = feet - world.support(d.pos.x, d.pos.z, feet);
         let speed = d.speed();
         let landing = !ground && height < 7.0 && d.vel.y < 1.0 && speed < 16.0;
 
@@ -132,7 +138,19 @@ impl DragonVisual {
         if ground && d.mode_time < 0.35 {
             want = BRAKING.lerp(FOLDED, d.mode_time / 0.35);
         }
-        if !ground && d.stroke.active {
+        let backflap = d.brake > 0.5;
+        if !ground && d.stroke.active && backflap {
+            // Back-flaps: wings sweep forward and down, faces angled to push air ahead.
+            let ph = d.stroke.phase;
+            let s = smooth(if ph < 0.5 { ph * 2.0 } else { 2.0 - ph * 2.0 });
+            want = Wing::new(
+                0.9 - 1.3 * s,
+                -0.7 + 0.5 * s,
+                0.1 + 0.3 * (1.0 - s),
+                0.2,
+                -0.7,
+            );
+        } else if !ground && d.stroke.active {
             let down = p.downstroke;
             let ph = d.stroke.phase;
             let (top, bottom) = (1.0, -0.75);
@@ -161,9 +179,12 @@ impl DragonVisual {
             if landing {
                 want = want.lerp(BRAKING, 0.45);
             }
-            want = want.lerp(BRAKING, d.brake).lerp(TUCKED, d.tuck);
+            if !(d.stroke.active && backflap) {
+                want = want.lerp(BRAKING, d.brake);
+            }
+            want = want.lerp(TUCKED, d.tuck);
         }
-        let wing_rate = if d.stroke.active { 30.0 } else { 9.0 };
+        let wing_rate = if d.stroke.active { 45.0 } else { 9.0 };
         self.wing = self.wing.lerp(want, ease(wing_rate));
 
         // Legs drop for landing and stand on the ground.
@@ -245,6 +266,23 @@ impl DragonVisual {
             * Mat4::from_translation(Vec3::new(0.0, -0.26, -0.1))
             * Mat4::from_scale(Vec3::splat(1.25));
         push(Part::Head, head);
+        if self.bonk < 1.4 {
+            // Three little stars circle the head, shrinking away.
+            let size = 0.3 * (1.0 - self.bonk / 1.4).sqrt();
+            let center = head.transform_point3(Vec3::new(0.0, 0.75, 0.35));
+            for k in 0..3 {
+                let a = self.time * 5.0 + k as f32 * TAU / 3.0;
+                let at = center + Vec3::new(a.cos(), 0.15 * (a * 2.0).sin(), a.sin()) * 0.8;
+                push(
+                    Part::Star,
+                    Mat4::from_scale_rotation_translation(
+                        Vec3::splat(size),
+                        Quat::from_rotation_y(a * 2.0),
+                        at,
+                    ),
+                );
+            }
+        }
         let blink = {
             let cycle = 3.5 + hash(self.seed) * 2.0;
             if (self.time % cycle) < 0.13 {

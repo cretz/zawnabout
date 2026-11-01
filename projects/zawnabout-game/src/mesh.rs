@@ -272,12 +272,4 @@ impl MeshBuilder {
     }
 }
 
-/// Cheap integer hash to `[0, 1)`.
-pub fn hash(mut x: u32) -> f32 {
-    x ^= x >> 16;
-    x = x.wrapping_mul(0x7FEB_352D);
-    x ^= x >> 15;
-    x = x.wrapping_mul(0x846C_A68B);
-    x ^= x >> 16;
-    (x >> 8) as f32 / (1u32 << 24) as f32
-}
+pub use zawnabout_sim::shape::hash;

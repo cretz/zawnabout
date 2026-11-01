@@ -10,7 +10,8 @@ use crate::game::Game;
 use crate::mesh::Rgb;
 use crate::models;
 use crate::pose::Part;
-use crate::render::{Frame, Instance, Lighting, MeshId, Renderer};
+use crate::render::{Cull, Frame, Instance, Lighting, MeshId, Renderer};
+use crate::terrain_mesh::TerrainMeshes;
 
 struct DragonIds {
     body: MeshId,
@@ -21,12 +22,18 @@ struct DragonIds {
     leg: MeshId,
     arm: [MeshId; 2],
     hand: [MeshId; 2],
+    star: MeshId,
 }
 
 pub struct Gfx {
     pub renderer: Renderer,
     dragon: DragonIds,
+    terrain: TerrainMeshes,
 }
+
+/// Props are batched per square of this size (m), so far squares can be skipped.
+const PROP_TILE: f32 = 512.0;
+const CLOUD_TILE: f32 = 3000.0;
 
 fn linear(c: Rgb, scale: f32) -> Vec3 {
     let f = |s: u32| ((s & 0xFF) as f32 / 255.0).powf(2.2) * scale;
@@ -36,10 +43,22 @@ fn linear(c: Rgb, scale: f32) -> Vec3 {
 impl Gfx {
     pub fn new(mut renderer: Renderer, game: &Game) -> Self {
         let world = &game.sim.world;
-        let ground = renderer.add_mesh(&models::ground(world));
-        renderer.add_static(ground, &[Instance::new(Mat4::IDENTITY)]);
+        let sea = renderer.add_mesh(&models::sea(&world.terrain));
+        renderer.add_static(sea, &[Instance::new(Mat4::IDENTITY)]);
+        let lakes = renderer.add_mesh(&models::lakes(&world.terrain));
+        renderer.add_static(lakes, &[Instance::new(Mat4::IDENTITY)]);
 
-        let mut batches: HashMap<(PropKind, u8), Vec<Instance>> = HashMap::new();
+        // Props are batched by tile and culled by distance. Clouds use bigger tiles and
+        // reach farther.
+        let tile = |p: Vec3, kind: PropKind| {
+            let size = if kind == PropKind::Cloud {
+                CLOUD_TILE
+            } else {
+                PROP_TILE
+            };
+            ((p.x / size).floor() as i32, (p.z / size).floor() as i32)
+        };
+        let mut batches: HashMap<(PropKind, u8, (i32, i32)), Vec<Instance>> = HashMap::new();
         let variants: HashMap<PropKind, usize> = PropKind::ALL
             .iter()
             .map(|k| (*k, models::prop_variants(*k).len()))
@@ -53,22 +72,48 @@ impl Gfx {
             );
             // Clouds glow a little so they stay white from below.
             let tint = if p.kind == PropKind::Cloud {
-                Vec4::splat(1.5)
+                Vec4::new(1.5, 1.5, 1.5, 1.0)
             } else {
                 Vec4::ONE
             };
             batches
-                .entry((p.kind, v))
+                .entry((p.kind, v, tile(p.pos, p.kind)))
                 .or_default()
                 .push(Instance::tinted(m, tint));
         }
-        for kind in PropKind::ALL {
-            for (v, mesh) in models::prop_variants(kind).iter().enumerate() {
-                if let Some(instances) = batches.get(&(kind, v as u8)) {
-                    let id = renderer.add_mesh(mesh);
-                    renderer.add_static(id, instances);
-                }
-            }
+        let mut keys: Vec<_> = batches.keys().copied().collect();
+        keys.sort_by_key(|(k, v, t)| (*k as u8, *v, *t));
+        let mut ids: HashMap<(PropKind, u8), MeshId> = HashMap::new();
+        let mut far_ids: HashMap<(PropKind, u8), Option<MeshId>> = HashMap::new();
+        for key in keys {
+            let (kind, v, (tx, tz)) = key;
+            let id = *ids
+                .entry((kind, v))
+                .or_insert_with(|| renderer.add_mesh(&models::prop_variants(kind)[v as usize]));
+            let far = *far_ids
+                .entry((kind, v))
+                .or_insert_with(|| models::prop_far(kind, v as u32).map(|m| renderer.add_mesh(&m)));
+            let instances = &batches[&key];
+            // Clouds reach farther and keep detail longer, flowers only show up close.
+            let (size, y, reach, detail) = match kind {
+                PropKind::Cloud => (CLOUD_TILE, 700.0, 3.0, 3.0),
+                PropKind::Flower | PropKind::Bush => (PROP_TILE, 300.0, 0.25, 1.0),
+                _ => (PROP_TILE, 300.0, 1.0, 1.0),
+            };
+            let center = Vec3::new((tx as f32 + 0.5) * size, y, (tz as f32 + 0.5) * size);
+            // Half the tile diagonal plus room for tall things.
+            let radius = size * 0.71 + 700.0;
+            renderer.add_static_culled(
+                id,
+                instances,
+                Cull {
+                    center,
+                    radius,
+                    reach,
+                    far,
+                    detail,
+                },
+            );
         }
 
         let m = models::dragon();
@@ -81,8 +126,25 @@ impl Gfx {
             leg: renderer.add_mesh(&m.leg),
             arm: [renderer.add_mesh(&m.arm[0]), renderer.add_mesh(&m.arm[1])],
             hand: [renderer.add_mesh(&m.hand[0]), renderer.add_mesh(&m.hand[1])],
+            star: renderer.add_mesh(&m.star),
         };
-        Self { renderer, dragon }
+        let mut gfx = Self {
+            renderer,
+            dragon,
+            terrain: TerrainMeshes::default(),
+        };
+        gfx.update_terrain(game, usize::MAX);
+        gfx
+    }
+
+    /// Streams terrain chunks around the camera, building at most `budget` new ones.
+    pub fn update_terrain(&mut self, game: &Game, budget: usize) {
+        self.terrain.update(
+            &mut self.renderer,
+            &game.sim.world.terrain,
+            game.camera.pos,
+            budget,
+        );
     }
 
     fn mesh(&self, part: Part) -> MeshId {
@@ -96,6 +158,7 @@ impl Gfx {
             Part::Leg => d.leg,
             Part::Arm(i) => d.arm[i],
             Part::Hand(i) => d.hand[i],
+            Part::Star => d.star,
         }
     }
 
@@ -118,6 +181,8 @@ impl Gfx {
             fog_end: look.fog_end,
             bands: look.bands,
             shadow: look.shadow,
+            cave_ambient: linear(Rgb(0xB8B4D8), 0.95),
+            underground: 1.0 - game.sim.world.terrain.daylight(game.camera.pos),
         };
 
         let alpha = game.alpha();
@@ -128,13 +193,16 @@ impl Gfx {
         for (_, visual) in &game.visuals {
             parts.clear();
             visual.parts(alpha, &mut parts);
-            draws.extend(
-                parts
-                    .iter()
-                    .map(|(part, m, tint)| (self.mesh(*part), Instance::tinted(*m, *tint))),
-            );
+            // Instance alpha carries daylight, so the dragon darkens in caves too.
             let (pos, _) = visual.interpolated(alpha);
-            let ground = world.ground_height(pos.x, pos.z);
+            let day = world.terrain.daylight(pos);
+            draws.extend(parts.iter().map(|(part, m, tint)| {
+                (
+                    self.mesh(*part),
+                    Instance::tinted(*m, tint.truncate().extend(tint.w * day)),
+                )
+            }));
+            let ground = world.support(pos.x, pos.z, pos.y);
             let height = (pos.y - ground).max(0.0);
             let normal = world.ground_normal(pos.x, pos.z);
             let radius = 2.6 + height * 0.015;
@@ -148,16 +216,61 @@ impl Gfx {
             shadows.push(Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, strength)));
         }
 
+        // Landing rings: two that breathe in and out, warmer for the destination.
+        let mut rings = Vec::new();
+        let t = game.time as f32;
+        let player = game.player_dragon().pos;
+        for m in game.markers() {
+            let fade = if game.feedback.active {
+                1.0
+            } else {
+                1.0 - (m.pos.distance(player) / game.look.ring_range).clamp(0.0, 1.0)
+            };
+            let (color, strength) = if m.destination {
+                (linear(Rgb(0xFFB089), 1.0), 0.95)
+            } else {
+                (linear(Rgb(0xFFE38A), 1.0), 0.95 * fade.sqrt())
+            };
+            for k in 0..2 {
+                let phase = (t * 0.8 + k as f32 * 0.5).fract();
+                // Halos face the camera and keep a minimum on-screen size, so spots stay
+                // easy to see and tap from any angle and distance.
+                let center = m.pos + Vec3::Y * 0.6;
+                let to_cam = game.camera.pos - center;
+                let size = m.radius.max(to_cam.length() * 0.035);
+                let scale = size * (0.55 + 0.6 * phase);
+                let alpha = strength * (1.0 - phase) * (phase * 4.0).min(1.0);
+                let face = Quat::from_rotation_arc(Vec3::Y, to_cam.normalize_or(Vec3::Y));
+                let model = Mat4::from_scale_rotation_translation(
+                    Vec3::new(scale, 1.0, scale),
+                    face,
+                    center,
+                );
+                rings.push(Instance::tinted(model, color.extend(alpha)));
+            }
+        }
+
         Frame {
             view_proj: game.camera.view_proj(w as f32 / h.max(1) as f32),
             cam_pos: game.camera.pos,
             lighting,
             draws,
+            terrain: self.terrain.draw_list(
+                game.camera.pos,
+                // Cave insides are hidden unless underground or close enough to see in.
+                lighting.underground > 0.05 || world.terrain.near_voids(game.camera.pos, 150.0),
+                lighting.underground,
+            ),
+            prop_range: game.look.prop_range,
+            detail_range: game.look.detail_range,
+            deep: lighting.underground > 0.85,
             shadows,
+            rings,
         }
     }
 
     pub fn render(&mut self, game: &Game, target: &wgpu::TextureView) {
+        self.update_terrain(game, 3);
         let frame = self.frame(game);
         self.renderer.render(target, &frame);
     }
@@ -165,6 +278,13 @@ impl Gfx {
     /// Renders one frame offscreen and reads it back as tightly packed RGBA8. Blocks,
     /// so native only.
     pub fn capture(&mut self, game: &Game) -> Vec<u8> {
+        // Shots always show finished terrain.
+        while !self
+            .terrain
+            .settled(&game.sim.world.terrain, game.camera.pos)
+        {
+            self.update_terrain(game, usize::MAX);
+        }
         let (w, h) = self.renderer.size();
         let device = &self.renderer.device;
         let tex = device.create_texture(&wgpu::TextureDescriptor {

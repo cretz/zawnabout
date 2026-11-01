@@ -138,6 +138,63 @@ mod web {
             }
         }
 
+        /// A tap or click at normalized coordinates (0..1, top left origin). Flies to and
+        /// lands on whatever is there.
+        pub fn tap(&mut self, nx: f32, ny: f32) -> bool {
+            let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+            self.game.tap(nx, ny, aspect)
+        }
+
+        /// Enters or leaves notes mode: everything frozen, a free camera, note pins.
+        pub fn notes(&mut self, on: bool) {
+            self.game.set_feedback(on);
+        }
+
+        pub fn notes_active(&self) -> bool {
+            self.game.feedback.active
+        }
+
+        /// Turns the notes camera by a drag in CSS pixels.
+        pub fn notes_look(&mut self, dx: f32, dy: f32) {
+            self.game.feedback_look(dx, dy);
+        }
+
+        /// The spot under normalized coordinates in notes mode, as JSON with `spot`,
+        /// `view` and `near`, or nothing when no surface is there.
+        pub fn notes_pick(&mut self, nx: f32, ny: f32) -> Option<String> {
+            let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
+            self.game.feedback_pick(nx, ny, aspect)
+        }
+
+        /// Pins to draw: x, y, z per note and a done flag per note.
+        pub fn set_pins(&mut self, xyz: &[f32], done: &[u8]) {
+            self.game.set_pins(xyz, done);
+        }
+
+        /// World square and soft edge width: min x, min z, max x, max z, edge.
+        pub fn world_bounds(&self) -> Vec<f32> {
+            let def = self.game.sim.world.terrain.def;
+            let b = def.bounds;
+            vec![b[0], b[1], b[2], b[3], def.edge]
+        }
+
+        /// The whole world as a shaded map, `size` square RGBA8, north up.
+        pub fn map_image(&self, size: u32) -> Vec<u8> {
+            zawnabout_game::map::render(&self.game.sim.world.terrain, size, false)
+        }
+
+        /// What the map arrow shows: x, z and heading of the dragon, or of the camera in
+        /// notes mode.
+        pub fn map_marker(&self) -> Vec<f32> {
+            if self.game.feedback.active {
+                let cam = self.game.feedback.cam;
+                vec![cam.pos.x, cam.pos.z, cam.yaw]
+            } else {
+                let d = self.game.player_dragon();
+                vec![d.pos.x, d.pos.z, d.heading]
+            }
+        }
+
         /// Runs a debug command and returns its output, or `error: ...`.
         pub fn command(&mut self, line: &str) -> String {
             match self.game.command(line) {

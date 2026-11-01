@@ -11,6 +11,8 @@ struct Globals {
     ambient_ground: vec4f,
     // Fog start, fog end, light bands (0 for smooth), shadow strength.
     fog: vec4f,
+    // Cave light (rgb) and how far underground the camera is (a).
+    cave: vec4f,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -73,11 +75,16 @@ fn fs_lit(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
     if bands > 0.5 {
         light = min(floor(light * bands + 0.35) / bands, 1.0);
     }
-    let hemi = mix(g.ambient_ground.rgb, g.ambient_sky.rgb, n.y * 0.5 + 0.5);
-    var col = i.color.rgb * (hemi + g.sun_color.rgb * light);
+    // Vertex alpha is how much daylight reaches here. Deep in caves a soft glow takes over.
+    let day = clamp(i.color.a, 0.0, 1.0);
+    // Cave glow is brighter on floors than roofs, so shapes still read.
+    let glow = g.cave.rgb * (0.55 + 0.45 * (n.y * 0.5 + 0.5));
+    let hemi = mix(glow, mix(g.ambient_ground.rgb, g.ambient_sky.rgb, n.y * 0.5 + 0.5), day);
+    var col = i.color.rgb * (hemi + g.sun_color.rgb * light * day);
     let to_frag = i.world - g.cam_pos.xyz;
     let fog = smoothstep(g.fog.x, g.fog.y, length(to_frag));
-    col = mix(col, sky(normalize(to_frag)), fog);
+    let haze = mix(sky(normalize(to_frag)), g.cave.rgb * 0.5, g.cave.a);
+    col = mix(col, haze, fog * (1.0 - g.cave.a * 0.4));
     return vec4f(col, 1.0);
 }
 
@@ -86,6 +93,11 @@ fn fs_shadow(i: VertOut) -> @location(0) vec4f {
     // Red carries the fade from center to rim, alpha the per-instance strength.
     let fade = smoothstep(0.0, 0.6, i.color.r);
     return vec4f(0.16, 0.12, 0.3, fade * i.color.a * g.fog.w);
+}
+
+@fragment
+fn fs_glow(i: VertOut) -> @location(0) vec4f {
+    return vec4f(i.color.rgb * i.color.a, i.color.a);
 }
 
 struct SkyOut {

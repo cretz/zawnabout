@@ -8,6 +8,7 @@
 //   shot NAME.png       screenshot the page
 //   key-down CODE       real keyboard event, such as Space or KeyW
 //   key-up CODE
+//   click X Y           real mouse click at page pixels
 //   eval JS             evaluate in the page
 //   anything else       a game command, such as `spawn 0 60 0 0 20`
 // Run `pnpm wasm` first so pkg/ is current.
@@ -59,6 +60,7 @@ for (const raw of readFileSync(scriptPath, "utf8").split("\n")) {
     console.log(`shot ${path}`);
   } else if (cmd === "key-down") await page.keyboard.down(rest[0]);
   else if (cmd === "key-up") await page.keyboard.up(rest[0]);
+  else if (cmd === "click") await page.mouse.click(Number(rest[0]), Number(rest[1]));
   else if (cmd === "eval") console.log(await page.evaluate(rest.join(" ")));
   else {
     const out = await page.evaluate((l) => window.zawnabout.cmd(l), line);

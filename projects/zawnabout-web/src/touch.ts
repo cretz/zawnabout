@@ -2,8 +2,9 @@ import type { App } from "../pkg/zawnabout_web.js";
 
 const RADIUS = 60;
 
-/** A floating stick on the left half of the screen and action buttons on the right. */
-export function setupTouch(app: App) {
+/** A floating stick on the left half of the screen and action buttons on the right. A
+ *  quick tap on the stick area calls `onTap` with page coordinates. */
+export function setupTouch(app: App, onTap: (x: number, y: number) => void) {
   const root = document.getElementById("touch")!;
   const zone = document.getElementById("stick-zone")!;
   const base = document.getElementById("stick-base")!;
@@ -12,6 +13,8 @@ export function setupTouch(app: App) {
 
   let stickId: number | null = null;
   let origin = { x: 0, y: 0 };
+  let downAt = 0;
+  let moved = 0;
   const rest = () => {
     base.style.left = "";
     base.style.top = "";
@@ -24,6 +27,8 @@ export function setupTouch(app: App) {
     stickId = e.pointerId;
     zone.setPointerCapture(e.pointerId);
     origin = { x: e.clientX, y: e.clientY };
+    downAt = performance.now();
+    moved = 0;
     base.style.left = `${e.clientX}px`;
     base.style.top = `${e.clientY}px`;
   });
@@ -32,6 +37,7 @@ export function setupTouch(app: App) {
     let dx = e.clientX - origin.x;
     let dy = e.clientY - origin.y;
     const len = Math.hypot(dx, dy);
+    moved = Math.max(moved, len);
     if (len > RADIUS) {
       dx *= RADIUS / len;
       dy *= RADIUS / len;
@@ -44,6 +50,10 @@ export function setupTouch(app: App) {
     if (e.pointerId !== stickId) return;
     stickId = null;
     rest();
+    // A quick tap that never became a drag picks a landing spot.
+    if (e.type === "pointerup" && moved < 12 && performance.now() - downAt < 300) {
+      onTap(e.clientX, e.clientY);
+    }
   };
   zone.addEventListener("pointerup", end);
   zone.addEventListener("pointercancel", end);

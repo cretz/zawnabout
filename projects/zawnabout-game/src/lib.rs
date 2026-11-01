@@ -2,14 +2,17 @@
 //! Platform hosts (native window, headless, browser) drive it.
 
 pub mod camera;
+pub mod feedback;
 pub mod game;
 pub mod gfx;
 pub mod input;
+pub mod map;
 pub mod mesh;
 pub mod models;
 pub mod pose;
 pub mod render;
 pub mod script;
+pub mod terrain_mesh;
 
 pub use game::Game;
 pub use gfx::Gfx;

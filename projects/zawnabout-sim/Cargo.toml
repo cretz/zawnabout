@@ -11,3 +11,6 @@ glam = { workspace = true }
 
 [lints]
 workspace = true
+
+[build-dependencies]
+zawnabout-worldc = { workspace = true }

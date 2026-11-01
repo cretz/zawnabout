@@ -160,6 +160,25 @@ impl InputState {
         }
     }
 
+    /// Whether a key, by its code, is held right now.
+    pub fn held(&self, code: &str) -> bool {
+        self.keys_down.iter().any(|k| k == code)
+    }
+
+    /// Raw axes for free flying, with up as +y: move stick (touch or left pad stick), look
+    /// stick (right pad stick) and rise (flap up, tuck down, or pad A up and B down).
+    pub fn free_axes(&self) -> (Vec2, Vec2, f32) {
+        let pad = |i: usize| self.pad_axes.get(i).copied().unwrap_or(0.0);
+        let button = |i: usize| self.pad_buttons.get(i).copied().unwrap_or(0.0);
+        let dead = |v: Vec2| if v.length() < 0.15 { Vec2::ZERO } else { v };
+        // Pad sticks report up as -1, the touch stick as +1.
+        let stick = self.touch_stick + dead(Vec2::new(pad(0), -pad(1)));
+        let look = dead(Vec2::new(pad(2), -pad(3)));
+        let touch = |a: Action| self.touch_down.contains(&a) as i32 as f32;
+        let rise = touch(Action::Flap) - touch(Action::Tuck) + button(0) - button(1);
+        (stick, look, rise)
+    }
+
     /// Releases everything, such as when the window loses focus.
     pub fn clear(&mut self) {
         self.keys_down.clear();
@@ -268,6 +287,7 @@ impl InputState {
             flap_taps: self.taps,
             tuck: o.tuck.unwrap_or(self.down(Action::Tuck, binds)),
             brake: o.brake.unwrap_or(self.down(Action::Brake, binds)),
+            land_at: None,
         };
         self.taps = 0;
         input

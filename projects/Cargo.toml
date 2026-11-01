@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["zawnabout-sim", "zawnabout-game", "zawnabout-native", "zawnabout-web"]
+members = ["zawnabout-sim", "zawnabout-game", "zawnabout-native", "zawnabout-web", "zawnabout-worldc"]
 
 [workspace.package]
 version = "0.0.0"
@@ -16,6 +16,7 @@ glam = "0.34"
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "webgpu", "dx12", "metal", "vulkan"] }
 zawnabout-game = { path = "zawnabout-game" }
 zawnabout-sim = { path = "zawnabout-sim" }
+zawnabout-worldc = { path = "zawnabout-worldc" }
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"

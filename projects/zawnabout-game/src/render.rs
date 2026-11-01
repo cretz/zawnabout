@@ -46,6 +46,10 @@ pub struct Lighting {
     pub fog_end: f32,
     pub bands: f32,
     pub shadow: f32,
+    /// Light deep in caves, where no sun reaches.
+    pub cave_ambient: Vec3,
+    /// How far underground the camera is, 0 to 1. Turns the far haze dark.
+    pub underground: f32,
 }
 
 /// Everything one frame draws.
@@ -55,7 +59,18 @@ pub struct Frame {
     pub cam_pos: Vec3,
     pub lighting: Lighting,
     pub draws: Vec<(MeshId, Instance)>,
+    /// Terrain chunks, drawn where they are, with bounding spheres for culling.
+    pub terrain: Vec<(MeshId, Vec3, f32)>,
+    /// Static batches farther than this (times their reach) are skipped.
+    pub prop_range: f32,
+    /// Static batches nearer than this use their full mesh, farther ones their far mesh.
+    pub detail_range: f32,
+    /// Deep underground nothing outside can be seen except through openings, where sky
+    /// alone looks right, so all statics (sea, lakes, props, clouds) are skipped.
+    pub deep: bool,
     pub shadows: Vec<Instance>,
+    /// Soft glowing rings, such as landing markers.
+    pub rings: Vec<Instance>,
 }
 
 #[repr(C)]
@@ -71,6 +86,7 @@ struct Globals {
     ambient_sky: [f32; 4],
     ambient_ground: [f32; 4],
     fog: [f32; 4],
+    cave: [f32; 4],
 }
 
 struct GpuMesh {
@@ -82,9 +98,45 @@ struct StaticBatch {
     mesh: MeshId,
     buf: wgpu::Buffer,
     count: u32,
+    cull: Cull,
+}
+
+/// How a static batch is culled and simplified with distance.
+#[derive(Clone, Copy, Debug)]
+pub struct Cull {
+    /// Bounding sphere of every instance.
+    pub center: Vec3,
+    pub radius: f32,
+    /// Drawn out to this many times the frame's prop range.
+    pub reach: f32,
+    /// A cheaper mesh for beyond the frame's detail range times `detail`.
+    pub far: Option<MeshId>,
+    pub detail: f32,
+}
+
+impl Cull {
+    pub const ALWAYS: Cull = Cull {
+        center: Vec3::ZERO,
+        radius: f32::INFINITY,
+        reach: 1.0,
+        far: None,
+        detail: 1.0,
+    };
+}
+
+/// What the last frame drew, for judging cost on slow devices.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Stats {
+    pub draws: u32,
+    pub triangles: u64,
+    pub terrain: u64,
+    /// Instanced static props, clouds included.
+    pub props: u64,
+    pub meshes: u32,
 }
 
 pub struct Renderer {
+    pub stats: Stats,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     /// Always an sRGB format. Render targets are viewed with it.
@@ -97,14 +149,36 @@ pub struct Renderer {
     sky: wgpu::RenderPipeline,
     lit: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
-    meshes: Vec<GpuMesh>,
+    glow: wgpu::RenderPipeline,
+    meshes: Vec<Option<GpuMesh>>,
+    free: Vec<u32>,
     statics: Vec<StaticBatch>,
     dynamic: wgpu::Buffer,
+    identity: wgpu::Buffer,
     shadow_mesh: Option<MeshId>,
+    ring_mesh: Option<MeshId>,
 }
 
 fn vec4(v: Vec3, w: f32) -> [f32; 4] {
     [v.x, v.y, v.z, w]
+}
+
+/// The six clip planes of a view projection, normalized, facing inward.
+fn frustum(m: Mat4) -> [Vec4; 6] {
+    let r = |i: usize| m.row(i);
+    [
+        r(3) + r(0),
+        r(3) - r(0),
+        r(3) + r(1),
+        r(3) - r(1),
+        r(2),
+        r(3) - r(2),
+    ]
+    .map(|p| p / p.truncate().length())
+}
+
+fn in_view(planes: &[Vec4; 6], center: Vec3, radius: f32) -> bool {
+    !radius.is_finite() || planes.iter().all(|p| p.dot(center.extend(1.0)) >= -radius)
 }
 
 impl Renderer {
@@ -183,8 +257,9 @@ impl Renderer {
                 depth_stencil: Some(wgpu::DepthStencilState {
                     format: DEPTH,
                     depth_write_enabled: Some(depth_write),
+                    // Reversed depth: nearer is larger.
                     depth_compare: Some(if depth_test {
-                        wgpu::CompareFunction::LessEqual
+                        wgpu::CompareFunction::GreaterEqual
                     } else {
                         wgpu::CompareFunction::Always
                     }),
@@ -221,9 +296,34 @@ impl Renderer {
             true,
             Some(wgpu::BlendState::ALPHA_BLENDING),
         );
+        // Premultiplied, so rings brighten what is under them without washing it out.
+        let premultiplied = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent::OVER,
+        };
+        // Markers are interface, so they draw over the world.
+        let glow = pipeline(
+            "glow",
+            "vs_lit",
+            "fs_glow",
+            &mesh_buffers,
+            false,
+            false,
+            Some(premultiplied),
+        );
         let dynamic = Self::instance_buffer(&device, 256);
+        let identity = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("identity instance"),
+            contents: bytemuck::bytes_of(&Instance::new(Mat4::IDENTITY)),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
         let (msaa, depth) = Self::targets(&device, format, size);
         let mut r = Self {
+            stats: Stats::default(),
             device,
             queue,
             format,
@@ -235,12 +335,17 @@ impl Renderer {
             sky,
             lit,
             shadow,
+            glow,
             meshes: Vec::new(),
+            free: Vec::new(),
             statics: Vec::new(),
             dynamic,
+            identity,
             shadow_mesh: None,
+            ring_mesh: None,
         };
         r.shadow_mesh = Some(r.add_mesh(&crate::models::shadow_disc()));
+        r.ring_mesh = Some(r.add_mesh(&crate::models::ring()));
         r
     }
 
@@ -298,15 +403,36 @@ impl Renderer {
                 contents: bytemuck::cast_slice(&mesh.verts),
                 usage: wgpu::BufferUsages::VERTEX,
             });
-        self.meshes.push(GpuMesh {
+        let gpu = Some(GpuMesh {
             buf,
             count: mesh.verts.len() as u32,
         });
-        MeshId(self.meshes.len() as u32 - 1)
+        match self.free.pop() {
+            Some(i) => {
+                self.meshes[i as usize] = gpu;
+                MeshId(i)
+            }
+            None => {
+                self.meshes.push(gpu);
+                MeshId(self.meshes.len() as u32 - 1)
+            }
+        }
     }
 
-    /// Adds instances of a mesh that never move.
+    /// Releases a mesh. Its id may be handed out again.
+    pub fn free_mesh(&mut self, id: MeshId) {
+        if self.meshes[id.0 as usize].take().is_some() {
+            self.free.push(id.0);
+        }
+    }
+
+    /// Adds instances of a mesh that never move, always drawn.
     pub fn add_static(&mut self, mesh: MeshId, instances: &[Instance]) {
+        self.add_static_culled(mesh, instances, Cull::ALWAYS);
+    }
+
+    /// Adds instances of a mesh that never move, culled and simplified with distance.
+    pub fn add_static_culled(&mut self, mesh: MeshId, instances: &[Instance], cull: Cull) {
         if instances.is_empty() {
             return;
         }
@@ -321,6 +447,7 @@ impl Renderer {
             mesh,
             buf,
             count: instances.len() as u32,
+            cull,
         });
     }
 
@@ -339,6 +466,7 @@ impl Renderer {
             ambient_sky: vec4(l.ambient_sky, 0.0),
             ambient_ground: vec4(l.ambient_ground, 0.0),
             fog: [l.fog_start, l.fog_end, l.bands, l.shadow],
+            cave: vec4(l.cave_ambient, l.underground),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -349,6 +477,8 @@ impl Renderer {
         let mut instances: Vec<Instance> = draws.iter().map(|(_, i)| *i).collect();
         let shadow_start = instances.len() as u32;
         instances.extend_from_slice(&frame.shadows);
+        let ring_start = instances.len() as u32;
+        instances.extend_from_slice(&frame.rings);
         let needed = (instances.len() * size_of::<Instance>()) as u64;
         if needed > self.dynamic.size() {
             self.dynamic = Self::instance_buffer(&self.device, instances.len().next_power_of_two());
@@ -358,6 +488,10 @@ impl Renderer {
                 .write_buffer(&self.dynamic, 0, bytemuck::cast_slice(&instances));
         }
 
+        let mut stats = Stats {
+            meshes: self.meshes.iter().filter(|m| m.is_some()).count() as u32,
+            ..Default::default()
+        };
         let mut enc = self.device.create_command_encoder(&Default::default());
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -374,7 +508,7 @@ impl Renderer {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: wgpu::LoadOp::Clear(0.0),
                         store: wgpu::StoreOp::Discard,
                     }),
                     stencil_ops: None,
@@ -388,25 +522,56 @@ impl Renderer {
             pass.draw(0..3, 0..1);
 
             pass.set_pipeline(&self.lit);
-            for s in &self.statics {
-                let mesh = &self.meshes[s.mesh.0 as usize];
+            let planes = frustum(frame.view_proj);
+            for s in self.statics.iter().filter(|_| !frame.deep) {
+                let c = &s.cull;
+                let dist = (c.center - frame.cam_pos).length() - c.radius;
+                if dist > frame.prop_range * c.reach || !in_view(&planes, c.center, c.radius) {
+                    continue;
+                }
+                let id = match c.far {
+                    Some(far) if dist > frame.detail_range * c.detail => far,
+                    _ => s.mesh,
+                };
+                let Some(mesh) = &self.meshes[id.0 as usize] else {
+                    continue;
+                };
                 pass.set_vertex_buffer(0, mesh.buf.slice(..));
                 pass.set_vertex_buffer(1, s.buf.slice(..));
                 pass.draw(0..mesh.count, 0..s.count);
+                stats.draws += 1;
+                stats.props += (mesh.count / 3) as u64 * s.count as u64;
+            }
+            for (id, center, radius) in &frame.terrain {
+                if !in_view(&planes, *center, *radius) {
+                    continue;
+                }
+                let Some(mesh) = &self.meshes[id.0 as usize] else {
+                    continue;
+                };
+                pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                pass.set_vertex_buffer(1, self.identity.slice(..));
+                pass.draw(0..mesh.count, 0..1);
+                stats.draws += 1;
+                stats.terrain += (mesh.count / 3) as u64;
             }
             let mut i = 0;
             while i < draws.len() {
                 let id = draws[i].0;
                 let end = i + draws[i..].iter().take_while(|(m, _)| *m == id).count();
-                let mesh = &self.meshes[id.0 as usize];
-                pass.set_vertex_buffer(0, mesh.buf.slice(..));
-                pass.set_vertex_buffer(1, self.dynamic.slice(..));
-                pass.draw(0..mesh.count, i as u32..end as u32);
+                if let Some(mesh) = &self.meshes[id.0 as usize] {
+                    pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                    pass.set_vertex_buffer(1, self.dynamic.slice(..));
+                    pass.draw(0..mesh.count, i as u32..end as u32);
+                    stats.draws += 1;
+                    stats.triangles += (mesh.count / 3) as u64 * (end - i) as u64;
+                }
                 i = end;
             }
 
-            if let (Some(disc), false) = (self.shadow_mesh, frame.shadows.is_empty()) {
-                let mesh = &self.meshes[disc.0 as usize];
+            if let (Some(disc), false) = (self.shadow_mesh, frame.shadows.is_empty())
+                && let Some(mesh) = &self.meshes[disc.0 as usize]
+            {
                 pass.set_pipeline(&self.shadow);
                 pass.set_vertex_buffer(0, mesh.buf.slice(..));
                 pass.set_vertex_buffer(1, self.dynamic.slice(..));
@@ -415,7 +580,20 @@ impl Renderer {
                     shadow_start..shadow_start + frame.shadows.len() as u32,
                 );
             }
+            if let (Some(ring), false) = (self.ring_mesh, frame.rings.is_empty())
+                && let Some(mesh) = &self.meshes[ring.0 as usize]
+            {
+                pass.set_pipeline(&self.glow);
+                pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                pass.set_vertex_buffer(1, self.dynamic.slice(..));
+                pass.draw(
+                    0..mesh.count,
+                    ring_start..ring_start + frame.rings.len() as u32,
+                );
+            }
         }
         self.queue.submit([enc.finish()]);
+        stats.triangles += stats.terrain + stats.props;
+        self.stats = stats;
     }
 }

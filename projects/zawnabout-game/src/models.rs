@@ -3,7 +3,10 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 
 use glam::{Mat4, Quat, Vec3};
-use zawnabout_sim::{PropKind, World};
+use zawnabout_sim::PropKind;
+use zawnabout_sim::shape::spire_tiers;
+use zawnabout_sim::terrain::Terrain;
+use zawnabout_sim::world::spire_tree_offset;
 
 use crate::mesh::{MeshBuilder, Rgb, hash};
 
@@ -20,6 +23,8 @@ pub mod palette {
     pub const CHEEK: Rgb = Rgb(0xFF9EAA);
     pub const GRASS: [Rgb; 4] = [Rgb(0x8FD16A), Rgb(0x82C862), Rgb(0x9DD872), Rgb(0x93CC66)];
     pub const MEADOW: Rgb = Rgb(0xB9E07A);
+    pub const SEA: Rgb = Rgb(0x4A9DD3);
+    pub const LAKE: Rgb = Rgb(0x5DB7DC);
     pub const LEAF: [Rgb; 3] = [Rgb(0x5DB65A), Rgb(0x4FAA52), Rgb(0x79C45E)];
     pub const PINE: [Rgb; 3] = [Rgb(0x3E9A5B), Rgb(0x4BAA66), Rgb(0x358C55)];
     pub const TRUNK: Rgb = Rgb(0x9C6B4E);
@@ -60,6 +65,7 @@ pub struct DragonMeshes {
     pub leg: MeshBuilder,
     pub arm: [MeshBuilder; 2],
     pub hand: [MeshBuilder; 2],
+    pub star: MeshBuilder,
 }
 
 fn spike(m: &mut MeshBuilder, y: f32, z: f32, size: f32) {
@@ -211,6 +217,14 @@ pub fn dragon() -> DragonMeshes {
         }
     }
 
+    let mut star = MeshBuilder::new();
+    for i in 0..5 {
+        let a = |k: f32| (i as f32 + k) / 5.0 * TAU;
+        let point = |k: f32, r: f32| Vec3::new(a(k).sin() * r, a(k).cos() * r, 0.0);
+        star.thin_tri(Vec3::ZERO, point(0.0, 1.0), point(0.5, 0.45), POLLEN);
+        star.thin_tri(Vec3::ZERO, point(-0.5, 0.45), point(0.0, 1.0), POLLEN);
+    }
+
     DragonMeshes {
         body,
         neck,
@@ -220,6 +234,7 @@ pub fn dragon() -> DragonMeshes {
         leg,
         arm: [arm.clone(), arm.mirrored_x()],
         hand: [hand.clone(), hand.mirrored_x()],
+        star,
     }
 }
 
@@ -271,6 +286,48 @@ pub fn prop_variants(kind: PropKind) -> Vec<MeshBuilder> {
     }
 }
 
+/// A far, cheap stand-in for a prop with the same size and color, or none to always use
+/// the full mesh.
+pub fn prop_far(kind: PropKind, v: u32) -> Option<MeshBuilder> {
+    let mut m = MeshBuilder::new();
+    match kind {
+        PropKind::RoundTree => {
+            // Far away the trunk is hidden by the canopy anyway.
+            octahedron(
+                &mut m,
+                Vec3::new(0.3, 4.3, 0.15),
+                Vec3::new(2.8, 2.6, 2.8),
+                LEAF[v as usize],
+            );
+        }
+        PropKind::Cloud => {
+            let puffs = 3 + v;
+            for i in 0..puffs {
+                let t = i as f32 / (puffs - 1) as f32;
+                let r = 8.0 + (1.0 - (t - 0.5).abs() * 2.0) * 5.0;
+                let c = Vec3::new((t - 0.5) * 22.0, r * 0.3, 0.0);
+                octahedron(&mut m, c, Vec3::new(r, r * 0.7, r * 0.85), CLOUD);
+            }
+        }
+        PropKind::PineTree => {
+            let c = PINE[v as usize];
+            let top = 1.6 + (2 + v) as f32 * 1.7 + 2.6;
+            m.frustum(5, 1.0, 2.3, top, 0.0, c, c);
+        }
+        _ => return None,
+    }
+    Some(m)
+}
+
+/// Eight faces around a center, stretched by `r`.
+fn octahedron(m: &mut MeshBuilder, c: Vec3, r: Vec3, color: Rgb) {
+    let (x, y, z) = (Vec3::X * r.x, Vec3::Y * r.y, Vec3::Z * r.z);
+    for (a, b) in [(x, z), (z, -x), (-x, -z), (-z, x)] {
+        m.tri(c + y, c + b, c + a, color);
+        m.tri(c - y, c + a, c + b, color.mix(Rgb(0x000000), 0.08));
+    }
+}
+
 fn round_tree(v: u32) -> MeshBuilder {
     let mut m = MeshBuilder::new();
     m.frustum(5, 0.0, 0.4, 3.2, 0.28, TRUNK, TRUNK);
@@ -317,36 +374,24 @@ fn pine_tree(v: u32) -> MeshBuilder {
 
 fn spire(v: u32) -> MeshBuilder {
     let mut m = MeshBuilder::new();
-    let tiers = 6 + v as usize;
-    let mut y = 0.0;
-    let mut r = 8.0 + v as f32;
-    let mut off = Vec3::ZERO;
-    for i in 0..tiers {
-        let h = 5.0 + hash(v * 31 + i as u32) * 4.0;
-        let r1 = r * (0.86 + hash(v * 17 + i as u32) * 0.08);
-        let mut tier = MeshBuilder::new();
+    let tiers = spire_tiers(v);
+    let (cap, body) = tiers.split_last().expect("spire has tiers");
+    for (i, t) in body.iter().enumerate() {
         let c = SAND[(i + v as usize) % 3];
-        tier.frustum(6, 0.0, r, h, r1, c, c);
-        let spin = hash(v * 5 + i as u32) * TAU;
+        let mut tier = MeshBuilder::new();
+        tier.frustum(6, 0.0, t.r0, t.height, t.r1, c, c);
         m.append(
             &tier,
-            Mat4::from_translation(off + Vec3::Y * y) * Mat4::from_rotation_y(spin),
+            Mat4::from_translation(t.base) * Mat4::from_rotation_y(t.spin),
         );
-        y += h;
-        r = r1;
-        off += Vec3::new(
-            hash(i as u32 * 3 + v) - 0.5,
-            0.0,
-            hash(i as u32 * 7 + v) - 0.5,
-        ) * 1.2;
     }
-    let top = off + Vec3::Y * y;
-    let mut cap = MeshBuilder::new();
-    cap.frustum(6, -0.2, r * 1.04, 0.5, r * 0.9, GRASS[0], GRASS[2]);
-    m.append(&cap, Mat4::from_translation(top));
+    let mut top = MeshBuilder::new();
+    top.frustum(6, 0.0, cap.r0, cap.height, cap.r1, GRASS[0], GRASS[2]);
+    m.append(&top, Mat4::from_translation(cap.base));
+    let center = Vec3::new(cap.base.x, cap.top(), cap.base.z);
     m.append(
         &round_tree(v % 3),
-        Mat4::from_translation(top + Vec3::new(r * 0.3, 0.3, 0.0)),
+        Mat4::from_translation(center + spire_tree_offset(cap.r1)),
     );
     m
 }
@@ -396,36 +441,114 @@ fn cloud(v: u32) -> MeshBuilder {
     m
 }
 
-/// The ground as one flat-shaded grid that follows the world height, plus a low skirt
-/// out to the fog.
-pub fn ground(world: &World) -> MeshBuilder {
+/// The sea: flat strips only where the seabed is under water, so it never shows up inside
+/// caves below sea level, plus a wide frame out past the horizon.
+pub fn sea(terrain: &Terrain) -> MeshBuilder {
     let mut m = MeshBuilder::new();
-    let extent = world.half_size + 300.0;
-    let cells = 240;
-    let step = extent * 2.0 / cells as f32;
-    let at = |i: u32, j: u32| {
-        let (x, z) = (-extent + i as f32 * step, -extent + j as f32 * step);
-        Vec3::new(x, world.ground_height(x, z), z)
-    };
-    for j in 0..cells {
-        for i in 0..cells {
-            let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
-            let h = hash(i * 7919 + j * 104_729);
-            let base = GRASS[0].mix(GRASS[(h * 4.0) as usize % 4], 0.55);
-            let center = (a + c) * 0.5;
-            let meadow = ((center.x * 0.004).sin() * (center.z * 0.005).cos()).max(0.0);
-            let col = base.mix(MEADOW, meadow * 0.6);
-            let h2 = hash(i * 31 + j * 977 + 5);
-            m.tri(a, d, c, col);
-            m.tri(a, c, b, col.mix(GRASS[(h2 * 4.0) as usize % 4], 0.3));
+    let level = terrain.def.sea_level;
+    let b = terrain.def.bounds;
+    let (x0, z0, x1, z1) = (b[0] - 1000.0, b[1] - 1000.0, b[2] + 1000.0, b[3] + 1000.0);
+    let cell = 40.0;
+    let p = |x: f32, z: f32| Vec3::new(x, level, z);
+    let (nx, nz) = (((x1 - x0) / cell) as usize, ((z1 - z0) / cell) as usize);
+    for j in 0..nz {
+        let (za, zb) = (z0 + j as f32 * cell, z0 + (j + 1) as f32 * cell);
+        let mut run: Option<usize> = None;
+        for i in 0..=nx {
+            // A cell is sea if any corner is, so coasts are covered and land hides the rest.
+            let wet = i < nx && {
+                let xa = x0 + i as f32 * cell;
+                [(xa, za), (xa + cell, za), (xa, zb), (xa + cell, zb)]
+                    .iter()
+                    .any(|(x, z)| terrain.height(*x, *z) < level + 1.0)
+            };
+            match (wet, run) {
+                (true, None) => run = Some(i),
+                (false, Some(start)) => {
+                    let (xa, xb) = (x0 + start as f32 * cell, x0 + i as f32 * cell);
+                    m.quad(p(xa, za), p(xa, zb), p(xb, zb), p(xb, za), SEA);
+                    run = None;
+                }
+                _ => {}
+            }
         }
     }
-    let (inner, outer, y) = (extent, extent * 4.0, -6.0);
-    let corners = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
-    for k in 0..4 {
-        let (a, b) = (corners[k], corners[(k + 1) % 4]);
-        let p = |c: (f32, f32), r: f32| Vec3::new(c.0 * r, y, c.1 * r);
-        m.quad(p(a, inner), p(a, outer), p(b, outer), p(b, inner), GRASS[1]);
+    let r = 40_000.0;
+    m.quad(p(-r, -r), p(-r, z0), p(r, z0), p(r, -r), SEA);
+    m.quad(p(-r, z1), p(-r, r), p(r, r), p(r, z1), SEA);
+    m.quad(p(-r, z0), p(-r, z1), p(x0, z1), p(x0, z0), SEA);
+    m.quad(p(x1, z0), p(x1, z1), p(r, z1), p(r, z0), SEA);
+    m
+}
+
+/// Lake water as flat cells at each lake's level. Cells reach past the shore and the
+/// ground hides the ragged edge.
+pub fn lakes(terrain: &Terrain) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let cell = 6.0;
+    for lake in terrain.def.lakes {
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for p in lake.pts {
+            lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+            hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+        }
+        let y = lake.level - 0.05;
+        let mut z = lo[1] - 20.0;
+        while z < hi[1] + 20.0 {
+            let mut x = lo[0] - 20.0;
+            while x < hi[0] + 20.0 {
+                let (cx, cz) = (x + cell * 0.5, z + cell * 0.5);
+                let ground = terrain.height(cx, cz);
+                if terrain.water(cx, cz, ground - cell) == Some(lake.level) {
+                    let p = |x: f32, z: f32| Vec3::new(x, y, z);
+                    m.quad(
+                        p(x, z),
+                        p(x, z + cell),
+                        p(x + cell, z + cell),
+                        p(x + cell, z),
+                        LAKE,
+                    );
+                }
+                x += cell;
+            }
+            z += cell;
+        }
+    }
+    m
+}
+
+/// A unit ring in the XZ plane for landing markers. Alpha fades to both edges.
+pub fn ring() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let sides = 40;
+    let radii = [0.78, 1.0, 1.22];
+    let at = |i: u32, r: f32| {
+        let a = i as f32 / sides as f32 * TAU;
+        Vec3::new(a.cos() * r, 0.0, a.sin() * r)
+    };
+    for i in 0..sides {
+        for band in 0..2 {
+            let (r0, r1) = (radii[band], radii[band + 1]);
+            m.quad(
+                at(i, r0),
+                at(i, r1),
+                at(i + 1, r1),
+                at(i + 1, r0),
+                Rgb(0xFFFFFF),
+            );
+            let n = m.verts.len();
+            // Quad corners in order: r0, r1, r1, then r0, r1, r0 per triangle pair.
+            for (v, on_mid) in m.verts[n - 6..].iter_mut().zip([
+                band == 1,
+                band == 0,
+                band == 0,
+                band == 1,
+                band == 0,
+                band == 1,
+            ]) {
+                v.color[3] = if on_mid { 255 } else { 0 };
+            }
+        }
     }
     m
 }

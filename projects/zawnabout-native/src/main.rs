@@ -2,8 +2,10 @@
 //! screenshots without a window.
 //!
 //! zawnabout [--headless] [--script FILE] [--out DIR] [--size WxH] [--seed N] [--debug]
+//! zawnabout --map FILE [--size WxH]
 //!
 //! `--debug` reads commands from stdin while windowed. F12 saves a screenshot to `--out`.
+//! `--map` writes a top-down shaded map of the world, `--size` width wide, and exits.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -27,6 +29,7 @@ struct Args {
     out: PathBuf,
     size: (u32, u32),
     seed: u64,
+    map: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
@@ -37,6 +40,7 @@ fn parse_args() -> Args {
         out: PathBuf::from("."),
         size: (1280, 720),
         seed: 1,
+        map: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -52,6 +56,7 @@ fn parse_args() -> Args {
                 a.size = (w.parse().expect("width"), h.parse().expect("height"));
             }
             "--seed" => a.seed = val().parse().expect("seed"),
+            "--map" => a.map = Some(val().into()),
             _ => panic!("unknown argument {arg}"),
         }
     }
@@ -60,7 +65,15 @@ fn parse_args() -> Args {
 
 fn main() {
     let args = parse_args();
-    if args.headless {
+    if let Some(path) = &args.map {
+        let size = args.size.0;
+        let rgba = zawnabout_game::map::render(
+            &zawnabout_game::sim::terrain::Terrain::default(),
+            size,
+            true,
+        );
+        save_png(path, &rgba, (size, size));
+    } else if args.headless {
         headless(args);
     } else {
         let event_loop = EventLoop::new().expect("event loop");
@@ -135,6 +148,15 @@ fn host_command(
             std::fs::write(&path, csv).expect("write trace");
             println!("trace {}", path.display());
         }
+        "stats" => {
+            // Renders once so the numbers match the current view.
+            let _ = gfx.capture(game);
+            let s = gfx.renderer.stats;
+            println!(
+                "stats draws={} triangles={} terrain={} props={} meshes={}",
+                s.draws, s.triangles, s.terrain, s.props, s.meshes
+            );
+        }
         "quit" => return false,
         _ => {}
     }
@@ -169,6 +191,10 @@ fn headless(args: Args) {
         }
         game.advance(FRAME);
     }
+    if script.failures > 0 {
+        println!("{} playbook failure(s)", script.failures);
+        std::process::exit(1);
+    }
 }
 
 struct Window_ {
@@ -186,6 +212,7 @@ struct App {
     last: Instant,
     script: Option<Script>,
     stdin: Option<mpsc::Receiver<String>>,
+    cursor: (f64, f64),
     shots: u32,
     title_at: f32,
 }
@@ -215,6 +242,7 @@ impl App {
             last: Instant::now(),
             script,
             stdin,
+            cursor: (0.0, 0.0),
             shots: 0,
             title_at: 0.0,
         }
@@ -400,6 +428,21 @@ impl ApplicationHandler for App {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(s) => self.resize(s.width, s.height),
             WindowEvent::Focused(false) => self.game.input.clear(),
+            WindowEvent::CursorMoved { position, .. } => self.cursor = (position.x, position.y),
+            WindowEvent::MouseInput {
+                state: winit::event::ElementState::Pressed,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                if let Some(win) = &self.win {
+                    let (w, h) = (win.config.width as f64, win.config.height as f64);
+                    self.game.tap(
+                        (self.cursor.0 / w) as f32,
+                        (self.cursor.1 / h) as f32,
+                        (w / h) as f32,
+                    );
+                }
+            }
             WindowEvent::KeyboardInput { event, .. } => {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
