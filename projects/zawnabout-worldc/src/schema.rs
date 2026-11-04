@@ -146,6 +146,7 @@ pub fn spec(name: &str) -> Option<Spec> {
             Pts::D2(&["sharp"]),
         ),
         "pillar" => s(&[XZ[0], XZ[1], ("r", 'n', true)], &[], Pts::None),
+        "spout" => s(&[XZ[0], XZ[1], ("w", 'n', true)], &[], Pts::None),
         "valley" => s(
             &[("w", 'n', true), ("depth", 'n', true)],
             &[],
@@ -175,7 +176,9 @@ pub fn spec(name: &str) -> Option<Spec> {
                 ("glow", 'n', false),
                 ("decor", 's', false),
             ],
-            &["pillar", "city", "lake", "beacon", "perch", "site", "ruin"],
+            &[
+                "pillar", "city", "lake", "beacon", "perch", "site", "ruin", "spout",
+            ],
             Pts::None,
         ),
         "passage" => s(
@@ -247,7 +250,11 @@ pub fn spec(name: &str) -> Option<Spec> {
         ),
         "road" => s(&[("w", 'n', true)], &[], Pts::Any(&["sharp"])),
         "runway" => s(&[("w", 'n', true)], &[], Pts::D2(&[])),
-        "railway" => s(&[], &["station"], Pts::Any(&["sharp"])),
+        "railway" => s(
+            &[("subway", 'b', false)],
+            &["station"],
+            Pts::Any(&["sharp"]),
+        ),
         "station" => s(XZ.as_slice(), &[], Pts::None),
         "route" => s(&[("kind", 's', true)], &[], Pts::Any(&["sharp"])),
         "beacon" | "perch" => s(MARK, &[], Pts::None),

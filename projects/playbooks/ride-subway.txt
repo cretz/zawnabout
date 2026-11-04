@@ -1,0 +1,19 @@
+# Ride the Moonharbor subway a full lap: board the lead car and stay aboard through the
+# tunnels and all four station stops.
+ride metro
+wait 0.5
+expect riding metro
+wait 62
+expect riding metro
+wait 62
+expect riding metro
+wait 62
+expect riding metro
+wait 62
+expect riding metro
+wait 62
+expect riding metro
+wait 62
+expect riding metro
+expect ground
+shot ride-subway.png

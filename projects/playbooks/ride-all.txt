@@ -1,0 +1,156 @@
+# Ride every kind of vehicle for five minutes each: stay aboard the whole way, with a shot
+# partway for checking how the rider sits.
+ride ferry
+wait 0.5
+expect riding ferry
+wait 60
+expect riding ferry
+wait 60
+expect riding ferry
+shot ride-all-ferry.png
+wait 60
+expect riding ferry
+wait 60
+expect riding ferry
+wait 60
+expect riding ferry
+ride sailboat
+wait 0.5
+expect riding sailboat
+wait 60
+expect riding sailboat
+wait 60
+expect riding sailboat
+shot ride-all-sailboat.png
+wait 60
+expect riding sailboat
+wait 60
+expect riding sailboat
+wait 60
+expect riding sailboat
+ride seaplane
+wait 0.5
+expect riding seaplane
+wait 60
+expect riding seaplane
+wait 60
+expect riding seaplane
+shot ride-all-seaplane.png
+wait 60
+expect riding seaplane
+wait 60
+expect riding seaplane
+wait 60
+expect riding seaplane
+ride airliner
+wait 0.5
+expect riding airliner
+wait 60
+expect riding airliner
+wait 60
+expect riding airliner
+shot ride-all-airliner.png
+wait 60
+expect riding airliner
+wait 60
+expect riding airliner
+wait 60
+expect riding airliner
+ride balloon
+wait 0.5
+expect riding balloon
+wait 60
+expect riding balloon
+wait 60
+expect riding balloon
+shot ride-all-balloon.png
+wait 60
+expect riding balloon
+wait 60
+expect riding balloon
+wait 60
+expect riding balloon
+ride liftchair
+wait 0.5
+expect riding liftchair
+wait 60
+expect riding liftchair
+wait 60
+expect riding liftchair
+shot ride-all-liftchair.png
+wait 60
+expect riding liftchair
+wait 60
+expect riding liftchair
+wait 60
+expect riding liftchair
+ride liftcabin
+wait 0.5
+expect riding liftcabin
+wait 60
+expect riding liftcabin
+wait 60
+expect riding liftcabin
+shot ride-all-liftcabin.png
+wait 60
+expect riding liftcabin
+wait 60
+expect riding liftcabin
+wait 60
+expect riding liftcabin
+ride car
+wait 0.5
+expect riding car
+wait 60
+expect riding car
+wait 60
+expect riding car
+shot ride-all-car.png
+wait 60
+expect riding car
+wait 60
+expect riding car
+wait 60
+expect riding car
+ride car.40
+wait 0.5
+expect riding car.40
+wait 60
+expect riding car.40
+wait 60
+expect riding car.40
+shot ride-all-car.40.png
+wait 60
+expect riding car.40
+wait 60
+expect riding car.40
+wait 60
+expect riding car.40
+ride sailboat.1
+wait 0.5
+expect riding sailboat.1
+wait 60
+expect riding sailboat.1
+wait 60
+expect riding sailboat.1
+shot ride-all-sailboat.1.png
+wait 60
+expect riding sailboat.1
+wait 60
+expect riding sailboat.1
+wait 60
+expect riding sailboat.1
+ride balloon.2
+wait 0.5
+expect riding balloon.2
+wait 60
+expect riding balloon.2
+wait 60
+expect riding balloon.2
+shot ride-all-balloon.2.png
+wait 60
+expect riding balloon.2
+wait 60
+expect riding balloon.2
+wait 60
+expect riding balloon.2

@@ -1,6 +1,6 @@
 # Tap a car driving by: land on its roof and ride along.
-land-on 17
-wait-until riding 17 30
+land-on car.0
+wait-until riding car.0 30
 wait 4
-expect riding 17
+expect riding car.0
 shot land-car.png

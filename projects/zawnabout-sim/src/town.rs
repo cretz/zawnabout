@@ -48,6 +48,9 @@ pub enum Kind {
     Sailboat,
     Houseboat,
     Ferry,
+    /// A huge cruise ship on its long route round the islands: decks to land on, funnels,
+    /// a pool and rows of lit cabins.
+    Cruise,
     Seaplane,
     Airliner,
     Canoe,
@@ -115,7 +118,35 @@ pub enum Kind {
     Grocery,
     Park,
     Station,
+    /// A subway station in its hall underground, beside the track.
+    Metro,
+    /// A subway entrance in the street: a railed opening over the stair shaft.
+    MetroGate,
+    /// A market square: stalls under striped awnings, piled with produce.
+    Market,
+    Observatory,
+    /// A fire lookout tower in the woods.
+    Lookout,
+    SurfShack,
+    /// A rope bridge between two heights: its length and rise are in its text.
+    RopeBridge,
+    Hospital,
+    FireStation,
+    School,
+    TownHall,
+    Farm,
+    /// A container port on a quay, with gantry cranes.
+    Port,
+    /// An office block straddling a road: two glass towers either side, joined high up,
+    /// the road running through the opening under it.
+    SpanTower,
+    /// One tower of a suspension bridge: two legs either side of the deck, x across it,
+    /// joined by beams.
+    BridgeTower,
 }
+
+/// A bridge tower leg's width across the deck and depth along it.
+pub const TOWER_LEG: Vec2 = Vec2::new(3.2, 4.4);
 
 /// Height of a lighthouse's lamp room over its tower. Its flat cap is a perch.
 pub const LAMP_ROOM: f32 = 3.4;
@@ -242,6 +273,15 @@ impl Building {
                     .collect()
             }
             Kind::Crane => vec![round(self.pos, s.y, 1.2, 1.2)],
+            Kind::BridgeTower => {
+                let leg = TOWER_LEG;
+                let spread = (s.x - leg.x) * 0.5;
+                vec![
+                    self.block(self.at(-spread, 0.0, 0.0), leg.x, s.y, leg.y, 0.0),
+                    self.block(self.at(spread, 0.0, 0.0), leg.x, s.y, leg.y, 0.0),
+                    self.block(self.at(0.0, s.y - 3.0, 0.0), s.x, 3.0, 3.0, 0.0),
+                ]
+            }
             // Only the roof is solid, so chairs and their riders pass through underneath.
             Kind::LiftStation => {
                 vec![self.block(self.at(0.0, s.y - 0.4, 0.0), s.x, 0.4, s.z, self.roof)]

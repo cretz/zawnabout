@@ -45,6 +45,7 @@ pub struct Gfx {
     glowers: Vec<Light>,
     life: crate::life::Life,
     cave_life: crate::cave_life::CaveLife,
+    park_life: crate::park_life::ParkLife,
     sea_life: crate::sea_life::SeaLife,
     wildlife: crate::wildlife::Wildlife,
     /// Dark plugs a little way into every cave mouth, so from outside a mouth looks like
@@ -232,7 +233,7 @@ impl Gfx {
         // Trees and flowers out in the open bake into their town tile's meshes: one draw
         // for everything on a tile, however much grows there.
         let (mut cave_tiles, open): (Vec<_>, Vec<_>) =
-            crate::town_mesh::build(&world.terrain, &world.buildings)
+            crate::town_mesh::build(&world.terrain, &world.buildings, &world.bridges)
                 .into_iter()
                 .partition(|(_, t)| t.cave);
         let mut tiles: HashMap<(i32, i32), crate::town_mesh::Tile> = open.into_iter().collect();
@@ -499,6 +500,44 @@ impl Gfx {
             );
         }
 
+        // Suspension bridges: thick main cables over the towers, hangers down to the deck.
+        for b in &world.bridges {
+            let mut mesh = crate::mesh::MeshBuilder::new();
+            let col = crate::town_mesh::BRIDGE_PAINT;
+            let strand = |m: &mut crate::mesh::MeshBuilder, a: Vec3, b: Vec3, r: f32| {
+                let along = (b - a).normalize_or(Vec3::X);
+                let across = along.cross(Vec3::Y).normalize_or(Vec3::Z) * r;
+                let up = along.cross(across).normalize_or(Vec3::Y) * r;
+                m.quad(a - across, b - across, b + across, a + across, col);
+                m.quad(a + across, b + across, b - across, a - across, col);
+                m.quad(a - up, b - up, b + up, a + up, col);
+                m.quad(a + up, b + up, b - up, a - up, col);
+            };
+            for line in &b.cables {
+                for w in line.windows(2) {
+                    strand(&mut mesh, w[0], w[1], 0.55);
+                }
+            }
+            for &(top, foot) in &b.hangers {
+                strand(&mut mesh, top, foot, 0.09);
+            }
+            let (center, radius) = bounds(&mesh);
+            let id = renderer.add_mesh(&mesh);
+            renderer.add_static_culled(
+                id,
+                &[Instance::new(Mat4::IDENTITY)],
+                Cull {
+                    center,
+                    radius,
+                    reach: 3.0,
+                    far: None,
+                    detail: 1.0,
+                    cave: false,
+                    group: None,
+                },
+            );
+        }
+
         // Lift cables: thin and dark, sagging nowhere, following each lift's line.
         for line in world.traffic.cables() {
             let mut cable = crate::mesh::MeshBuilder::new();
@@ -534,6 +573,7 @@ impl Gfx {
         let tuft = renderer.add_mesh(&models::tuft());
         let life = crate::life::Life::new(&mut renderer, world);
         let cave_life = crate::cave_life::CaveLife::new(&mut renderer, world);
+        let park_life = crate::park_life::ParkLife::new(&mut renderer, world);
         let sea_life = crate::sea_life::SeaLife::new(&mut renderer, world);
         let wildlife = crate::wildlife::Wildlife::new(&mut renderer, world);
         let (plugs, mouths) = mouth_plugs(&world.terrain);
@@ -638,6 +678,7 @@ impl Gfx {
             tuft,
             life,
             cave_life,
+            park_life,
             sea_life,
             wildlife,
             plugs,
@@ -741,9 +782,10 @@ impl Gfx {
             .iter()
             .any(|m| m.distance(game.camera.pos) < 450.0);
         let outside = lighting.underground < 0.5 || peek;
-        self.vehicles(game, &mut draws);
+        use crate::prof::time;
+        time("vehicles", || self.vehicles(game, &mut draws));
         if outside {
-            self.grass(game, &mut draws);
+            time("grass", || self.grass(game, &mut draws));
         }
         // Spray boils up at the foot of every falls nearby.
         for (k, (foot, w)) in self.falls.iter().enumerate() {
@@ -805,20 +847,30 @@ impl Gfx {
         }
 
         let caves = lighting.underground > 0.05 || world.terrain.near_voids(game.camera.pos, 150.0);
-        let (mut fx, lights) = self.effects(game, caves, t);
+        let (mut fx, lights) = time("effects", || self.effects(game, caves, t));
         if outside {
-            self.life
-                .draw(world, game.camera.pos, t, night, &mut draws, &mut fx);
-            self.sea_life.draw(game.camera.pos, t, &mut draws);
-            self.wildlife.draw(
-                world,
-                game.camera.pos,
-                t,
-                night,
-                self.pool,
-                &mut draws,
-                &mut fx,
-            );
+            time("life", || {
+                self.life
+                    .draw(world, game.camera.pos, t, night, &mut draws, &mut fx)
+            });
+            time("park_life", || {
+                self.park_life
+                    .draw(game.camera.pos, t, night, &mut draws, &mut fx)
+            });
+            time("sea_life", || {
+                self.sea_life.draw(game.camera.pos, t, &mut draws)
+            });
+            time("wildlife", || {
+                self.wildlife.draw(
+                    world,
+                    game.camera.pos,
+                    t,
+                    night,
+                    self.pool,
+                    &mut draws,
+                    &mut fx,
+                )
+            });
         }
         if caves {
             self.cave_life.draw(
@@ -898,7 +950,10 @@ impl Gfx {
                     }
                     let y = terrain.height(x, z);
                     let at = Vec3::new(x, y, z);
-                    if terrain.water(x, z, y).is_some() || terrain.road_spot(x, z, 1.5).is_some() {
+                    if terrain.water(x, z, y).is_some()
+                        || terrain.road_spot(x, z, 1.5).is_some()
+                        || terrain.on_pad(x, z)
+                    {
                         continue;
                     }
                     let Some(color) = crate::terrain_mesh::lawn(terrain, at, terrain.normal(x, z))
@@ -1089,9 +1144,44 @@ impl Gfx {
     }
 
     pub fn render(&mut self, game: &Game, target: &wgpu::TextureView) {
-        self.update_terrain(game, self.chunk_budget);
-        let frame = self.frame(game);
-        self.renderer.render(target, &frame);
+        use crate::prof::time;
+        time("terrain", || self.update_terrain(game, self.chunk_budget));
+        let frame = time("frame", || self.frame(game));
+        time("encode", || self.renderer.render(target, &frame));
+    }
+
+    /// Plays `frames` frames of the game, rendering each offscreen, and reports the CPU
+    /// time each part of a frame took on average. Native only.
+    pub fn profile(&mut self, game: &mut Game, frames: u32) -> String {
+        let (w, h) = self.renderer.size();
+        let tex = self
+            .renderer
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("profile"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.renderer.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+        let view = tex.create_view(&Default::default());
+        crate::prof::report();
+        for _ in 0..frames {
+            crate::prof::time("sim", || game.advance(1.0 / 60.0));
+            self.render(game, &view);
+            self.renderer
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll device");
+        }
+        crate::prof::report()
     }
 
     /// Renders one frame offscreen and reads it back as tightly packed RGBA8. Blocks,
@@ -1196,6 +1286,7 @@ fn cave_tint(terrain: &zawnabout_sim::terrain::Terrain, p: Vec3) -> Vec3 {
             Decor::Shroom => linear(Rgb(0xD2B2EC), 0.95),
             Decor::Ember => linear(Rgb(0xF2BC94), 0.95),
             Decor::Ruins => linear(Rgb(0xDCCCAE), 0.95),
+            Decor::Tiled => linear(Rgb(0xFFF0D8), 1.0),
             Decor::Mixed | Decor::Bare => base,
         };
         sum += c * w;

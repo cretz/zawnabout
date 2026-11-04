@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::f32::consts::TAU;
 
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
+use zawnabout_sim::bridge::Suspension;
 use zawnabout_sim::shape::hash;
 use zawnabout_sim::terrain::{CoverKind, Style, Tech, Terrain};
 use zawnabout_sim::town::{Building, Kind};
@@ -843,6 +844,78 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
                 );
             }
         }
+        Kind::Train if b.seed >= zawnabout_sim::traffic::METRO_CAB as u32 => {
+            // A metro car on the rails at the origin, x along the track: brushed steel with
+            // a blue band, wide windows lit inside, doors down both sides, and a sloped cab
+            // at the leading or trailing end.
+            use zawnabout_sim::traffic::{METRO_CAB, METRO_TAIL};
+            let (steel, band, door) = (Rgb(0xD9DDE2), Rgb(0x3E7FC4), Rgb(0x8E959E));
+            for p in [&mut n, &mut f] {
+                p.cube(
+                    Vec3::new(0.0, h * 0.5, 0.0),
+                    Vec3::new(w * 0.5, h * 0.36, d * 0.5),
+                    steel,
+                );
+            }
+            n.cube(
+                Vec3::new(0.0, h * 0.09, 0.0),
+                Vec3::new(w * 0.44, h * 0.08, d * 0.4),
+                Rgb(0x3A3A40),
+            );
+            n.cube(
+                Vec3::new(0.0, h * 0.25, 0.0),
+                Vec3::new(w * 0.5 + 0.02, h * 0.035, d * 0.5 + 0.02),
+                band,
+            );
+            n.cube(
+                Vec3::new(0.0, h * 0.87, 0.0),
+                Vec3::new(w * 0.46, h * 0.03, d * 0.4),
+                Rgb(0xB8BEC6),
+            );
+            // Lit inside, always: they never leave the tunnels.
+            let from = n.m.verts.len();
+            for k in [-1.0f32, 0.0, 1.0] {
+                n.cube(
+                    Vec3::new(k * w * 0.3, h * 0.6, 0.0),
+                    Vec3::new(w * 0.11, h * 0.13, d * 0.5 + 0.02),
+                    Rgb(0xC9BC98),
+                );
+            }
+            n.m.glow_from(from);
+            for k in [-1.0f32, 1.0] {
+                n.cube(
+                    Vec3::new(k * w * 0.15, h * 0.48, 0.0),
+                    Vec3::new(w * 0.035, h * 0.3, d * 0.5 + 0.03),
+                    door,
+                );
+            }
+            let cab = match b.seed as u8 {
+                METRO_CAB => Some(1.0f32),
+                METRO_TAIL => Some(-1.0),
+                _ => None,
+            };
+            if let Some(end) = cab {
+                let from = n.m.verts.len();
+                n.cube(
+                    Vec3::new(end * (w * 0.5 + 0.02), h * 0.62, 0.0),
+                    Vec3::new(0.04, h * 0.14, d * 0.4),
+                    DARK_GLASS,
+                );
+                n.night_from(from);
+                n.cube(
+                    Vec3::new(end * (w * 0.5 + 0.03), h * 0.3, 0.0),
+                    Vec3::new(0.04, h * 0.05, d * 0.42),
+                    band,
+                );
+                for z in [-1.0f32, 1.0] {
+                    n.cube(
+                        Vec3::new(end * (w * 0.5 + 0.03), h * 0.2, z * d * 0.32),
+                        Vec3::new(0.04, 0.12, 0.2),
+                        Rgb(0xFFF2C0),
+                    );
+                }
+            }
+        }
         Kind::Train => {
             // An engine (seed 0) or a carriage, on the rails at the origin, x along the track.
             let body = if b.seed == 0 {
@@ -1246,6 +1319,39 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
                 false,
             );
         }
+        Kind::Cruise => cruise(&mut n, &mut f),
+        Kind::BridgeTower => {
+            // Two tapering legs, x across the deck, joined by three portal beams, with red
+            // lights on top for the planes.
+            let paint = BRIDGE_PAINT;
+            let leg = zawnabout_sim::town::TOWER_LEG;
+            let spread = (w - leg.x) * 0.5;
+            for p in [&mut n, &mut f] {
+                for x in [-spread, spread] {
+                    let mut l = Parts::new();
+                    l.m.loft(
+                        -leg.y * 0.5,
+                        (leg.x * 0.5, h * 0.5, h * 0.5),
+                        leg.y * 0.5,
+                        (leg.x * 0.5, h * 0.5, h * 0.5),
+                        [paint; 4],
+                    );
+                    p.m.append(&l.m, Mat4::from_translation(Vec3::new(x, 0.0, 0.0)));
+                }
+                for y in [h * 0.55, h * 0.78, h - 1.5] {
+                    p.cube(
+                        Vec3::new(0.0, y, 0.0),
+                        Vec3::new(spread, 1.5, leg.y * 0.35),
+                        paint,
+                    );
+                }
+            }
+            let from = n.m.verts.len();
+            for x in [-spread, spread] {
+                n.cube(Vec3::new(x, h + 0.4, 0.0), Vec3::splat(0.4), Rgb(0xFF5040));
+            }
+            n.m.glow_from(from);
+        }
         Kind::Ferry => {
             for p in [&mut n, &mut f] {
                 p.hull(w, d, 2.0, WHITE, Rgb(0x3F6E8C));
@@ -1466,7 +1572,21 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
         | Kind::Mall
         | Kind::Grocery
         | Kind::Park
-        | Kind::Station => {
+        | Kind::Station
+        | Kind::Metro
+        | Kind::MetroGate
+        | Kind::SpanTower
+        | Kind::Market
+        | Kind::Observatory
+        | Kind::Lookout
+        | Kind::SurfShack
+        | Kind::RopeBridge
+        | Kind::Hospital
+        | Kind::FireStation
+        | Kind::School
+        | Kind::TownHall
+        | Kind::Farm
+        | Kind::Port => {
             landmark(b, &mut n, &mut f);
         }
         Kind::Lantern => {
@@ -1549,6 +1669,161 @@ pub fn vehicle(terrain: &Terrain, kind: Kind, size: Vec3, seed: u32) -> MeshBuil
     near
 }
 
+/// The red-orange of suspension bridge towers and cables.
+pub const BRIDGE_PAINT: Rgb = Rgb(0xC8553D);
+
+/// A cruise ship, bow toward +x, the waterline at the origin: a navy hull with a red
+/// boot top, white tiers of cabins with balconies stepping back, a glass-fronted bridge,
+/// lifeboats along both sides, two red funnels, and a pool deck with loungers and a slide.
+fn cruise(n: &mut Parts, f: &mut Parts) {
+    use zawnabout_sim::traffic::{CRUISE_DECKS, CRUISE_FUNNELS};
+    let navy = Rgb(0x23365C);
+    let teak = Rgb(0xC9A27A);
+    let pool = Rgb(0x5CC8E8);
+    let funnel = Rgb(0xD8423A);
+    let (l, hull_h, beam) = (
+        CRUISE_DECKS[0].1 * 2.0,
+        CRUISE_DECKS[0].3,
+        CRUISE_DECKS[0].4 * 2.0,
+    );
+    for p in [&mut *n, &mut *f] {
+        p.hull(l, beam, hull_h, navy, teak);
+    }
+    // The red below the waterline peeks out as a stripe along the sides.
+    n.cube(
+        Vec3::new(-l * 0.1, 0.4, 0.0),
+        Vec3::new(l * 0.36, 0.5, beam * 0.43),
+        RED,
+    );
+    for &(x, hx, y, h, hz) in &CRUISE_DECKS[1..] {
+        let mut tier = Parts::new();
+        tier.walls(hx * 2.0, hz * 2.0, 0.0, h, WHITE);
+        tier.lid(hx * 2.0, hz * 2.0, h, teak);
+        let mut far = Parts::new();
+        far.walls(hx * 2.0, hz * 2.0, 0.0, h, WHITE);
+        far.lid(hx * 2.0, hz * 2.0, h, teak);
+        // A row of cabins every deck, most lit at night, and balcony rails along them.
+        tier.windows(
+            &[0, 1, 2, 3],
+            hx * 2.0,
+            hz * 2.0,
+            0.4,
+            h,
+            3.0,
+            DARK_GLASS,
+            false,
+        );
+        let decks = (h / 3.0) as u32;
+        for k in 1..decks {
+            for z in [-1.0f32, 1.0] {
+                tier.cube(
+                    Vec3::new(0.0, k as f32 * 3.0, z * (hz + 0.4)),
+                    Vec3::new(hx - 1.0, 0.08, 0.4),
+                    WHITE,
+                );
+            }
+        }
+        let at = Mat4::from_translation(Vec3::new(x, y, 0.0));
+        n.m.append(&tier.m, at);
+        f.m.append(&far.m, at);
+        for t in tier.night {
+            n.night
+                .push(t + n.m.verts.len() / 3 - tier.m.verts.len() / 3);
+        }
+    }
+    // The bridge: a glass front across the full beam, wings out over the sides.
+    let (bx, _, by, bh, _) = CRUISE_DECKS[2];
+    let front = bx + CRUISE_DECKS[2].1;
+    n.cube(
+        Vec3::new(front - 3.0, by + bh * 0.6, 0.0),
+        Vec3::new(3.0, bh * 0.4, beam * 0.52),
+        WHITE,
+    );
+    n.cube(
+        Vec3::new(front + 0.05, by + bh * 0.62, 0.0),
+        Vec3::new(0.08, bh * 0.18, beam * 0.5),
+        DARK_GLASS,
+    );
+    // Lifeboats hung along both sides of the first tier.
+    let (lx, lhx, ly, _, lhz) = CRUISE_DECKS[1];
+    for z in [-1.0f32, 1.0] {
+        for k in 0..12 {
+            let x = lx - lhx + 14.0 + k as f32 * ((lhx * 2.0 - 28.0) / 11.0);
+            n.cube(
+                Vec3::new(x, ly + 2.4, z * (lhz + 1.4)),
+                Vec3::new(3.6, 1.0, 1.1),
+                Rgb(0xF29E4C),
+            );
+            n.cube(
+                Vec3::new(x, ly + 3.5, z * (lhz + 1.4)),
+                Vec3::new(3.2, 0.2, 1.0),
+                WHITE,
+            );
+        }
+    }
+    // The pool deck on top of the last cabin tier, aft of the sky deck.
+    let (_, _, py, ph, phz) = CRUISE_DECKS[2];
+    let top = py + ph;
+    for (x, hx) in [(-10.0f32, 12.0f32), (12.0, 7.0)] {
+        n.cube(
+            Vec3::new(x, top + 0.05, 0.0),
+            Vec3::new(hx, 0.08, phz * 0.42),
+            pool,
+        );
+    }
+    for k in 0..14 {
+        let x = -30.0 + k as f32 * 3.6;
+        for z in [-1.0f32, 1.0] {
+            n.cube(
+                Vec3::new(x, top + 0.3, z * phz * 0.75),
+                Vec3::new(0.9, 0.2, 0.35),
+                [WHITE, Rgb(0x4A90C8), Rgb(0xF2C14E)][k % 3],
+            );
+        }
+    }
+    // A slide spiralling down beside the funnels into the pool.
+    let mut prev = Vec3::new(-62.0, top + 12.0, phz * 0.5);
+    for k in 1..=24 {
+        let u = k as f32 / 24.0;
+        let a = u * TAU * 1.25;
+        let at = Vec3::new(
+            -62.0 + u * 40.0 + a.cos() * 4.0,
+            top + 12.0 * (1.0 - u) + 0.6,
+            phz * 0.5 + a.sin() * 4.0,
+        );
+        let mut seg = Parts::new();
+        let len = at.distance(prev);
+        seg.ring(6, 0.0, 0.8, len, 0.8, Rgb(0x6BBF7A));
+        let rot = Quat::from_rotation_arc(Vec3::Y, (at - prev).normalize_or(Vec3::Y));
+        n.m.append(&seg.m, Mat4::from_rotation_translation(rot, prev));
+        prev = at;
+    }
+    n.post(Vec3::new(-62.0, top + 12.0, phz * 0.5), 12.0, 0.4, WHITE);
+    // The funnels, red with black tops, and a mast forward with a light.
+    for x in CRUISE_FUNNELS {
+        for p in [&mut *n, &mut *f] {
+            let mut fun = Parts::new();
+            fun.ring(10, 0.0, 5.0, 12.0, 4.4, funnel);
+            fun.ring(10, 12.0, 4.4, 14.0, 4.3, Rgb(0x2A2A2E));
+            p.m.append(&fun.m, Mat4::from_translation(Vec3::new(x, top, 0.0)));
+        }
+    }
+    let (sx, shx, sy, sh, _) = CRUISE_DECKS[3];
+    n.post(
+        Vec3::new(sx + shx * 0.5, sy + sh + 12.0, 0.0),
+        12.0,
+        0.3,
+        WHITE,
+    );
+    let from = n.m.verts.len();
+    n.cube(
+        Vec3::new(sx + shx * 0.5, sy + sh + 12.3, 0.0),
+        Vec3::splat(0.4),
+        Rgb(0xFFF2C0),
+    );
+    n.m.glow_from(from);
+}
+
 /// A landmark's pieces, in its own frame. Small loose pieces are left off the far mesh.
 fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
     use zawnabout_sim::landmark::{Form, Mat as M, pieces};
@@ -1624,7 +1899,10 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
         let add = |p: &mut Parts| {
             let from = p.m.verts.len();
             p.m.append(&one.m, place);
-            if lit {
+            // Lamps underground are lit all day.
+            if b.kind == Kind::Metro && matches!(piece.mat, M::Lamp) {
+                p.m.glow_from(from);
+            } else if lit {
                 p.night_from(from);
             }
         };
@@ -1637,9 +1915,16 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
 
 /// Road surfaces as strips laid on the ground, decks and piers where they bridge water,
 /// and runway markings.
-fn roads(terrain: &Terrain, tiles: &mut HashMap<(i32, i32), Tile>) {
+fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32), Tile>) {
     let def = terrain.def;
     for (ri, r) in def.roads.iter().enumerate() {
+        // Stretches held up by a suspension bridge's cables need no piers.
+        let spans: Vec<[f32; 2]> = hung
+            .iter()
+            .flat_map(|b| b.spans.iter())
+            .filter(|(road, _)| *road == ri)
+            .map(|(_, span)| *span)
+            .collect();
         let prof = terrain.road_points(ri);
         let n = r.pts.len();
         let half = r.w * 0.5;
@@ -1817,7 +2102,10 @@ fn roads(terrain: &Terrain, tiles: &mut HashMap<(i32, i32), Tile>) {
                         RED.mix(WHITE, 0.3),
                     );
                 }
-                if (along / 10.0) as i32 % 4 == 0 {
+                let held = spans
+                    .iter()
+                    .any(|s| along > s[0] + 5.0 && along < s[1] - 5.0);
+                if (along / 10.0) as i32 % 4 == 0 && !held {
                     let mid = (a + b) * 0.5;
                     let top = (ya + yb) * 0.5 - 1.6;
                     let ground = terrain.height(mid.x, mid.y).min(top);
@@ -1912,7 +2200,11 @@ pub fn tile_key(p: Vec2) -> (i32, i32) {
 }
 
 /// Every town and road mesh, by tile.
-pub fn build(terrain: &Terrain, buildings: &[Building]) -> Vec<((i32, i32), Tile)> {
+pub fn build(
+    terrain: &Terrain,
+    buildings: &[Building],
+    bridges: &[Suspension],
+) -> Vec<((i32, i32), Tile)> {
     let mut tiles: HashMap<(i32, i32), Tile> = HashMap::new();
     let mut caves: HashMap<(i32, i32), Tile> = HashMap::new();
     for b in buildings {
@@ -1924,9 +2216,24 @@ pub fn build(terrain: &Terrain, buildings: &[Building]) -> Vec<((i32, i32), Tile
             far: MeshBuilder::new(),
             cave: under,
         });
+        let (near_from, far_from) = (tile.near.verts.len(), tile.far.verts.len());
         building(b, terrain, &mut tile.near, &mut tile.far);
+        // Boats moored afloat rock on the swell, all but their lit windows.
+        if matches!(
+            b.kind,
+            Kind::Boat | Kind::Sailboat | Kind::Houseboat | Kind::Canoe
+        ) {
+            for v in tile.near.verts[near_from..]
+                .iter_mut()
+                .chain(tile.far.verts[far_from..].iter_mut())
+            {
+                if v.normal[3] == 0 {
+                    v.normal[3] = crate::mesh::BOB;
+                }
+            }
+        }
     }
-    roads(terrain, &mut tiles);
+    roads(terrain, bridges, &mut tiles);
     let mut out: Vec<((i32, i32), Tile)> = tiles.into_iter().chain(caves).collect();
     out.sort_by_key(|(k, t)| (t.cave, *k));
     out

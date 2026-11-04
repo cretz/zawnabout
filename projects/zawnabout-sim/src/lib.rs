@@ -1,6 +1,7 @@
 //! Deterministic game simulation. No rendering, devices or wall clock. Every entity is
 //! stepped from its own input at a fixed rate, so the same inputs replay the same run.
 
+pub mod bridge;
 pub mod cave;
 pub mod dragon;
 pub mod landmark;

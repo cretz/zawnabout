@@ -20,7 +20,7 @@ pub struct Script {
     pub failures: u32,
 }
 
-const HOST: [&str; 5] = ["shot", "size", "save-trace", "stats", "quit"];
+const HOST: [&str; 6] = ["shot", "size", "save-trace", "stats", "profile", "quit"];
 
 impl Script {
     pub fn new(text: &str) -> Self {

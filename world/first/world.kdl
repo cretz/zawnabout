@@ -66,6 +66,8 @@ caves sunken {
         p 900 -330 4700
     }
     cavern sunken-hall x=820 y=-480 z=4500 w=1500 h=360 d=1200 rot=25 shape=dome glow=0.25 decor=crystal {
+        spout sunken-spout x=600 z=4400 w=11
+        spout sunken-spout-2 x=1100 z=4650 w=8
         note "One big quiet dome with a pool. Light from the stack hole falls in a single beam."
         lake sunken-pool level=-585 x=700 z=4450 r=320
         beacon sunken-beacon x=950 y=-600 z=4600
@@ -115,6 +117,24 @@ route ferry-loop kind=ferry {
     p 0 2500
     p -1800 2700
     p -1800 1750
+}
+route grand-cruise kind=cruise {
+    note "The cruise liner's grand tour of the islands, all the way round. Land on its pool deck and ride."
+    p -360 3840
+    p 1440 2280
+    p 1680 0
+    p 4800 0
+    p 5400 -3000
+    p 4560 -4440
+    p 720 -4560
+    p 540 -3000
+    p -360 -1200
+    p -2880 -1680
+    p -4680 -480
+    p -4680 1680
+    p -3000 3600
+    p -2400 4560
+    p -360 3840
 }
 route seaplane-hop kind=seaplane {
     note "Crescent lagoon to home harbor to the atoll and back, round the coasts."
@@ -300,6 +320,37 @@ landmark hill-zoo kind=zoo x=-320 z=580 rot=0 {
 landmark bay-statue kind=statue x=-900 y=0 z=2500 rot=200 {
     note "A great copper figure on its rock in Kettle bay, lamp held high for ships."
 }
+// Civic places.
+landmark moon-hospital kind=hospital x=1744 z=-1128 rot=0 {
+    note "Moonharbor's hospital. The helipad on its roof is a fine place to land."
+}
+landmark kettle-fire kind=firestation x=-1312 z=1493 rot=0
+landmark hill-school kind=school x=-671 z=1019 rot=0 {
+    note "The school on Terrace Hill, its playground and playing field."
+}
+landmark stonehold-hall kind=townhall x=-1902 z=-4058 rot=0 {
+    note "Stonehold's town hall and its clock tower."
+}
+landmark meadow-farm kind=farm x=-2520 z=1750 rot=10 {
+    note "A farm on the meadows: barn, silos, fields of wheat and greens."
+}
+landmark tidewater-port kind=port x=235 z=-4150 rot=90 {
+    note "Tidewater's container port. Its cranes reach out over the water."
+}
+landmark fang-observatory kind=observatory x=3640 z=3020 rot=30 {
+    note "An observatory on the crater rim. The dome's slit stands open to the stars."
+}
+landmark fang-lookout kind=lookout x=3300 z=2600 rot=15 {
+    note "A fire lookout above the rainforest. Climb, or just land on the cabin."
+}
+landmark atoll-surf kind=surfshack x=-4430 z=-2245 rot=0
+landmark needles-bridge kind=ropebridge x=-4579 y=181 z=3878 rot=-53 text="173 -32" {
+    note "A rope bridge between two needles. Land on it and walk across."
+}
+landmark stonehold-market kind=market x=-1850 z=-4270 rot=0
+landmark tidewater-market kind=market x=-220 z=-4200 rot=20
+landmark village-market kind=market x=-1881 z=963 rot=0
+landmark kettle-market kind=market x=-1822 z=1603 rot=0
 landmark village-grocery kind=grocery x=-1900 z=1150 rot=35
 landmark hill-grocery kind=grocery x=-300 z=1300 rot=10
 landmark moon-grocery kind=grocery x=1640 z=-1340 rot=100

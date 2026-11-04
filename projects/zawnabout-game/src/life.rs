@@ -43,12 +43,41 @@ struct Run {
     bottom: Vec2,
 }
 
+/// A stretch of town road someone cycles up and down: its points along the right-hand
+/// lane, and the distance along at each.
+struct Ride {
+    pts: Vec<Vec3>,
+    along: Vec<f32>,
+}
+
+impl Ride {
+    fn len(&self) -> f32 {
+        *self.along.last().unwrap_or(&0.0)
+    }
+
+    /// Position and direction `s` meters along.
+    fn at(&self, s: f32) -> (Vec3, Vec3) {
+        let i = self
+            .along
+            .partition_point(|a| *a <= s)
+            .clamp(1, self.pts.len() - 1);
+        let (a, b) = (self.pts[i - 1], self.pts[i]);
+        let u = (s - self.along[i - 1]) / (self.along[i] - self.along[i - 1]).max(1e-3);
+        (a.lerp(b, u.clamp(0.0, 1.0)), (b - a).normalize_or(Vec3::Z))
+    }
+}
+
 /// Dolphins leaping now and then near a spot at sea.
 struct Pod {
     center: Vec2,
 }
 
 pub struct Life {
+    rides: Vec<Ride>,
+    /// Where someone sits fishing off the end of a pier, facing the water.
+    anglers: Vec<Mat4>,
+    bike: MeshId,
+    rod: MeshId,
     flocks: Vec<Flock>,
     herds: Vec<Herd>,
     walkers: Vec<Walker>,
@@ -95,7 +124,7 @@ const FLAGS: [Rgb; 5] = [
 ];
 
 /// Shirt colors for townsfolk.
-const SHIRTS: [Rgb; 8] = [
+pub(crate) const SHIRTS: [Rgb; 8] = [
     Rgb(0xE0564A),
     Rgb(0x4A90C8),
     Rgb(0xF2C14E),
@@ -106,7 +135,7 @@ const SHIRTS: [Rgb; 8] = [
     Rgb(0x3E7F8C),
 ];
 
-fn linear(c: Rgb) -> Vec3 {
+pub(crate) fn linear(c: Rgb) -> Vec3 {
     let f = |s: u32| ((s & 0xFF) as f32 / 255.0).powf(2.2);
     Vec3::new(f(c.0 >> 16), f(c.0 >> 8), f(c.0))
 }
@@ -269,7 +298,66 @@ impl Life {
                 )
             })
             .collect();
+        // Cyclists ride stretches of road through towns, one per stretch, well apart.
+        let mut rides = Vec::new();
+        for (i, r) in terrain.def.roads.iter().enumerate() {
+            if r.rail || r.runway {
+                continue;
+            }
+            let prof = terrain.road_points(i);
+            let mut run: Vec<Vec3> = Vec::new();
+            let flush = |run: &mut Vec<Vec3>, rides: &mut Vec<Ride>| {
+                let mut along = vec![0.0];
+                for w in run.windows(2) {
+                    along.push(along[along.len() - 1] + w[0].distance(w[1]));
+                }
+                if along[along.len() - 1] > 80.0 && rides.len() < 80 {
+                    rides.push(Ride {
+                        pts: std::mem::take(run),
+                        along,
+                    });
+                }
+                run.clear();
+            };
+            for (q, p) in r.pts.iter().zip(prof) {
+                let town = !p.bridge
+                    && !p.tunnel
+                    && terrain
+                        .cover(q[0], q[1])
+                        .is_some_and(|c| c.kind == CoverKind::Town);
+                // Long roads are split into stretches of about 300 m.
+                if town && run.len() < 40 {
+                    run.push(Vec3::new(q[0], p.y + 0.25, q[1]));
+                } else {
+                    flush(&mut run, &mut rides);
+                }
+            }
+            flush(&mut run, &mut rides);
+        }
+        let anglers = world
+            .buildings
+            .iter()
+            .filter(|b| b.kind == Kind::Pier)
+            .flat_map(|b| {
+                [-1.0f32, 1.0].map(|side| {
+                    let a = Vec3::new(b.axis.x, 0.0, b.axis.y);
+                    let at = b.at(
+                        b.size.x * 0.5 - 0.6,
+                        b.size.y,
+                        side * (b.size.z * 0.5 - 1.0),
+                    );
+                    // Facing out along the pier, turned a little to the side.
+                    let face =
+                        Quat::from_rotation_arc(Vec3::Z, a) * Quat::from_rotation_y(side * 0.4);
+                    Mat4::from_rotation_translation(face, at)
+                })
+            })
+            .collect();
         Self {
+            rides,
+            anglers,
+            bike: renderer.add_mesh(&models::bicycle()),
+            rod: renderer.add_mesh(&models::fishing_rod()),
             wheels,
             swings,
             springs,
@@ -462,6 +550,63 @@ impl Life {
                 let c = FLAGS[k % FLAGS.len()];
                 draws.push((self.flag, Instance::tinted(m, linear(c).extend(1.0))));
             }
+        }
+        // Cyclists pedal up and down their stretch of road, keeping to the right, by day.
+        if night < 0.6 {
+            for (k, r) in self.rides.iter().enumerate() {
+                let len = r.len();
+                if !near(Vec2::new(r.pts[0].x, r.pts[0].z), 450.0 + len) {
+                    continue;
+                }
+                let s = k as u32 * 59;
+                let u =
+                    (time * (4.0 + hash(s) * 2.0) + hash(s + 1) * len * 2.0).rem_euclid(len * 2.0);
+                let (along, back) = if u < len {
+                    (u, false)
+                } else {
+                    (len * 2.0 - u, true)
+                };
+                let (p, dir) = r.at(along);
+                let dir = if back { -dir } else { dir };
+                let right = Vec3::new(-dir.z, 0.0, dir.x).normalize_or(Vec3::X);
+                let at = p - right * 2.4;
+                if at.distance(cam) > 450.0 {
+                    continue;
+                }
+                let face = Quat::from_rotation_y(dir.x.atan2(dir.z));
+                let bike = Mat4::from_rotation_translation(face, at);
+                let paint = linear(SHIRTS[(hash(s + 2) * 8.0) as usize % 8]);
+                draws.push((self.bike, Instance::tinted(bike, paint.extend(1.0))));
+                let pedal = (time * 6.0 + s as f32).sin() * 0.04;
+                let rider = bike
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::splat(0.9),
+                        Quat::from_rotation_x(0.25),
+                        Vec3::new(0.0, 0.18 + pedal, -0.1),
+                    );
+                let shirt = linear(SHIRTS[(hash(s + 3) * 8.0) as usize % 8]);
+                draws.push((self.body, Instance::tinted(rider, shirt.extend(1.0))));
+                draws.push((self.heads[(s % 3) as usize], Instance::new(rider)));
+            }
+        }
+        // Anglers sit at the ends of piers with their rods out, legs over the edge.
+        for (k, m) in self.anglers.iter().enumerate() {
+            let s = k as u32 * 23 + 5;
+            if hash(s) < 0.35 || m.w_axis.truncate().distance(cam) > 400.0 {
+                continue;
+            }
+            let seated = *m * Mat4::from_translation(Vec3::new(0.0, -0.8, 0.0));
+            let shirt = linear(SHIRTS[(hash(s + 1) * 8.0) as usize % 8]);
+            draws.push((self.body, Instance::tinted(seated, shirt.extend(1.0))));
+            draws.push((self.heads[(s % 3) as usize], Instance::new(seated)));
+            // The rod twitches now and then as something nibbles.
+            let nibble = ((time * 0.7 + s as f32).sin().max(0.0).powi(8)) * 0.15;
+            let rod = *m
+                * Mat4::from_rotation_translation(
+                    Quat::from_rotation_x(-nibble),
+                    Vec3::new(0.0, 0.8, 0.3),
+                );
+            draws.push((self.rod, Instance::new(rod)));
         }
         // Fewer people about at night.
         for (i, w) in self.walkers.iter().enumerate() {

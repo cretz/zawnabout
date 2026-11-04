@@ -392,6 +392,8 @@ impl Game {
         let a = pose.axis();
         let (along, across) = match v.kind {
             zawnabout_sim::town::Kind::Ferry => (0.36, 0.0),
+            // On the pool deck, aft of the sky deck and clear of the funnels.
+            zawnabout_sim::town::Kind::Cruise => (-0.1, 0.25),
             // Beside the mast, clear of the sails along the middle.
             zawnabout_sim::town::Kind::Sailboat => (-0.2, 0.3),
             zawnabout_sim::town::Kind::Car
@@ -403,9 +405,11 @@ impl Game {
         let p = pose.pos
             + Vec3::new(a.x, 0.0, a.y) * v.size.x * along
             + Vec3::new(-a.y, 0.0, a.x) * v.size.z * across;
-        // Chairs and cabins hang below the cable: look down from just above them.
+        // Chairs and cabins hang below the cable: look down from just above them. Cars
+        // and trains may be in a tunnel, so look down from just over their roofs.
         let above = match v.kind {
             zawnabout_sim::town::Kind::LiftChair | zawnabout_sim::town::Kind::LiftCabin => 0.5,
+            zawnabout_sim::town::Kind::Car | zawnabout_sim::town::Kind::Train => v.size.y + 2.0,
             _ => 50.0,
         };
         let top = self.sim.world.support(p.x, p.z, p.y + above);
@@ -600,6 +604,35 @@ impl Game {
         out
     }
 
+    /// A vehicle named in a script: its number, or a kind with an optional count, such as
+    /// `cruise`, `ferry.1` or `metro` (the lead car of a subway train). Names keep playbooks
+    /// working when the number of cars on the roads changes.
+    pub fn vehicle(&self, name: &str) -> Result<usize, String> {
+        if let Ok(i) = name.parse::<usize>() {
+            return Ok(i);
+        }
+        let (kind, n) = match name.split_once('.') {
+            Some((k, n)) => (k, n.parse::<usize>().map_err(|e| e.to_string())?),
+            None => (name, 0),
+        };
+        use zawnabout_sim::traffic::METRO_CAB;
+        self.sim
+            .world
+            .traffic
+            .vehicles
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| match kind {
+                // A train's engine, or a subway train's lead car.
+                "train" => v.kind == zawnabout_sim::town::Kind::Train && v.variant == 0,
+                "metro" => v.kind == zawnabout_sim::town::Kind::Train && v.variant == METRO_CAB,
+                _ => format!("{:?}", v.kind).eq_ignore_ascii_case(kind),
+            })
+            .nth(n)
+            .map(|(i, _)| i)
+            .ok_or_else(|| format!("no vehicle {name}"))
+    }
+
     /// Evaluates a playbook condition such as `landed` or `near 0 0 0 5`.
     pub fn check(&self, words: &[&str]) -> Result<bool, String> {
         let d = self.player_dragon();
@@ -632,9 +665,10 @@ impl Game {
             }
             ["speed-above", _] => d.speed() > num(1)?,
             ["lit", id] => self.sim.beacon(id).ok_or("no such beacon")?.1,
-            ["riding", _] => {
+            ["riding", which] => {
                 d.mode == Mode::Ground
-                    && self.sim.world.carrier(d.pos.x, d.pos.z, feet.y) == Some(num(1)? as usize)
+                    && self.sim.world.carrier(d.pos.x, d.pos.z, feet.y)
+                        == Some(self.vehicle(which)?)
             }
             ["speed-below", _] => d.speed() < num(1)?,
             ["height-above", _] => {
@@ -885,13 +919,13 @@ impl Game {
                     ))
             }
             // ride n: stands the dragon on top of vehicle n.
-            ["land-on", _] => {
-                let i = num(1)? as usize;
+            ["land-on", which] => {
+                let i = self.vehicle(which)?;
                 self.land_request = Some(self.deck(i).ok_or("no such vehicle")?);
                 Ok(String::new())
             }
-            ["ride", _] => {
-                let i = num(1)? as usize;
+            ["ride", which] => {
+                let i = self.vehicle(which)?;
                 let Vec3 { x, y: top, z } = self.deck(i).ok_or("no such vehicle")?;
                 let p = Vec3::new(x, top, z);
                 let stand = self.sim.flight.stand_height;

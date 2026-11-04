@@ -535,7 +535,8 @@ impl Dragon {
         let toward = |v: f32, target: f32, rate: f32| v + (target - v) * (rate * dt).min(1.0);
         // Standing on a boat or plane: ride along, turning with it.
         let feet = self.pos.y - p.stand_height;
-        let ride = match world.carrier(self.pos.x, self.pos.z, feet) {
+        let carrier = world.carrier(self.pos.x, self.pos.z, feet);
+        let ride = match carrier {
             Some(i) => {
                 let (was, now) = (world.traffic.prev[i], world.traffic.poses[i]);
                 self.pos = now.to_world(was.to_local(self.pos));
@@ -610,14 +611,21 @@ impl Dragon {
         let (old_x, old_z) = (self.pos.x, self.pos.z);
         self.pos.x += flat.x * dt;
         self.pos.z += flat.y * dt;
-        // Walk up any slope short of a cliff. Cliffs stop you, the ground never shoves.
-        if world.ground_normal(self.pos.x, self.pos.z).y < p.walk_slope
+        // Walk up any slope short of a cliff. Cliffs stop you, the ground never shoves. A
+        // rider goes wherever their vehicle goes, past trees and posts beside the way.
+        let riding = carrier.is_some();
+        if !riding
+            && world.ground_normal(self.pos.x, self.pos.z).y < p.walk_slope
             && world.ground_height(self.pos.x, self.pos.z) > self.pos.y - p.stand_height + 0.3
         {
             (self.pos.x, self.pos.z) = (old_x, old_z);
             flat = Vec2::ZERO;
         }
-        let (pushed, n) = world.push_out_props(self.pos + Vec3::Y * 0.4, p.body_radius);
+        let (pushed, n) = if riding {
+            (self.pos, Vec3::ZERO)
+        } else {
+            world.push_out_props(self.pos + Vec3::Y * 0.4, p.body_radius)
+        };
         if n != Vec3::ZERO {
             self.pos.x = pushed.x;
             self.pos.z = pushed.z;
@@ -626,7 +634,11 @@ impl Dragon {
         }
         self.vel = Vec3::new(flat.x, 0.0, flat.y);
         let feet = self.pos.y - p.stand_height;
-        let support = world.support(self.pos.x, self.pos.z, feet + 0.6);
+        // A rider keeps to their own vehicle, even past a bridge or a platform beside it.
+        let deck = carrier
+            .and_then(|i| world.deck_of(i, self.pos.x, self.pos.z))
+            .filter(|top| (top - feet).abs() < 1.0);
+        let support = deck.unwrap_or_else(|| world.support(self.pos.x, self.pos.z, feet + 0.6));
         if support < feet - 0.6 {
             // Walked off a ledge.
             self.set_mode(Mode::Air);
@@ -866,9 +878,14 @@ impl Dragon {
         }
     }
 
-    /// A soft breeze turns the dragon back in the band at the edge of the world, and the
-    /// air pushes down above the sky ceiling.
+    /// A soft breeze turns the flying dragon back in the band at the edge of the world, and
+    /// the air pushes down above the sky ceiling.
     fn keep_in_bounds(&mut self, world: &World, dt: f32) {
+        // Standing still the breeze has nothing to turn: on the ground, or riding a plane
+        // or ship out past the edge and back.
+        if self.mode == Mode::Ground {
+            return;
+        }
         let limit = world.half_size - world.edge;
         for (pos, vel) in [(self.pos.x, &mut self.vel.x), (self.pos.z, &mut self.vel.z)] {
             let over = pos.abs() - limit;

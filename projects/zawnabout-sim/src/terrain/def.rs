@@ -204,6 +204,8 @@ pub enum Decor {
     Ember,
     /// Fallen stonework of an old people.
     Ruins,
+    /// Smooth tiled walls and a stone floor, for subway stations. Nothing grows.
+    Tiled,
 }
 
 /// Rock left standing inside a cavern, from floor `y0` to roof `y1`.
@@ -305,6 +307,8 @@ pub struct Road {
     pub runway: bool,
     /// A railway: trains instead of cars, track instead of tarmac.
     pub rail: bool,
+    /// A railway underground, with metro trains and stations in halls.
+    pub subway: bool,
     pub w: f32,
     pub pts: &'static [[f32; 3]],
 }

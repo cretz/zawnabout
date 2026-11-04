@@ -76,6 +76,13 @@ fn vs_lit(v: VertIn) -> VertOut {
         let wave = sin(t * 2.7 + world.x * 0.4 + world.z * 0.25);
         world = vec4f(world.xyz + vec3f(0.6, 0.0, 0.35) * v.pos.y * (0.12 + 0.18 * gust + 0.06 * wave), 1.0);
     }
+    // Boats afloat rise and fall on a long swell that rocks them gently side to side.
+    if abs(v.normal.w - 0.157) < 0.02 {
+        let t = g.misc.x;
+        let swell = sin(t * 1.1 + world.x * 0.04 + world.z * 0.05) * 0.18;
+        let rock = sin(t * 1.7 + world.x * 0.13 - world.z * 0.09) * 0.07;
+        world = vec4f(world.x, world.y + swell + rock, world.z, 1.0);
+    }
     var o: VertOut;
     o.clip = g.view_proj * world;
     o.world = world.xyz;

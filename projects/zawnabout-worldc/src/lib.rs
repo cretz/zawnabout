@@ -14,7 +14,7 @@ mod schema;
 mod shape;
 
 use schema::{Pts, spec};
-use shape::{jag, sincos_deg, smooth};
+use shape::{jag, len2, sincos_deg, smooth};
 
 /// Spacing of smoothed outline points (m).
 const STEP: f64 = 20.0;
@@ -125,6 +125,7 @@ struct Road {
     id: String,
     runway: bool,
     rail: bool,
+    subway: bool,
     w: f64,
     pts: Vec<[f64; 3]>,
 }
@@ -906,6 +907,19 @@ impl Compiler {
                         "grocery",
                         "park",
                         "station",
+                        "metro-gate",
+                        "span-tower",
+                        "market",
+                        "observatory",
+                        "lookout",
+                        "surfshack",
+                        "ropebridge",
+                        "hospital",
+                        "firestation",
+                        "school",
+                        "townhall",
+                        "farm",
+                        "port",
                     ],
                     "stones",
                 );
@@ -959,6 +973,21 @@ impl Compiler {
                     light: false,
                 });
             }
+            "spout" => {
+                // Water pouring from a crack in the roof: a mark midway up its cavern,
+                // carrying its width. The client finds the roof and the floor.
+                let (y0, y1) = ctx.cavern.unwrap_or((0.0, 0.0));
+                self.marks.push(Mark {
+                    id,
+                    kind: format!("spout:{}", self.num(node, "w")),
+                    pos: [
+                        self.num(node, "x") + ctx.off[0],
+                        (y0 + y1) * 0.5,
+                        self.num(node, "z") + ctx.off[1],
+                    ],
+                    ground: false,
+                });
+            }
             "pillar" => {
                 self.mark(ctx, node, id.clone(), name.into());
                 let (y0, y1) = ctx.cavern.unwrap_or((-1.0e4, 1.0e4));
@@ -985,7 +1014,9 @@ impl Compiler {
                     ctx,
                     node,
                     "decor",
-                    &["bare", "mixed", "crystal", "shroom", "ember", "ruins"],
+                    &[
+                        "bare", "mixed", "crystal", "shroom", "ember", "ruins", "tiled",
+                    ],
                     "mixed",
                 );
                 self.voids.push(Void {
@@ -1077,41 +1108,84 @@ impl Compiler {
             }
             "road" | "runway" | "railway" => {
                 let pts = self.points(ctx, node, s.pts);
-                let graded = pts.iter().filter(|p| p.y.is_some()).count();
-                if graded != 0 && graded != pts.len() {
-                    self.err(ctx, node, "give every point a height or none");
-                    return;
-                }
                 if pts.len() < 2 {
                     self.err(ctx, node, "path needs at least 2 points");
                     return;
                 }
+                // Points with a height hold the road there (a tunnel, a bridge), the rest
+                // follow the ground. Heights run straight between two held points.
+                let held: Vec<Option<f64>> = pts.iter().map(|p| p.y).collect();
+                let all = held.iter().all(Option::is_some);
+                let none = held.iter().all(Option::is_none);
+                // Fully held paths smooth their heights with the curve, open ones have none.
                 let src: Vec<([f64; 3], bool)> = pts
                     .iter()
-                    .map(|p| ([p.x, p.z, p.y.unwrap_or(NO_Y)], p.sharp))
+                    .map(|p| {
+                        (
+                            [p.x, p.z, if all { p.y.unwrap_or(0.0) } else { NO_Y }],
+                            p.sharp,
+                        )
+                    })
                     .collect();
                 // Runways are dead straight. A path that ends where it starts is a loop.
                 let (first, last) = (src[0].0, src[src.len() - 1].0);
                 let looped = (first[0] - last[0]).abs() < 1.0 && (first[1] - last[1]).abs() < 1.0;
-                let dense = if name == "runway" {
-                    src.iter().map(|(p, _)| *p).collect()
+                let (mut dense, segs): (Vec<[f64; 3]>, Vec<usize>) = if name == "runway" {
+                    (
+                        src.iter().map(|(p, _)| *p).collect(),
+                        (0..src.len()).collect(),
+                    )
                 } else if looped {
                     let mut open = src.clone();
                     open.pop();
-                    let mut d = smooth(&open, true, STEP * 0.5).0;
+                    let (mut d, mut from) = smooth(&open, true, STEP * 0.5);
                     d.push(d[0]);
-                    d
+                    from.push(open.len() - 1);
+                    (d, from)
                 } else {
-                    smooth(&src, false, STEP * 0.5).0
+                    smooth(&src, false, STEP * 0.5)
                 };
+                let count = if looped { src.len() - 1 } else { src.len() };
+                let mut j = if all || none { dense.len() } else { 0 };
+                while j < dense.len() {
+                    let seg = segs.get(j).copied().unwrap_or(count - 1);
+                    let mut end = j;
+                    while end < dense.len() && segs.get(end).copied().unwrap_or(count - 1) == seg {
+                        end += 1;
+                    }
+                    let (a, b) = (held[seg % count], held[(seg + 1) % count]);
+                    let len: f64 = (j..end.min(dense.len() - 1))
+                        .map(|k| {
+                            len2([dense[k + 1][0] - dense[k][0], dense[k + 1][1] - dense[k][1]])
+                        })
+                        .sum();
+                    let mut run = 0.0;
+                    for k in j..end {
+                        dense[k][2] = match (a, b) {
+                            (Some(a), Some(b)) => a + (b - a) * (run / len.max(1e-6)).min(1.0),
+                            (Some(a), None) if run < 1e-6 => a,
+                            _ => NO_Y,
+                        };
+                        if k + 1 < dense.len() {
+                            run += len2([
+                                dense[k + 1][0] - dense[k][0],
+                                dense[k + 1][1] - dense[k][1],
+                            ]);
+                        }
+                    }
+                    j = end;
+                }
                 let rail = name == "railway";
                 self.roads.push(Road {
                     id: id.clone(),
                     runway: name == "runway",
                     rail,
+                    subway: rail && self.flag(node, "subway"),
                     w: if rail { 6.0 } else { self.num(node, "w") },
                     pts: dense,
                 });
+                // A railway's stations.
+                self.kids(ctx, node);
             }
             "route" => {
                 let pts = self.points(ctx, node, s.pts);
@@ -1125,6 +1199,7 @@ impl Compiler {
                     "kind",
                     &[
                         "ferry",
+                        "cruise",
                         "yacht",
                         "seaplane",
                         "plane",
@@ -1434,6 +1509,7 @@ impl Compiler {
                 "shroom" => "Shroom",
                 "ember" => "Ember",
                 "ruins" => "Ruins",
+                "tiled" => "Tiled",
                 _ => "Bare",
             };
             let p3 = |p: [f64; 3]| format!("[{},{},{}]", f(p[0]), f(p[1]), f(p[2]));
@@ -1526,10 +1602,11 @@ impl Compiler {
         for r in &self.roads {
             let _ = writeln!(
                 s,
-                "Road {{ id: {:?}, runway: {}, rail: {}, w: {}, pts: &[{}] }},",
+                "Road {{ id: {:?}, runway: {}, rail: {}, subway: {}, w: {}, pts: &[{}] }},",
                 r.id,
                 r.runway,
                 r.rail,
+                r.subway,
                 f(r.w),
                 p3(&r.pts)
             );

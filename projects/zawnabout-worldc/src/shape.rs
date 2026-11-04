@@ -67,7 +67,7 @@ fn sub<const N: usize>(a: [f64; N], b: [f64; N]) -> [f64; N] {
     o
 }
 
-fn len2(a: [f64; 2]) -> f64 {
+pub fn len2(a: [f64; 2]) -> f64 {
     (a[0] * a[0] + a[1] * a[1]).sqrt()
 }
 

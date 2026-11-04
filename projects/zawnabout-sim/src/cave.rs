@@ -40,7 +40,7 @@ fn hash_str(s: &str) -> u64 {
 /// Chances per sample of a crystal, mushroom patch, stalagmite and stalactite.
 fn weights(decor: Decor) -> [f32; 4] {
     match decor {
-        Decor::Bare => [0.0; 4],
+        Decor::Bare | Decor::Tiled => [0.0; 4],
         Decor::Mixed => [0.12, 0.14, 0.07, 0.12],
         Decor::Crystal => [0.32, 0.05, 0.05, 0.1],
         Decor::Shroom => [0.05, 0.36, 0.05, 0.08],
@@ -83,7 +83,9 @@ fn in_town(t: &Terrain, p: Vec3) -> bool {
 pub fn decorate(t: &Terrain, seed: u64) -> Vec<Placed> {
     let mut out = Vec::new();
     for v in t.def.voids {
-        if matches!(v.shape, VoidShape::Tube | VoidShape::Basin) || v.decor == Decor::Bare {
+        if matches!(v.shape, VoidShape::Tube | VoidShape::Basin)
+            || matches!(v.decor, Decor::Bare | Decor::Tiled)
+        {
             continue;
         }
         decorate_one(t, v, seed, &mut out);
@@ -325,7 +327,11 @@ pub fn mouths(t: &Terrain, seed: u64) -> Vec<Turned> {
             }
         }
         let exit = inside.lerp(outside, lo);
-        if exit.y < sea + 1.0 {
+        // Openings in town, like subway stairs, are kept tidy.
+        let town = t
+            .cover(exit.x, exit.z)
+            .is_some_and(|c| c.kind == crate::terrain::CoverKind::Town);
+        if exit.y < sea + 1.0 || town {
             continue;
         }
         let dir = (outside - inside).normalize_or(Vec3::Y);

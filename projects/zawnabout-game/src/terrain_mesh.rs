@@ -49,10 +49,12 @@ impl Key {
 
 /// A built chunk: its outside mesh (with mouths and the first stretch into caves), its
 /// deep cave mesh, and bounding spheres.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct Built {
     outer: Option<(MeshId, Vec3, f32)>,
     inner: Option<(MeshId, Vec3, f32)>,
+    /// Caves deep under the ground left out, to mesh when the camera comes near them.
+    skipped: Vec<u16>,
 }
 
 /// Cave walls shallower than this draw with the outside, so mouths show their tunnels
@@ -165,27 +167,37 @@ impl TerrainMeshes {
 
     /// Builds up to `budget` missing chunks, nearest first. Until a wanted chunk is
     /// built, whatever was drawn there before keeps drawing, so nothing pops out.
+    /// Caves far under the ground only show from inside them, so chunks leave them out
+    /// until the camera comes near one, and build much faster.
     pub fn update(&mut self, renderer: &mut Renderer, terrain: &Terrain, cam: Vec3, budget: usize) {
         let wanted = Self::select(terrain, cam);
+        let near = |v: u16| near_void(terrain, v, cam);
+        let ready = |b: Option<&Built>| b.is_some_and(|b| !b.skipped.iter().any(|v| near(*v)));
         let mut left = budget;
         for k in &wanted {
             if left == 0 {
                 break;
             }
-            if !self.built.contains_key(k) {
-                let (outer, inner) = build(terrain, *k);
+            if !ready(self.built.get(k)) {
+                let (outer, inner, skipped) =
+                    crate::prof::time("chunk", || build(terrain, *k, &near));
                 let built = Built {
                     outer: upload(renderer, &outer),
                     inner: upload(renderer, &inner),
+                    skipped,
                 };
-                self.built.insert(*k, built);
+                if let Some(old) = self.built.insert(*k, built) {
+                    for (mesh, _, _) in [old.outer, old.inner].into_iter().flatten() {
+                        renderer.free_mesh(mesh);
+                    }
+                }
                 left -= 1;
             }
         }
         let missing: Vec<Key> = wanted
             .iter()
             .copied()
-            .filter(|k| !self.built.contains_key(k))
+            .filter(|k| !ready(self.built.get(k)))
             .collect();
         let mut drawn: Vec<Key> = wanted
             .iter()
@@ -210,11 +222,13 @@ impl TerrainMeshes {
         self.drawn = drawn;
     }
 
-    /// Whether every wanted chunk is built.
+    /// Whether every wanted chunk is built, with the deep caves near the camera.
     pub fn settled(&self, terrain: &Terrain, cam: Vec3) -> bool {
-        Self::select(terrain, cam)
-            .iter()
-            .all(|k| self.built.contains_key(k))
+        Self::select(terrain, cam).iter().all(|k| {
+            self.built
+                .get(k)
+                .is_some_and(|b| !b.skipped.iter().any(|v| near_void(terrain, *v, cam)))
+        })
     }
 }
 
@@ -267,7 +281,12 @@ pub fn lawn(terrain: &Terrain, c: Vec3, n: Vec3) -> Option<Rgb> {
     })
 }
 
-fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool) -> Rgb {
+/// Cream wall tiles and the stone floor of a tiled hall.
+const TILE: [Rgb; 2] = [Rgb(0xEFE8D8), Rgb(0xE6DECB)];
+const TILE_FLOOR: Rgb = Rgb(0x9A958C);
+
+/// The ground's color at `c`. `tiled` when it walls a tiled hall.
+fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bool) -> Rgb {
     let h = hash(c);
     let pick = |list: &[Rgb]| list[(h * list.len() as f32) as usize % list.len()];
     if !inside && terrain.quay(c.x, c.z) {
@@ -275,6 +294,12 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool) -> Rgb {
     }
     if wet {
         return pick(&BED);
+    }
+    if tiled {
+        if n.y > 0.7 {
+            return TILE_FLOOR.mix(Rgb(0x000000), h * 0.05);
+        }
+        return pick(&TILE);
     }
     if inside {
         // Floors gather moss in broad patches and fade into the walls with the slope, so
@@ -331,7 +356,26 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool) -> Rgb {
 
 /// Surface nets over one chunk. Returns the outside surface, with mouths and shallow cave
 /// walls, and the deep cave walls.
-fn build(terrain: &Terrain, key: Key) -> (MeshBuilder, MeshBuilder) {
+/// Whether the camera is close enough to cave space `v` to need its walls: in it, or
+/// near enough to fly in soon.
+fn near_void(terrain: &Terrain, v: u16, cam: Vec3) -> bool {
+    let void = &terrain.def.voids[v as usize];
+    let b = void_bounds(void);
+    (b.min - cam).max(cam - b.max).max(Vec3::ZERO).length() < DEEP_NEAR
+        && zawnabout_sim::terrain::void_sdf(void, cam) < DEEP_NEAR
+}
+
+/// How near a deep cave the camera must come before chunks mesh its walls (m). Cave
+/// insides start drawing at 150m, so this leaves time to build them.
+const DEEP_NEAR: f32 = 300.0;
+
+/// A chunk's outside and deep cave meshes, and the deep caves it left out because the
+/// camera is not near them (`near` says which are).
+fn build(
+    terrain: &Terrain,
+    key: Key,
+    near: &dyn Fn(u16) -> bool,
+) -> (MeshBuilder, MeshBuilder, Vec<u16>) {
     let mut m = MeshBuilder::new();
     let mut inner = MeshBuilder::new();
     let cell = CELL0 * (1u32 << key.lod) as f32;
@@ -355,309 +399,389 @@ fn build(terrain: &Terrain, key: Key) -> (MeshBuilder, MeshBuilder) {
         Vec3::new(origin.x - pad, -1.0e5, origin.y - pad),
         Vec3::new(origin.x + size + pad, 1.0e5, origin.y + size + pad),
     );
-    let (mut cave_lo, mut cave_hi) = (f32::MAX, f32::MIN);
+    if hi < UNDERWATER && list.is_empty() {
+        return (m, inner, Vec::new());
+    }
+    let tiled: Vec<&zawnabout_sim::terrain::Void> = list
+        .iter()
+        .map(|&i| &terrain.def.voids[i as usize])
+        .filter(|v| v.decor == zawnabout_sim::terrain::Decor::Tiled)
+        .collect();
+    // Only bands of height where a surface can be get meshed: round the ground, and round
+    // each cave space. The rock between them is solid, so a cavern far below costs only
+    // its own band, not a whole column of rock down to it.
+    let mut bands: Vec<(f32, f32, Vec<u16>)> = vec![(lo - pad * 2.0, hi + pad, Vec::new())];
     for &i in &list {
         let b = void_bounds(&terrain.def.voids[i as usize]);
-        cave_lo = cave_lo.min(b.min.y);
-        cave_hi = cave_hi.max(b.max.y);
+        bands.push((b.min.y - pad, b.max.y.min(hi) + pad, vec![i]));
     }
-    if hi < UNDERWATER && list.is_empty() {
-        return (m, inner);
+    bands.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut merged: Vec<(f32, f32, Vec<u16>)> = Vec::new();
+    for (a, b, v) in bands {
+        match merged.last_mut() {
+            Some(last) if a <= last.1 + cell * 3.0 => {
+                last.1 = last.1.max(b);
+                last.2.extend(v);
+            }
+            _ => merged.push((a, b, v)),
+        }
     }
-    if !list.is_empty() {
-        lo = lo.min(cave_lo);
-    }
-    let y0 = (lo / cell).floor() * cell - cell;
-    let ny = ((hi - y0) / cell).ceil() as usize + 2;
-    let at = |i: usize, k: usize, j: usize| -> Vec3 {
-        Vec3::new(
-            origin.x + corner_xz(i),
-            y0 + k as f32 * cell,
-            origin.y + corner_xz(j),
-        )
-    };
-    // Rock distance at every corner. Only corners near caves need the full 3D test, and
-    // of those only the ones near a surface: a coarse pass first finds where that is.
-    let ncy = ny + 1;
-    let mut field = vec![0.0f32; nc * ncy * nc];
-    let cave_zone =
-        |y: f32, h: f32| !list.is_empty() && y > cave_lo - pad && y < cave_hi + pad && y < h + pad;
-    const C: usize = 4;
-    let coarse = |n: usize| (n - 1).div_ceil(C) + 1;
-    let fine = |c: usize, n: usize| (c * C).min(n - 1);
-    let (cx, cy) = (coarse(nc), coarse(ncy));
-    let mut rough = vec![0.0f32; cx * cy * cx];
-    for cj in 0..cx {
-        for ck in 0..cy {
-            for ci in 0..cx {
-                let (i, k, j) = (fine(ci, nc), fine(ck, ncy), fine(cj, nc));
-                let h = heights[j * nc + i];
-                let y = y0 + k as f32 * cell;
-                rough[(cj * cy + ck) * cx + ci] = if cave_zone(y, h) {
-                    terrain.sdf_with(at(i, k, j), h, &list)
-                } else {
-                    y - h
-                };
+    let mut skipped = Vec::new();
+    // For each column of corners, the cave spaces that might reach it and how high and low
+    // they go, so rock far from any of them skips the costly 3D test.
+    let bounds: Vec<(u16, zawnabout_sim::terrain::Bounds)> = list
+        .iter()
+        .map(|&i| (i, void_bounds(&terrain.def.voids[i as usize])))
+        .collect();
+    let mut col_voids: Vec<Vec<u16>> = vec![Vec::new(); nc * nc];
+    let mut col_spans: Vec<Vec<(f32, f32)>> = vec![Vec::new(); nc * nc];
+    if !bounds.is_empty() {
+        for j in 0..nc {
+            for i in 0..nc {
+                let (x, z) = (origin.x + corner_xz(i), origin.y + corner_xz(j));
+                let at = j * nc + i;
+                for (v, b) in &bounds {
+                    if x > b.min.x - pad
+                        && x < b.max.x + pad
+                        && z > b.min.z - pad
+                        && z < b.max.z + pad
+                    {
+                        col_voids[at].push(*v);
+                        col_spans[at].push((b.min.y - pad, b.max.y + pad));
+                    }
+                }
             }
         }
     }
-    // Coarse values are only trusted this far from a surface.
-    let band = C as f32 * cell * 1.5;
-    let lerp_axis = |f: usize, n: usize| {
-        let c = (f / C).min(coarse(n) - 2);
-        let (a, b) = (fine(c, n), fine(c + 1, n));
-        (c, (f - a) as f32 / (b - a).max(1) as f32)
-    };
-    for j in 0..nc {
-        let (cj, tj) = lerp_axis(j, nc);
-        for k in 0..ncy {
-            let (ck, tk) = lerp_axis(k, ncy);
-            for i in 0..nc {
-                let h = heights[j * nc + i];
-                let y = y0 + k as f32 * cell;
-                let mut d = y - h;
-                if cave_zone(y, h) {
-                    let (ci, ti) = lerp_axis(i, nc);
-                    let r = |a: usize, b: usize, c: usize| {
-                        rough[((cj + c) * cy + ck + b) * cx + ci + a]
-                    };
-                    let mixf = |a: f32, b: f32, t: f32| a + (b - a) * t;
-                    let guess = mixf(
-                        mixf(
-                            mixf(r(0, 0, 0), r(1, 0, 0), ti),
-                            mixf(r(0, 1, 0), r(1, 1, 0), ti),
-                            tk,
-                        ),
-                        mixf(
-                            mixf(r(0, 0, 1), r(1, 0, 1), ti),
-                            mixf(r(0, 1, 1), r(1, 1, 1), ti),
-                            tk,
-                        ),
-                        tj,
-                    );
-                    // Trust the guess only when the whole coarse cell is far on one side.
-                    let corners = [
-                        r(0, 0, 0),
-                        r(1, 0, 0),
-                        r(0, 1, 0),
-                        r(1, 1, 0),
-                        r(0, 0, 1),
-                        r(1, 0, 1),
-                        r(0, 1, 1),
-                        r(1, 1, 1),
-                    ];
-                    let clear =
-                        corners.iter().all(|c| *c > band) || corners.iter().all(|c| *c < -band);
-                    d = if clear {
-                        guess
+    // Bands of cave far under the ground only ever join the deep mesh, so they wait
+    // until the camera comes near one of their caves.
+    let ground = lo;
+    for (lo, hi, voids) in merged {
+        if hi < ground - SHALLOW && !voids.iter().any(|v| near(*v)) {
+            skipped.extend(voids);
+            continue;
+        }
+        let y0 = (lo / cell).floor() * cell - cell;
+        let ny = ((hi - y0) / cell).ceil() as usize + 2;
+        let at = |i: usize, k: usize, j: usize| -> Vec3 {
+            Vec3::new(
+                origin.x + corner_xz(i),
+                y0 + k as f32 * cell,
+                origin.y + corner_xz(j),
+            )
+        };
+        // Rock distance at every corner. Only corners near caves need the full 3D test, and
+        // of those only the ones near a surface: a coarse pass first finds where that is.
+        let ncy = ny + 1;
+        let mut field = vec![0.0f32; nc * ncy * nc];
+        let cave_zone = |col: usize, y: f32, h: f32| {
+            y < h + pad && col_spans[col].iter().any(|&(lo, hi)| y > lo && y < hi)
+        };
+        const C: usize = 4;
+        let coarse = |n: usize| (n - 1).div_ceil(C) + 1;
+        let fine = |c: usize, n: usize| (c * C).min(n - 1);
+        let (cx, cy) = (coarse(nc), coarse(ncy));
+        let mut rough = vec![0.0f32; cx * cy * cx];
+        for cj in 0..cx {
+            for ck in 0..cy {
+                for ci in 0..cx {
+                    let (i, k, j) = (fine(ci, nc), fine(ck, ncy), fine(cj, nc));
+                    let h = heights[j * nc + i];
+                    let y = y0 + k as f32 * cell;
+                    let col = j * nc + i;
+                    rough[(cj * cy + ck) * cx + ci] = if cave_zone(col, y, h) {
+                        terrain.sdf_with(at(i, k, j), h, &col_voids[col])
                     } else {
-                        terrain.sdf_with(at(i, k, j), h, &list)
+                        y - h
                     };
                 }
-                field[(j * ncy + k) * nc + i] = d;
             }
         }
-    }
-    let sdf = |i: usize, k: usize, j: usize| -> f32 { field[(j * ncy + k) * nc + i] };
-    // For each column, the lowest corner with open air all the way up to the sky. Below
-    // the ground it means a sinkhole, shaft or skylight opens there.
-    let mut open_from = vec![ncy; nc * nc];
-    let mut skylight = false;
-    for j in 0..nc {
-        for i in 0..nc {
-            let mut k = ncy;
-            while k > 0 && sdf(i, k - 1, j) > 0.0 {
-                k -= 1;
+        // Coarse values are only trusted this far from a surface.
+        let band = C as f32 * cell * 1.5;
+        let lerp_axis = |f: usize, n: usize| {
+            let c = (f / C).min(coarse(n) - 2);
+            let (a, b) = (fine(c, n), fine(c + 1, n));
+            (c, (f - a) as f32 / (b - a).max(1) as f32)
+        };
+        for j in 0..nc {
+            let (cj, tj) = lerp_axis(j, nc);
+            for k in 0..ncy {
+                let (ck, tk) = lerp_axis(k, ncy);
+                for i in 0..nc {
+                    let h = heights[j * nc + i];
+                    let y = y0 + k as f32 * cell;
+                    let col = j * nc + i;
+                    let mut d = y - h;
+                    if cave_zone(col, y, h) {
+                        let (ci, ti) = lerp_axis(i, nc);
+                        let r = |a: usize, b: usize, c: usize| {
+                            rough[((cj + c) * cy + ck + b) * cx + ci + a]
+                        };
+                        let mixf = |a: f32, b: f32, t: f32| a + (b - a) * t;
+                        let guess = mixf(
+                            mixf(
+                                mixf(r(0, 0, 0), r(1, 0, 0), ti),
+                                mixf(r(0, 1, 0), r(1, 1, 0), ti),
+                                tk,
+                            ),
+                            mixf(
+                                mixf(r(0, 0, 1), r(1, 0, 1), ti),
+                                mixf(r(0, 1, 1), r(1, 1, 1), ti),
+                                tk,
+                            ),
+                            tj,
+                        );
+                        // Trust the guess only when the whole coarse cell is far on one side.
+                        let corners = [
+                            r(0, 0, 0),
+                            r(1, 0, 0),
+                            r(0, 1, 0),
+                            r(1, 1, 0),
+                            r(0, 0, 1),
+                            r(1, 0, 1),
+                            r(0, 1, 1),
+                            r(1, 1, 1),
+                        ];
+                        let clear =
+                            corners.iter().all(|c| *c > band) || corners.iter().all(|c| *c < -band);
+                        d = if clear {
+                            guess
+                        } else {
+                            terrain.sdf_with(at(i, k, j), h, &col_voids[col])
+                        };
+                    }
+                    field[(j * ncy + k) * nc + i] = d;
+                }
             }
-            open_from[j * nc + i] = k;
-            skylight |= y0 + k as f32 * cell < heights[j * nc + i] - cell * 2.0;
         }
-    }
-    // Whether open sky lies straight above `p`.
-    let sky_above = |p: Vec3| {
-        let i = ((p.x - origin.x) / cell + 1.0)
-            .round()
-            .clamp(0.0, (nc - 1) as f32) as usize;
-        let j = ((p.z - origin.y) / cell + 1.0)
-            .round()
-            .clamp(0.0, (nc - 1) as f32) as usize;
-        let k = ((p.y - y0) / cell).ceil().max(0.0) as usize;
-        k >= open_from[j * nc + i]
-    };
-
-    // One vertex per cell that the surface passes through, at the mean edge crossing.
-    let nx = nc - 1;
-    let mut verts = vec![u32::MAX; nx * ny * nx];
-    let mut points: Vec<Vec3> = Vec::new();
-    let edges = [
-        ((0, 0, 0), (1, 0, 0)),
-        ((0, 1, 0), (1, 1, 0)),
-        ((0, 0, 1), (1, 0, 1)),
-        ((0, 1, 1), (1, 1, 1)),
-        ((0, 0, 0), (0, 1, 0)),
-        ((1, 0, 0), (1, 1, 0)),
-        ((0, 0, 1), (0, 1, 1)),
-        ((1, 0, 1), (1, 1, 1)),
-        ((0, 0, 0), (0, 0, 1)),
-        ((1, 0, 0), (1, 0, 1)),
-        ((0, 1, 0), (0, 1, 1)),
-        ((1, 1, 0), (1, 1, 1)),
-    ];
-    for j in 0..nx {
-        for k in 0..ny {
-            for i in 0..nx {
-                // Most cells are all rock or all air: no surface, nothing to do.
-                let first = sdf(i, k, j) < 0.0;
-                let mixed = [
-                    (1, 0, 0),
-                    (0, 1, 0),
-                    (1, 1, 0),
-                    (0, 0, 1),
-                    (1, 0, 1),
-                    (0, 1, 1),
-                    (1, 1, 1),
-                ]
-                .iter()
-                .any(|&(a, b, c)| (sdf(i + a, k + b, j + c) < 0.0) != first);
-                if !mixed {
+        let sdf = |i: usize, k: usize, j: usize| -> f32 { field[(j * ncy + k) * nc + i] };
+        // For each column, the lowest corner with open air all the way up to the sky. Below
+        // the ground it means a sinkhole, shaft or skylight opens there.
+        let mut open_from = vec![ncy; nc * nc];
+        let mut skylight = false;
+        for j in 0..nc {
+            for i in 0..nc {
+                let mut k = ncy;
+                while k > 0 && sdf(i, k - 1, j) > 0.0 {
+                    k -= 1;
+                }
+                // A band whose top is rock (a cave band under the ground) is closed to
+                // the sky in that column.
+                if k == ncy {
                     continue;
                 }
-                let mut sum = Vec3::ZERO;
-                let mut count = 0;
-                for ((ai, ak, aj), (bi, bk, bj)) in edges {
-                    let (da, db) = (sdf(i + ai, k + ak, j + aj), sdf(i + bi, k + bk, j + bj));
-                    if (da < 0.0) != (db < 0.0) {
-                        let t = da / (da - db);
-                        sum += at(i + ai, k + ak, j + aj).lerp(at(i + bi, k + bk, j + bj), t);
-                        count += 1;
+                open_from[j * nc + i] = k;
+                skylight |= y0 + k as f32 * cell < heights[j * nc + i] - cell * 2.0;
+            }
+        }
+        // Whether open sky lies straight above `p`.
+        let sky_above = |p: Vec3| {
+            let i = ((p.x - origin.x) / cell + 1.0)
+                .round()
+                .clamp(0.0, (nc - 1) as f32) as usize;
+            let j = ((p.z - origin.y) / cell + 1.0)
+                .round()
+                .clamp(0.0, (nc - 1) as f32) as usize;
+            let k = ((p.y - y0) / cell).ceil().max(0.0) as usize;
+            k >= open_from[j * nc + i]
+        };
+
+        // One vertex per cell that the surface passes through, at the mean edge crossing.
+        let nx = nc - 1;
+        let mut verts = vec![u32::MAX; nx * ny * nx];
+        let mut points: Vec<Vec3> = Vec::new();
+        let edges = [
+            ((0, 0, 0), (1, 0, 0)),
+            ((0, 1, 0), (1, 1, 0)),
+            ((0, 0, 1), (1, 0, 1)),
+            ((0, 1, 1), (1, 1, 1)),
+            ((0, 0, 0), (0, 1, 0)),
+            ((1, 0, 0), (1, 1, 0)),
+            ((0, 0, 1), (0, 1, 1)),
+            ((1, 0, 1), (1, 1, 1)),
+            ((0, 0, 0), (0, 0, 1)),
+            ((1, 0, 0), (1, 0, 1)),
+            ((0, 1, 0), (0, 1, 1)),
+            ((1, 1, 0), (1, 1, 1)),
+        ];
+        for j in 0..nx {
+            for k in 0..ny {
+                for i in 0..nx {
+                    // Most cells are all rock or all air: no surface, nothing to do.
+                    let first = sdf(i, k, j) < 0.0;
+                    let mixed = [
+                        (1, 0, 0),
+                        (0, 1, 0),
+                        (1, 1, 0),
+                        (0, 0, 1),
+                        (1, 0, 1),
+                        (0, 1, 1),
+                        (1, 1, 1),
+                    ]
+                    .iter()
+                    .any(|&(a, b, c)| (sdf(i + a, k + b, j + c) < 0.0) != first);
+                    if !mixed {
+                        continue;
                     }
-                }
-                if count > 0 {
-                    verts[(j * ny + k) * nx + i] = points.len() as u32;
-                    points.push(sum / count as f32);
+                    let mut sum = Vec3::ZERO;
+                    let mut count = 0;
+                    for ((ai, ak, aj), (bi, bk, bj)) in edges {
+                        let (da, db) = (sdf(i + ai, k + ak, j + aj), sdf(i + bi, k + bk, j + bj));
+                        if (da < 0.0) != (db < 0.0) {
+                            let t = da / (da - db);
+                            sum += at(i + ai, k + ak, j + aj).lerp(at(i + bi, k + bk, j + bj), t);
+                            count += 1;
+                        }
+                    }
+                    if count > 0 {
+                        verts[(j * ny + k) * nx + i] = points.len() as u32;
+                        points.push(sum / count as f32);
+                    }
                 }
             }
         }
-    }
-    let vert = |i: usize, k: usize, j: usize| -> Option<Vec3> {
-        let v = verts[(j * ny + k) * nx + i];
-        (v != u32::MAX).then(|| points[v as usize])
-    };
-    let sink = Vec3::Y * (0.3 * ((1u32 << key.lod) - 1) as f32);
-    let mut quad = |q: [Option<Vec3>; 4], outward: Vec3| {
-        let [Some(a), Some(b), Some(c), Some(d)] = q else {
-            return;
+        let vert = |i: usize, k: usize, j: usize| -> Option<Vec3> {
+            let v = verts[(j * ny + k) * nx + i];
+            (v != u32::MAX).then(|| points[v as usize])
         };
-        let mid = (a + b + c + d) * 0.25;
-        // A cave wall sits on a cave space well under the real ground. A cliff face or a
-        // slope over a shallow cave only looks deep on the coarse grid, so it is not one.
-        let depth = if list.is_empty() {
-            0.0
-        } else {
-            terrain.height(mid.x, mid.z) - mid.y
-        };
-        let cave = depth > 4.0 + cell * 0.5 && terrain.voids_sdf(mid, &list) < cell * 0.75 + 2.0;
-        // Rock under a skylight is lit and seen from outside like the open ground.
-        let lit = cave && sky_above(mid);
-        let dark = ((1.0 - smoothstep(4.0, 45.0, depth)) * 255.0) as u8;
-        let depth = if cave && !lit { depth } else { 0.0 };
-        // The first stretch into a cave stays with the outside, so mouths look like
-        // openings from afar instead of holes onto the sky.
-        let inside = cave && depth > 60.0;
-        if !inside && a.y.max(b.y).max(c.y).max(d.y) < UNDERWATER {
-            return;
-        }
-        // Sky light fades with depth. The shader reads it from vertex alpha.
-        let light = ((1.0 - smoothstep(4.0, 45.0, depth)) * 255.0) as u8;
-        // How high each corner sits above the water near here, for the shore in the shader.
-        // Caves only know their own pools and rivers, never the sea or lakes far above.
-        let level = if cave {
-            terrain.cave_water(mid.x, mid.z, mid.y - 13.0)
-        } else {
-            terrain.water(mid.x, mid.z, mid.y - 13.0)
-        };
-        // Shallow walls, and walls of a cave that opens to the sky in this chunk, can be
-        // seen from outside, so they join the outside mesh.
-        let out = if !inside || depth < SHALLOW || skylight {
-            &mut m
-        } else {
-            &mut inner
-        };
-        let (a, b, c, d) = (a - sink, b - sink, c - sink, d - sink);
-        let n = (b - a).cross(c - a);
-        let (a, b, c, d) = if n.dot(outward) < 0.0 {
-            (a, d, c, b)
-        } else {
-            (a, b, c, d)
-        };
-        for (p, q, r) in [(a, b, c), (a, c, d)] {
-            let n = (q - p).cross(r - p).normalize_or_zero();
-            let wet = level.is_some_and(|l| (p.y + q.y + r.y) / 3.0 < l);
-            out.tri(p, q, r, color(terrain, (p + q + r) / 3.0, n, cave, wet));
-            let at = out.verts.len() - 3;
-            for v in &mut out.verts[at..] {
-                // Under a skylight each corner asks for itself, so the patch of daylight
-                // fades out at its edge instead of ending in a hard square.
-                v.color[3] = if cave {
-                    if sky_above(Vec3::from(v.pos) + sink) {
-                        dark.max(170)
+        let sink = Vec3::Y * (0.3 * ((1u32 << key.lod) - 1) as f32);
+        let mut quad = |q: [Option<Vec3>; 4], outward: Vec3| {
+            let [Some(a), Some(b), Some(c), Some(d)] = q else {
+                return;
+            };
+            let mid = (a + b + c + d) * 0.25;
+            // A cave wall sits on a cave space well under the real ground. A cliff face or a
+            // slope over a shallow cave only looks deep on the coarse grid, so it is not one.
+            let depth = if list.is_empty() {
+                0.0
+            } else {
+                terrain.height(mid.x, mid.z) - mid.y
+            };
+            let near = {
+                let i = ((mid.x - origin.x) / cell + 1.0)
+                    .round()
+                    .clamp(0.0, (nc - 1) as f32) as usize;
+                let j = ((mid.z - origin.y) / cell + 1.0)
+                    .round()
+                    .clamp(0.0, (nc - 1) as f32) as usize;
+                &col_voids[j * nc + i]
+            };
+            let cave = depth > 4.0 + cell * 0.5 && terrain.voids_sdf(mid, near) < cell * 0.75 + 2.0;
+            // Walls of a tiled hall.
+            let tile = cave
+                && tiled
+                    .iter()
+                    .any(|v| zawnabout_sim::terrain::void_sdf(v, mid) < cell * 0.75 + 2.0);
+            // Rock under a skylight is lit and seen from outside like the open ground.
+            let lit = cave && sky_above(mid);
+            let dark = ((1.0 - smoothstep(4.0, 45.0, depth)) * 255.0) as u8;
+            let depth = if cave && !lit { depth } else { 0.0 };
+            // The first stretch into a cave stays with the outside, so mouths look like
+            // openings from afar instead of holes onto the sky.
+            let inside = cave && depth > 60.0;
+            // Open ground deep under the sea is hidden by the water, but cave walls down there
+            // (a subway, a sea cave) are seen from inside.
+            if !cave && a.y.max(b.y).max(c.y).max(d.y) < UNDERWATER {
+                return;
+            }
+            // Sky light fades with depth. The shader reads it from vertex alpha.
+            let light = ((1.0 - smoothstep(4.0, 45.0, depth)) * 255.0) as u8;
+            // How high each corner sits above the water near here, for the shore in the shader.
+            // Caves only know their own pools and rivers, never the sea or lakes far above.
+            let level = if cave {
+                terrain.cave_water(mid.x, mid.z, mid.y - 13.0)
+            } else {
+                terrain.water(mid.x, mid.z, mid.y - 13.0)
+            };
+            // Shallow walls, and walls of a cave that opens to the sky in this chunk, can be
+            // seen from outside, so they join the outside mesh.
+            let out = if !inside || depth < SHALLOW || skylight {
+                &mut m
+            } else {
+                &mut inner
+            };
+            let (a, b, c, d) = (a - sink, b - sink, c - sink, d - sink);
+            let n = (b - a).cross(c - a);
+            let (a, b, c, d) = if n.dot(outward) < 0.0 {
+                (a, d, c, b)
+            } else {
+                (a, b, c, d)
+            };
+            for (p, q, r) in [(a, b, c), (a, c, d)] {
+                let n = (q - p).cross(r - p).normalize_or_zero();
+                let wet = level.is_some_and(|l| (p.y + q.y + r.y) / 3.0 < l);
+                out.tri(
+                    p,
+                    q,
+                    r,
+                    color(terrain, (p + q + r) / 3.0, n, cave, wet, tile),
+                );
+                let at = out.verts.len() - 3;
+                for v in &mut out.verts[at..] {
+                    // Under a skylight each corner asks for itself, so the patch of daylight
+                    // fades out at its edge instead of ending in a hard square.
+                    v.color[3] = if cave {
+                        if sky_above(Vec3::from(v.pos) + sink) {
+                            dark.max(170)
+                        } else {
+                            dark
+                        }
                     } else {
-                        dark
-                    }
-                } else {
-                    light
-                };
-                v.normal[3] = match level {
-                    Some(l) => ((v.pos[1] + sink.y - l) * 10.0).clamp(-127.0, 127.0) as i8,
-                    None => 127,
-                };
+                        light
+                    };
+                    v.normal[3] = match level {
+                        Some(l) => ((v.pos[1] + sink.y - l) * 10.0).clamp(-127.0, 127.0) as i8,
+                        None => 127,
+                    };
+                }
             }
-        }
-    };
-    // A quad for each grid edge the surface crosses, joining the four cells around it.
-    for j in 1..nx {
-        for k in 1..ny {
-            for i in 1..nx {
-                let s = sdf(i, k, j);
-                let solid = s < 0.0;
-                if (sdf(i + 1, k, j) < 0.0) != solid {
-                    let out = if solid { Vec3::X } else { -Vec3::X };
-                    quad(
-                        [
-                            vert(i, k - 1, j - 1),
-                            vert(i, k, j - 1),
-                            vert(i, k, j),
-                            vert(i, k - 1, j),
-                        ],
-                        out,
-                    );
-                }
-                if (sdf(i, k + 1, j) < 0.0) != solid {
-                    let out = if solid { Vec3::Y } else { -Vec3::Y };
-                    quad(
-                        [
-                            vert(i - 1, k, j - 1),
-                            vert(i, k, j - 1),
-                            vert(i, k, j),
-                            vert(i - 1, k, j),
-                        ],
-                        out,
-                    );
-                }
-                if (sdf(i, k, j + 1) < 0.0) != solid {
-                    let out = if solid { Vec3::Z } else { -Vec3::Z };
-                    quad(
-                        [
-                            vert(i - 1, k - 1, j),
-                            vert(i, k - 1, j),
-                            vert(i, k, j),
-                            vert(i - 1, k, j),
-                        ],
-                        out,
-                    );
+        };
+        // A quad for each grid edge the surface crosses, joining the four cells around it.
+        for j in 1..nx {
+            for k in 1..ny {
+                for i in 1..nx {
+                    let s = sdf(i, k, j);
+                    let solid = s < 0.0;
+                    if (sdf(i + 1, k, j) < 0.0) != solid {
+                        let out = if solid { Vec3::X } else { -Vec3::X };
+                        quad(
+                            [
+                                vert(i, k - 1, j - 1),
+                                vert(i, k, j - 1),
+                                vert(i, k, j),
+                                vert(i, k - 1, j),
+                            ],
+                            out,
+                        );
+                    }
+                    if (sdf(i, k + 1, j) < 0.0) != solid {
+                        let out = if solid { Vec3::Y } else { -Vec3::Y };
+                        quad(
+                            [
+                                vert(i - 1, k, j - 1),
+                                vert(i, k, j - 1),
+                                vert(i, k, j),
+                                vert(i - 1, k, j),
+                            ],
+                            out,
+                        );
+                    }
+                    if (sdf(i, k, j + 1) < 0.0) != solid {
+                        let out = if solid { Vec3::Z } else { -Vec3::Z };
+                        quad(
+                            [
+                                vert(i - 1, k - 1, j),
+                                vert(i, k - 1, j),
+                                vert(i, k, j),
+                                vert(i - 1, k, j),
+                            ],
+                            out,
+                        );
+                    }
                 }
             }
         }
     }
-    (m, inner)
+    (m, inner, skipped)
 }

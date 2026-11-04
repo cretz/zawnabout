@@ -20,7 +20,12 @@ pub struct RoadPoint {
     /// Road surface height, or the deck height on a bridge.
     pub y: f32,
     pub bridge: bool,
+    /// Runs through a tunnel: the ground overhead is left alone.
+    pub tunnel: bool,
 }
+
+/// How far under the ground a road point must be to count as in a tunnel (m).
+const UNDER: f32 = 4.0;
 
 /// The road nearest a spot, for coloring the ground under it.
 #[derive(Clone, Copy, Debug)]
@@ -212,14 +217,20 @@ impl Terrain {
                 .iter()
                 .map(|q| self.height_at(q[0], q[1], Stage::Base))
                 .collect();
+            // A point set well below the ground runs in a tunnel: water overhead is no
+            // reason for a bridge.
             let wet: Vec<bool> = r
                 .pts
                 .iter()
                 .zip(&ground)
-                .map(|(q, g)| self.still_water(q[0], q[1], *g - 0.5).is_some())
+                .map(|(q, g)| {
+                    let under = q[2] > NO_Y + 1.0 && q[2] < g - UNDER;
+                    !under && self.still_water(q[0], q[1], *g - 0.5).is_some()
+                })
                 .collect();
             let n = r.pts.len();
-            let ys: Vec<f32> = if r.pts[0][2] > NO_Y + 1.0 {
+            let held = |q: &[f32; 3]| q[2] > NO_Y + 1.0;
+            let ys: Vec<f32> = if r.pts.iter().all(held) {
                 r.pts.iter().map(|q| q[2]).collect()
             } else if r.runway {
                 // Dead flat, at the mean of the ground along it.
@@ -234,9 +245,13 @@ impl Terrain {
                     / 9.0;
                 vec![mean.max(2.0); n]
             } else {
-                // A moving average over dry points, so the road rolls gently.
+                // A moving average over dry points, so the road rolls gently, except where
+                // a point holds its own height.
                 (0..n)
                     .map(|i| {
+                        if held(&r.pts[i]) {
+                            return r.pts[i][2];
+                        }
                         let (lo, hi) = (i.saturating_sub(3), (i + 3).min(n - 1));
                         let (mut sum, mut count) = (0.0, 0.0);
                         for k in lo..=hi {
@@ -259,10 +274,26 @@ impl Terrain {
                 .map(|(y, w)| RoadPoint {
                     y: *y,
                     bridge: *w && !r.runway,
+                    tunnel: false,
                 })
                 .collect();
             arch_bridges(&mut pts, 30.0);
             out.push(pts);
+        }
+        out
+    }
+
+    /// Marks the road points that run inside a passage or cavern.
+    pub(super) fn mark_tunnels(&self) -> Vec<Vec<RoadPoint>> {
+        let mut out = (*self.roads).clone();
+        for (r, pts) in self.def.roads.iter().zip(out.iter_mut()) {
+            for (q, rp) in r.pts.iter().zip(pts.iter_mut()) {
+                let p = Vec2::new(q[0], q[1]);
+                rp.tunnel = self.index.cell(p).is_some_and(|(cell, _)| {
+                    !cell.voids.is_empty()
+                        && self.voids_sdf(glam::Vec3::new(p.x, rp.y + 2.0, p.y), &cell.voids) < 0.0
+                });
+            }
         }
         out
     }
@@ -289,7 +320,8 @@ impl Terrain {
                     let over = d < half + 4.0
                         || (d < half + 60.0
                             && self.height_at(q[0], q[1], Stage::Full) < out[ri][i].y - 1.5);
-                    if over && !out[ri][i].bridge {
+                    let under = out[ri][i].y < self.height_at(q[0], q[1], Stage::Base) - UNDER;
+                    if over && !under && !out[ri][i].bridge {
                         out[ri][i].bridge = true;
                         changed = true;
                     }
@@ -414,16 +446,11 @@ impl Terrain {
             let r = &self.def.roads[e.idx as usize];
             let rp = &self.roads[e.idx as usize];
             let (d, s, t) = nearest(r.pts, &e.segs, p);
-            if rp[s].bridge || rp[s + 1].bridge {
+            // Under bridges and over tunnels the ground stays as it is.
+            if rp[s].bridge || rp[s + 1].bridge || rp[s].tunnel || rp[s + 1].tunnel {
                 continue;
             }
             let y = mix(rp[s].y, rp[s + 1].y, t);
-            // In a tunnel the hill stays as it is overhead.
-            if !cell.voids.is_empty()
-                && self.voids_sdf(glam::Vec3::new(p.x, y + 2.0, p.y), &cell.voids) < 0.0
-            {
-                continue;
-            }
             // A flat shoulder wider than a terrain cell, so the ground never pokes through.
             let half = r.w * 0.5 + 4.0;
             let reach = 4.0 + (h - y).abs() * 0.9;

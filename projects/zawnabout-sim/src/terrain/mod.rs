@@ -238,7 +238,23 @@ pub struct Terrain {
     roads: Arc<Vec<Vec<RoadPoint>>>,
     /// Bounds of every void, in the same order.
     bounds: Arc<Vec<Bounds>>,
+    /// Level ground under big landmarks.
+    pads: Arc<Vec<Pad>>,
 }
+
+/// Level ground under a big landmark: a rectangle in the landmark's frame.
+#[derive(Clone, Debug)]
+struct Pad {
+    at: Vec2,
+    axis: Vec2,
+    half: Vec2,
+    y: f32,
+}
+
+/// Landmarks narrower than this (half width, m) sit on the ground as it is.
+const PAD_MIN: f32 = 20.0;
+/// The farthest a pad's slope eases back to the hillside (m).
+const PAD_REACH_MAX: f32 = 40.0;
 
 pub fn smoothstep(lo: f32, hi: f32, x: f32) -> f32 {
     let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
@@ -392,11 +408,82 @@ impl Terrain {
             levels: Arc::new(Vec::new()),
             roads: Arc::new(Vec::new()),
             bounds: Arc::new(def.voids.iter().map(void_bounds).collect()),
+            pads: Arc::new(Vec::new()),
         };
         t.roads = Arc::new(t.road_profiles());
         t.levels = Arc::new(t.measure_rivers());
         t.roads = Arc::new(t.mark_bridges());
+        t.roads = Arc::new(t.mark_tunnels());
+        t.pads = Arc::new(t.landmark_pads());
         t
+    }
+
+    /// Level ground under every big landmark, at the mean height of its footprint, so
+    /// parks, stadiums and malls stand flat on a hillside.
+    fn landmark_pads(&self) -> Vec<Pad> {
+        let mut out = Vec::new();
+        for m in self.def.marks.iter().filter(|m| m.ground) {
+            let Some(rest) = m.kind.strip_prefix("landmark:") else {
+                continue;
+            };
+            let mut parts = rest.splitn(3, ':');
+            let name = parts.next().unwrap_or_default();
+            let rot: f32 = parts.next().and_then(|r| r.parse().ok()).unwrap_or(0.0);
+            let text = parts.next().unwrap_or_default();
+            let Some(&(_, kind)) = crate::landmark::KINDS.iter().find(|(n, _)| *n == name) else {
+                continue;
+            };
+            if kind == crate::town::Kind::Sign {
+                continue;
+            }
+            let half = crate::landmark::footprint(&crate::landmark::pieces(kind, 0, text));
+            if half.min_element() < PAD_MIN {
+                continue;
+            }
+            let r = rot.to_radians();
+            let axis = Vec2::new(r.cos(), -r.sin());
+            let front = Vec2::new(-axis.y, axis.x);
+            let at = Vec2::new(m.pos[0], m.pos[2]);
+            let mut sum = 0.0;
+            for i in -2..=2 {
+                for j in -2..=2 {
+                    let q = at + axis * half.x * i as f32 * 0.45 + front * half.y * j as f32 * 0.45;
+                    sum += self.height_at(q.x, q.y, Stage::Full);
+                }
+            }
+            out.push(Pad {
+                at,
+                axis,
+                half: half + Vec2::splat(4.0),
+                y: sum / 25.0,
+            });
+        }
+        out
+    }
+
+    /// Whether `(x, z)` is on the level ground under a big landmark.
+    pub fn on_pad(&self, x: f32, z: f32) -> bool {
+        let p = Vec2::new(x, z);
+        self.pads.iter().any(|pad| {
+            let d = p - pad.at;
+            let q = Vec2::new(d.dot(pad.axis), pad.axis.perp_dot(d));
+            q.x.abs() < pad.half.x && q.y.abs() < pad.half.y
+        })
+    }
+
+    /// Pulls the ground level under big landmarks, easing back to the hillside round them.
+    fn level_pads(&self, p: Vec2, mut h: f32) -> f32 {
+        for pad in self.pads.iter() {
+            let d = p - pad.at;
+            if d.length_squared() > (pad.half.length() + PAD_REACH_MAX).powi(2) {
+                continue;
+            }
+            let q = Vec2::new(d.dot(pad.axis), pad.axis.perp_dot(d));
+            let out = (q.abs() - pad.half).max(Vec2::ZERO).length();
+            let reach = (6.0 + (h - pad.y).abs() * 1.2).min(PAD_REACH_MAX);
+            h = mix(h, pad.y, 1.0 - smoothstep(0.0, reach, out));
+        }
+        h
     }
 
     pub fn half_size(&self) -> f32 {
@@ -593,6 +680,7 @@ impl Terrain {
             let f = 1.0 - smoothstep(half - 2.0, half + 1.0, d);
             h = mix(h, s.y, f);
         }
+        h = self.level_pads(p, h);
         if stage >= Stage::Roads {
             h = self.grade_roads(cell, p, h);
         }

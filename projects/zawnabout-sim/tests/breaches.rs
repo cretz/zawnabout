@@ -225,8 +225,8 @@ fn near_buildings() {
     for b in &w.buildings {
         if glam::Vec2::new(b.pos.x, b.pos.z).distance(p) < 40.0 {
             println!(
-                "{:?} {:?} pos {} size {} roof {}",
-                b.kind, b.style, b.pos, b.size, b.roof
+                "{:?} {:?} pos {} size {} roof {} axis {}",
+                b.kind, b.style, b.pos, b.size, b.roof, b.axis
             );
             println!("  support {}", w.support(p.x, p.y, 1e4));
         }
@@ -263,7 +263,7 @@ fn road_ends() {
     }
 }
 
-/// Flat dry spots for something `r` across, searched over a square:
+/// Flat dry spots off the roads for something `r` across, searched over a square:
 /// `FLAT="cx cz half step r" cargo test --release --test breaches flat_spots -- --ignored --nocapture`.
 #[test]
 #[ignore]
@@ -294,7 +294,9 @@ fn flat_spots() {
                 let h = t.height(x + dx, z + dz);
                 lo = lo.min(h);
                 hi = hi.max(h);
-                wet |= h < 2.0 || t.water(x + dx, z + dz, h).is_some();
+                wet |= h < 2.0
+                    || t.water(x + dx, z + dz, h).is_some()
+                    || t.road_spot(x + dx, z + dz, 2.0).is_some();
             }
             if !wet {
                 let cover = t.cover(x, z).map(|c| c.id).unwrap_or("open");
@@ -305,7 +307,11 @@ fn flat_spots() {
         z += step;
     }
     found.sort_by(|a, b| a.0.total_cmp(&b.0));
-    for (d, x, z, h, c) in found.iter().take(8) {
+    let min_h: f32 = std::env::var("MIN_H")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(f32::MIN);
+    for (d, x, z, h, c) in found.iter().filter(|f| f.3 >= min_h).take(8) {
         println!("{x} {z}: spread {d:.1} h {h:.0} {c}");
     }
 }
@@ -317,12 +323,129 @@ fn flat_spots() {
 fn first_vehicle() {
     let w = zawnabout_sim::World::generate(1);
     let want = std::env::var("KIND").unwrap_or_default();
+    // Optionally the first of that kind with at least this variant (`VARIANT=4`).
+    let variant: u8 = std::env::var("VARIANT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     if let Some(i) = w
         .traffic
         .vehicles
         .iter()
-        .position(|v| format!("{:?}", v.kind) == want)
+        .position(|v| format!("{:?}", v.kind) == want && v.variant >= variant)
     {
         println!("first {want} is {i}");
+    }
+}
+
+/// Every run of bridge points on every road: where it starts and ends, how long, and its
+/// deck heights: `cargo test --release --test breaches bridge_spans -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn bridge_spans() {
+    let t = Terrain::new(&WORLD);
+    for (i, r) in t.def.roads.iter().enumerate() {
+        let prof = t.road_points(i);
+        let mut k = 0;
+        while k < prof.len() {
+            if !prof[k].bridge {
+                k += 1;
+                continue;
+            }
+            let s = k;
+            while k < prof.len() && prof[k].bridge {
+                k += 1;
+            }
+            let (a, b) = (r.pts[s], r.pts[k - 1]);
+            let len: f32 = (s..k - 1)
+                .map(|j| {
+                    glam::Vec2::new(r.pts[j][0], r.pts[j][1])
+                        .distance(glam::Vec2::new(r.pts[j + 1][0], r.pts[j + 1][1]))
+                })
+                .sum();
+            let top = prof[s..k].iter().map(|p| p.y).fold(f32::MIN, f32::max);
+            println!(
+                "{} [{s}..{k}] ({:.0},{:.0})->({:.0},{:.0}) len {len:.0} ends {:.1}/{:.1} top {top:.1}",
+                r.id,
+                a[0],
+                a[1],
+                b[0],
+                b[1],
+                prof[s].y,
+                prof[k - 1].y
+            );
+        }
+    }
+}
+
+/// The suspension bridges and their towers:
+/// `cargo test --release --test breaches suspensions -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn suspensions() {
+    let w = zawnabout_sim::World::generate(1);
+    for b in &w.bridges {
+        for t in b.towers {
+            println!("tower at {} base {} top {}", t.at, t.base, t.top);
+        }
+        println!(
+            "  cable points {} hangers {}",
+            b.cables[0].len(),
+            b.hangers.len()
+        );
+    }
+    let towers = w
+        .buildings
+        .iter()
+        .filter(|b| b.kind == zawnabout_sim::town::Kind::BridgeTower)
+        .count();
+    println!("{} bridges, {towers} tower buildings", w.bridges.len());
+}
+
+/// Each road's highest point and steepest stretch, to find where a tunnel belongs:
+/// `cargo test --release --test breaches road_climbs -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn road_climbs() {
+    let t = Terrain::new(&WORLD);
+    for (i, r) in t.def.roads.iter().enumerate() {
+        let prof = t.road_points(i);
+        let (mut top, mut at) = (f32::MIN, 0);
+        let mut steep = 0.0f32;
+        for k in 0..prof.len() {
+            if prof[k].y > top {
+                top = prof[k].y;
+                at = k;
+            }
+            if k + 1 < prof.len() {
+                let d = glam::Vec2::new(r.pts[k][0], r.pts[k][1])
+                    .distance(glam::Vec2::new(r.pts[k + 1][0], r.pts[k + 1][1]));
+                steep = steep.max((prof[k + 1].y - prof[k].y).abs() / d.max(1.0));
+            }
+        }
+        println!(
+            "{} top {top:.0} at ({:.0},{:.0}) steepest {:.0}%",
+            r.id,
+            r.pts[at][0],
+            r.pts[at][1],
+            steep * 100.0
+        );
+    }
+}
+
+/// The first few buildings of a kind, where they stand and which way:
+/// `KIND=Pier cargo test --release --test breaches buildings_of -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn buildings_of() {
+    let w = zawnabout_sim::World::generate(1);
+    let want = std::env::var("KIND").unwrap_or_default();
+    for b in w
+        .buildings
+        .iter()
+        .filter(|b| format!("{:?}", b.kind) == want)
+        .take(6)
+    {
+        println!("{:?} pos {} axis {} size {}", b.kind, b.pos, b.axis, b.size);
     }
 }

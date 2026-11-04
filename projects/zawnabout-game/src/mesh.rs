@@ -18,6 +18,9 @@ pub struct Vertex {
 pub const SHEEN: i8 = 90;
 /// Vertex flag for polished gold, which mirrors the sky.
 pub const METAL: i8 = 70;
+/// Vertex flag for boats afloat, which rock on the swell. Small, as it also counts as
+/// thinness when lit from behind.
+pub const BOB: i8 = 20;
 
 /// An sRGB color from a hex literal such as `0xF08A5D`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

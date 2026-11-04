@@ -158,6 +158,8 @@ pub struct World {
     pub beacons: Vec<Beacon>,
     /// Ferries, boats, planes and cars, moved by the sim every tick.
     pub traffic: Traffic,
+    /// Suspension bridges' cables, for looks. Their towers are buildings.
+    pub bridges: Vec<crate::bridge::Suspension>,
     grid: Vec<Vec<u32>>,
     grid_n: usize,
 }
@@ -183,6 +185,7 @@ impl World {
             perches: Vec::new(),
             beacons: Vec::new(),
             traffic: Traffic::default(),
+            bridges: Vec::new(),
             grid: Vec::new(),
             grid_n: 0,
         };
@@ -190,6 +193,7 @@ impl World {
         world.buildings = town::place(&world.terrain, seed);
         world.landmarks();
         world.stations();
+        world.bridges();
         world.clear_landmarks();
         world.yard_trees();
         world.wild_props();
@@ -365,20 +369,7 @@ impl World {
         let def = self.terrain.def;
         for m in def.marks.iter().filter(|m| m.kind == "station") {
             let at = Vec2::new(m.pos[0], m.pos[2]);
-            let best = def
-                .roads
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| r.rail)
-                .flat_map(|(i, r)| (0..r.pts.len() - 1).map(move |k| (i, k)))
-                .min_by(|a, b| {
-                    let d = |(i, k): (usize, usize)| {
-                        let p = def.roads[i].pts[k];
-                        Vec2::new(p[0], p[1]).distance(at)
-                    };
-                    d(*a).total_cmp(&d(*b))
-                });
-            let Some((i, k)) = best else {
+            let Some((i, k)) = nearest_rail(def, at) else {
                 continue;
             };
             let (a, b) = (def.roads[i].pts[k], def.roads[i].pts[k + 1]);
@@ -388,10 +379,19 @@ impl World {
                 axis = -axis;
             }
             let y = self.terrain.road_points(i)[k].y;
-            let pieces = crate::landmark::pieces(Kind::Station, 0, "");
+            let (kind, name) = if def.roads[i].subway {
+                // Named on its signs after the last word of its id.
+                (
+                    Kind::Metro,
+                    m.id.rsplit(['-', '/']).next().unwrap_or_default(),
+                )
+            } else {
+                (Kind::Station, "")
+            };
+            let pieces = crate::landmark::pieces(kind, 0, name);
             self.buildings.push(Building {
                 id: self.buildings.len() as u32,
-                kind: Kind::Station,
+                kind,
                 style: Style::Plain,
                 tech: crate::terrain::Tech::Modern,
                 pos: Vec3::new(track.x, y, track.y),
@@ -401,8 +401,35 @@ impl World {
                 stilts: 0.0,
                 seed: 0,
                 site: Some(m.id),
-                text: "",
+                text: name,
             });
+        }
+    }
+
+    /// Towers for every suspension bridge.
+    fn bridges(&mut self) {
+        self.bridges = crate::bridge::suspensions(&self.terrain);
+        for b in &self.bridges {
+            for t in b.towers {
+                self.buildings.push(Building {
+                    id: self.buildings.len() as u32,
+                    kind: Kind::BridgeTower,
+                    style: Style::Plain,
+                    tech: crate::terrain::Tech::Modern,
+                    pos: Vec3::new(t.at.x, t.base, t.at.y),
+                    axis: t.across,
+                    size: Vec3::new(
+                        t.spread * 2.0 + crate::town::TOWER_LEG.x,
+                        t.top - t.base,
+                        crate::town::TOWER_LEG.y,
+                    ),
+                    roof: 0.0,
+                    stilts: 0.0,
+                    seed: 0,
+                    site: None,
+                    text: "",
+                });
+            }
         }
     }
 
@@ -520,7 +547,8 @@ impl World {
             })
             .collect();
         self.buildings.retain(|b| {
-            let mark = crate::landmark::KINDS.iter().any(|(_, k)| *k == b.kind);
+            // Landmarks and the sites the world files name (towers, lighthouses) stay.
+            let mark = crate::landmark::KINDS.iter().any(|(_, k)| *k == b.kind) || b.site.is_some();
             let at = Vec2::new(b.pos.x, b.pos.z);
             mark || big
                 .iter()
@@ -955,6 +983,15 @@ impl World {
     }
 
     /// The vehicle someone standing at `feet` over `(x, z)` rides on, if any.
+    /// The top of vehicle `i` over `(x, z)`, if it reaches there.
+    pub fn deck_of(&self, i: usize, x: f32, z: f32) -> Option<f32> {
+        self.traffic
+            .shapes(i)
+            .iter()
+            .filter_map(|s| s.support(x, z))
+            .reduce(f32::max)
+    }
+
     pub fn carrier(&self, x: f32, z: f32, feet: f32) -> Option<usize> {
         (0..self.traffic.vehicles.len()).find(|&i| {
             let p = self.traffic.poses[i].pos;
@@ -1205,4 +1242,21 @@ impl World {
             });
         }
     }
+}
+
+/// The railway point nearest `at`: which railway and which of its points. Stations stand
+/// beside it, and trains halt there.
+pub fn nearest_rail(def: &crate::terrain::WorldDef, at: Vec2) -> Option<(usize, usize)> {
+    def.roads
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.rail)
+        .flat_map(|(i, r)| (0..r.pts.len() - 1).map(move |k| (i, k)))
+        .min_by(|a, b| {
+            let d = |(i, k): (usize, usize)| {
+                let p = def.roads[i].pts[k];
+                Vec2::new(p[0], p[1]).distance(at)
+            };
+            d(*a).total_cmp(&d(*b))
+        })
 }

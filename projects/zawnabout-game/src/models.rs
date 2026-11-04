@@ -2287,3 +2287,772 @@ pub fn shadow_disc() -> MeshBuilder {
     }
     m
 }
+
+/// An elephant, facing +z, feet at the origin, about 3 m at the shoulder: a big round
+/// body, wide ears, tusks and a trunk hanging to the ground.
+pub fn elephant() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (hide, ear, ivory, dark) = (Rgb(0x9C9AA0), Rgb(0x8E8792), Rgb(0xF4EEDC), Rgb(0x2E2A2A));
+    m.blob(
+        Vec3::new(0.0, 2.05, 0.0),
+        Vec3::new(0.95, 0.9, 1.45),
+        false,
+        0.06,
+        31,
+        hide,
+    );
+    legs(&mut m, 0.52, 0.85, 1.45, 0.25, hide);
+    for (x, z) in [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        m.cube(
+            Vec3::new(x * 0.52, 0.05, z * 0.85 + 0.08),
+            Vec3::new(0.27, 0.05, 0.22),
+            ear,
+        );
+    }
+    m.blob(
+        Vec3::new(0.0, 2.55, 1.45),
+        Vec3::new(0.62, 0.66, 0.58),
+        false,
+        0.04,
+        32,
+        hide,
+    );
+    for x in [-1.0f32, 1.0] {
+        // Ears flat against the head, flaring out and back, seen from both sides.
+        let root = Vec3::new(x * 0.45, 2.75, 1.2);
+        let ear_pts = [
+            root,
+            root + Vec3::new(x * 0.55, 0.3, -0.45),
+            root + Vec3::new(x * 0.6, -0.75, -0.5),
+            root + Vec3::new(x * 0.1, -0.85, -0.05),
+        ];
+        m.quad(ear_pts[0], ear_pts[1], ear_pts[2], ear_pts[3], ear);
+        m.quad(ear_pts[3], ear_pts[2], ear_pts[1], ear_pts[0], ear);
+        m.cube(
+            Vec3::new(x * 0.36, 2.72, 1.88),
+            Vec3::new(0.05, 0.05, 0.04),
+            dark,
+        );
+        tube(
+            &mut m,
+            4,
+            Vec3::new(x * 0.22, 2.05, 1.85),
+            0.08,
+            Vec3::new(x * 0.26, 1.7, 2.45),
+            0.02,
+            ivory,
+        );
+    }
+    // The trunk, in three tapering pieces, curling forward at the tip.
+    let trunk = [
+        (Vec3::new(0.0, 2.35, 1.95), 0.22),
+        (Vec3::new(0.0, 1.5, 2.2), 0.15),
+        (Vec3::new(0.0, 0.7, 2.25), 0.11),
+        (Vec3::new(0.0, 0.35, 2.5), 0.08),
+    ];
+    for w in trunk.windows(2) {
+        tube(&mut m, 5, w[0].0, w[0].1, w[1].0, w[1].1, hide);
+    }
+    tube(
+        &mut m,
+        3,
+        Vec3::new(0.0, 2.2, -1.35),
+        0.05,
+        Vec3::new(0.0, 1.3, -1.5),
+        0.03,
+        hide,
+    );
+    m
+}
+
+/// A giraffe, facing +z, feet at the origin, about 5 m to the horns: patches on a
+/// golden coat, a long neck and little horns.
+pub fn giraffe() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (coat, patch, dark) = (Rgb(0xF0C070), Rgb(0x9A5A2A), Rgb(0x3B2618));
+    m.cube(Vec3::new(0.0, 2.3, 0.05), Vec3::new(0.38, 0.42, 0.85), coat);
+    for (k, (x, y, z)) in [
+        (1.0f32, 2.45f32, 0.5f32),
+        (1.0, 2.1, -0.3),
+        (1.0, 2.55, -0.55),
+        (-1.0, 2.4, 0.2),
+        (-1.0, 2.1, -0.5),
+        (-1.0, 2.55, 0.65),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let s = 0.13 + (k % 3) as f32 * 0.02;
+        m.cube(
+            Vec3::new(x * 0.39, y, z),
+            Vec3::new(0.01, s, s * 1.2),
+            patch,
+        );
+        m.cube(
+            Vec3::new(x * 0.15, 2.73, z * 0.8),
+            Vec3::new(s, 0.01, s),
+            patch,
+        );
+    }
+    // Front legs a little longer, so the back slopes down to the tail.
+    for (x, z, h) in [
+        (1.0f32, 0.6f32, 2.0f32),
+        (-1.0, 0.6, 2.0),
+        (1.0, -0.55, 1.9),
+        (-1.0, -0.55, 1.9),
+    ] {
+        m.cube(
+            Vec3::new(x * 0.24, h * 0.5, z),
+            Vec3::new(0.07, h * 0.5, 0.07),
+            coat,
+        );
+        m.cube(
+            Vec3::new(x * 0.24, 0.06, z),
+            Vec3::new(0.08, 0.06, 0.08),
+            dark,
+        );
+    }
+    let (base, top) = (Vec3::new(0.0, 2.55, 0.75), Vec3::new(0.0, 4.55, 1.35));
+    tube(&mut m, 6, base, 0.26, top, 0.13, coat);
+    for k in 0..5 {
+        let p = base.lerp(top, 0.15 + k as f32 * 0.17);
+        let x = if k % 2 == 0 { 1.0 } else { -1.0 };
+        let r = 0.24 - k as f32 * 0.022;
+        m.cube(
+            p + Vec3::new(x * r, 0.0, 0.02),
+            Vec3::new(0.01, 0.1, 0.1),
+            patch,
+        );
+    }
+    // A short mane down the back of the neck.
+    tube(
+        &mut m,
+        3,
+        base + Vec3::new(0.0, 0.2, -0.2),
+        0.06,
+        top + Vec3::new(0.0, 0.05, -0.12),
+        0.04,
+        patch,
+    );
+    m.cube(Vec3::new(0.0, 4.68, 1.6), Vec3::new(0.13, 0.15, 0.34), coat);
+    m.cube(Vec3::new(0.0, 4.6, 1.92), Vec3::new(0.1, 0.1, 0.06), patch);
+    for x in [-1.0f32, 1.0] {
+        tube(
+            &mut m,
+            3,
+            Vec3::new(x * 0.07, 4.8, 1.45),
+            0.035,
+            Vec3::new(x * 0.08, 5.08, 1.4),
+            0.03,
+            patch,
+        );
+        m.cube(
+            Vec3::new(x * 0.08, 5.1, 1.4),
+            Vec3::new(0.04, 0.04, 0.04),
+            dark,
+        );
+        m.cube(
+            Vec3::new(x * 0.2, 4.82, 1.42),
+            Vec3::new(0.09, 0.03, 0.04),
+            coat,
+        );
+        m.cube(
+            Vec3::new(x * 0.135, 4.75, 1.66),
+            Vec3::new(0.01, 0.03, 0.03),
+            dark,
+        );
+    }
+    tube(
+        &mut m,
+        3,
+        Vec3::new(0.0, 2.6, -0.8),
+        0.04,
+        Vec3::new(0.0, 1.8, -0.95),
+        0.02,
+        coat,
+    );
+    m.cube(
+        Vec3::new(0.0, 1.75, -0.96),
+        Vec3::new(0.05, 0.12, 0.05),
+        dark,
+    );
+    m
+}
+
+/// A zebra, facing +z, feet at the origin: a stocky horse in black and white stripes.
+pub fn zebra() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (white, black) = (Rgb(0xF6F3EC), Rgb(0x2A2828));
+    m.cube(Vec3::new(0.0, 1.2, 0.0), Vec3::new(0.28, 0.3, 0.7), white);
+    // Bands round the body, slightly proud of it.
+    for k in 0..7 {
+        let z = -0.6 + k as f32 * 0.2;
+        m.cube(
+            Vec3::new(0.0, 1.2, z),
+            Vec3::new(0.285, 0.305, 0.035),
+            black,
+        );
+    }
+    let neck = Mat4::from_translation(Vec3::new(0.0, 1.55, 0.75)) * Mat4::from_rotation_x(-0.75);
+    let mut n = MeshBuilder::new();
+    n.cube(Vec3::ZERO, Vec3::new(0.14, 0.16, 0.38), white);
+    for k in 0..3 {
+        n.cube(
+            Vec3::new(0.0, 0.0, -0.22 + k as f32 * 0.2),
+            Vec3::new(0.145, 0.165, 0.03),
+            black,
+        );
+    }
+    n.cube(
+        Vec3::new(0.0, 0.2, -0.02),
+        Vec3::new(0.04, 0.08, 0.4),
+        black,
+    );
+    m.append(&n, neck);
+    m.cube(
+        Vec3::new(0.0, 1.8, 1.12),
+        Vec3::new(0.12, 0.13, 0.28),
+        white,
+    );
+    m.cube(Vec3::new(0.0, 1.74, 1.38), Vec3::new(0.1, 0.1, 0.06), black);
+    for x in [-1.0f32, 1.0] {
+        m.cube(
+            Vec3::new(x * 0.08, 1.98, 0.95),
+            Vec3::new(0.03, 0.08, 0.03),
+            white,
+        );
+        m.cube(
+            Vec3::new(x * 0.125, 1.85, 1.15),
+            Vec3::new(0.01, 0.025, 0.025),
+            black,
+        );
+    }
+    let tail = Mat4::from_translation(Vec3::new(0.0, 1.3, -0.72)) * Mat4::from_rotation_x(0.3);
+    let mut t = MeshBuilder::new();
+    t.cube(
+        Vec3::new(0.0, -0.25, 0.0),
+        Vec3::new(0.03, 0.28, 0.03),
+        white,
+    );
+    t.cube(
+        Vec3::new(0.0, -0.55, 0.0),
+        Vec3::new(0.05, 0.08, 0.05),
+        black,
+    );
+    m.append(&t, tail);
+    legs(&mut m, 0.18, 0.52, 0.9, 0.06, white);
+    for (x, z) in [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        for y in [0.35f32, 0.65] {
+            m.cube(
+                Vec3::new(x * 0.18, y, z * 0.52),
+                Vec3::new(0.065, 0.03, 0.065),
+                black,
+            );
+        }
+        m.cube(
+            Vec3::new(x * 0.18, 0.05, z * 0.52),
+            Vec3::new(0.07, 0.05, 0.07),
+            black,
+        );
+    }
+    m
+}
+
+/// A lion, facing +z, feet at the origin: tawny, with a shaggy mane when `mane`, a little
+/// smaller without.
+pub fn lion(mane: bool) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (coat, pale, dark, nose) = (Rgb(0xD9A458), Rgb(0xF0D9A8), Rgb(0x8A4A22), Rgb(0x5A3A30));
+    m.blob(
+        Vec3::new(0.0, 0.88, 0.0),
+        Vec3::new(0.32, 0.3, 0.78),
+        false,
+        0.04,
+        41,
+        coat,
+    );
+    legs(&mut m, 0.2, 0.5, 0.7, 0.075, coat);
+    let head = Vec3::new(0.0, 1.12, 0.82);
+    if mane {
+        m.blob(
+            head - Vec3::Z * 0.08,
+            Vec3::new(0.42, 0.44, 0.3),
+            false,
+            0.1,
+            42,
+            dark,
+        );
+    }
+    m.blob(head, Vec3::new(0.21, 0.22, 0.24), false, 0.03, 43, coat);
+    m.cube(
+        head + Vec3::new(0.0, -0.06, 0.2),
+        Vec3::new(0.11, 0.08, 0.08),
+        pale,
+    );
+    m.cube(
+        head + Vec3::new(0.0, -0.01, 0.28),
+        Vec3::new(0.05, 0.03, 0.02),
+        nose,
+    );
+    for x in [-1.0f32, 1.0] {
+        m.cube(
+            head + Vec3::new(x * 0.09, 0.07, 0.2),
+            Vec3::new(0.025, 0.02, 0.01),
+            nose,
+        );
+        m.cube(
+            head + Vec3::new(x * 0.15, 0.2, -0.02),
+            Vec3::new(0.05, 0.05, 0.02),
+            coat,
+        );
+    }
+    tube(
+        &mut m,
+        3,
+        Vec3::new(0.0, 0.95, -0.7),
+        0.035,
+        Vec3::new(0.0, 0.35, -1.15),
+        0.025,
+        coat,
+    );
+    m.blob(
+        Vec3::new(0.0, 0.33, -1.17),
+        Vec3::splat(0.07),
+        false,
+        0.02,
+        44,
+        dark,
+    );
+    if !mane {
+        m.recolor(coat, Rgb(0xE0B06A));
+    }
+    m
+}
+
+/// A penguin, facing +z, feet at the origin, about 0.8 m tall.
+pub fn penguin() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (black, white, orange) = (Rgb(0x2A2C34), Rgb(0xF8F6F0), Rgb(0xF2A03A));
+    m.blob(
+        Vec3::new(0.0, 0.38, 0.0),
+        Vec3::new(0.19, 0.33, 0.18),
+        false,
+        0.02,
+        61,
+        black,
+    );
+    m.blob(
+        Vec3::new(0.0, 0.35, 0.07),
+        Vec3::new(0.15, 0.27, 0.13),
+        false,
+        0.01,
+        62,
+        white,
+    );
+    m.blob(
+        Vec3::new(0.0, 0.74, 0.02),
+        Vec3::splat(0.12),
+        false,
+        0.01,
+        63,
+        black,
+    );
+    m.tri(
+        Vec3::new(-0.035, 0.75, 0.12),
+        Vec3::new(0.035, 0.75, 0.12),
+        Vec3::new(0.0, 0.72, 0.24),
+        orange,
+    );
+    m.tri(
+        Vec3::new(0.035, 0.7, 0.12),
+        Vec3::new(-0.035, 0.7, 0.12),
+        Vec3::new(0.0, 0.72, 0.24),
+        orange,
+    );
+    for x in [-1.0f32, 1.0] {
+        m.cube(
+            Vec3::new(x * 0.07, 0.02, 0.08),
+            Vec3::new(0.05, 0.02, 0.08),
+            orange,
+        );
+        m.cube(
+            Vec3::new(x * 0.06, 0.79, 0.11),
+            Vec3::new(0.018, 0.018, 0.01),
+            white,
+        );
+        m.thin_tri(
+            Vec3::new(x * 0.19, 0.55, 0.0),
+            Vec3::new(x * 0.19, 0.55, -0.08),
+            Vec3::new(x * 0.27, 0.2, -0.04),
+            black,
+        );
+    }
+    m
+}
+
+/// A roller coaster car, nose toward +z, its wheels on the rail at the origin: a rounded
+/// tub with two rows of seats and lap bars. White, for tinting.
+pub fn coaster_car() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (w, seat, steel) = (Rgb(0xFFFFFF), Rgb(0x2E3440), Rgb(0x8C949C));
+    m.loft(
+        -1.1,
+        (0.75, 0.35, 0.65),
+        1.0,
+        (0.72, 0.35, 0.65),
+        [w, w, steel, w],
+    );
+    m.loft(
+        1.0,
+        (0.72, 0.35, 0.65),
+        1.35,
+        (0.5, 0.2, 0.55),
+        [w, w, steel, w],
+    );
+    for z in [-0.55f32, 0.35] {
+        m.cube(Vec3::new(0.0, 1.0, z), Vec3::new(0.62, 0.05, 0.3), seat);
+        m.cube(
+            Vec3::new(0.0, 1.35, z - 0.3),
+            Vec3::new(0.62, 0.35, 0.05),
+            seat,
+        );
+        m.cube(
+            Vec3::new(0.0, 1.38, z + 0.35),
+            Vec3::new(0.55, 0.03, 0.03),
+            steel,
+        );
+    }
+    for (x, z) in [(1.0f32, 0.8f32), (-1.0, 0.8), (1.0, -0.8), (-1.0, -0.8)] {
+        m.cube(
+            Vec3::new(x * 0.55, 0.2, z),
+            Vec3::new(0.08, 0.15, 0.15),
+            steel,
+        );
+    }
+    m
+}
+
+/// A carousel horse on its brass pole, leaping toward +z, its belly at the origin. White
+/// with a gold pole and saddle, for pastel tinting.
+pub fn carousel_horse() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (w, gold, mane) = (Rgb(0xFFFFFF), Rgb(0xF5C64E), Rgb(0xF2D7A0));
+    m.cube(Vec3::new(0.0, 0.25, 0.0), Vec3::new(0.2, 0.22, 0.55), w);
+    let neck = Mat4::from_translation(Vec3::new(0.0, 0.55, 0.55)) * Mat4::from_rotation_x(-0.9);
+    let mut n = MeshBuilder::new();
+    n.cube(Vec3::ZERO, Vec3::new(0.12, 0.13, 0.3), w);
+    n.cube(
+        Vec3::new(0.0, 0.15, -0.04),
+        Vec3::new(0.04, 0.06, 0.3),
+        mane,
+    );
+    m.append(&n, neck);
+    m.cube(Vec3::new(0.0, 0.82, 0.82), Vec3::new(0.1, 0.11, 0.22), w);
+    for x in [-1.0f32, 1.0] {
+        m.cube(
+            Vec3::new(x * 0.06, 0.98, 0.7),
+            Vec3::new(0.025, 0.06, 0.025),
+            w,
+        );
+        // Front legs tucked up mid leap, back legs reaching.
+        tube(
+            &mut m,
+            3,
+            Vec3::new(x * 0.13, 0.1, 0.45),
+            0.05,
+            Vec3::new(x * 0.13, -0.05, 0.85),
+            0.04,
+            w,
+        );
+        tube(
+            &mut m,
+            3,
+            Vec3::new(x * 0.13, 0.1, -0.45),
+            0.05,
+            Vec3::new(x * 0.13, -0.4, -0.75),
+            0.04,
+            w,
+        );
+    }
+    m.cube(
+        Vec3::new(0.0, 0.5, -0.05),
+        Vec3::new(0.22, 0.04, 0.22),
+        gold,
+    );
+    tube(
+        &mut m,
+        3,
+        Vec3::new(0.0, 0.35, -0.55),
+        0.05,
+        Vec3::new(0.0, -0.1, -0.85),
+        0.03,
+        mane,
+    );
+    m.frustum(5, -1.6, 0.05, 5.6, 0.05, gold, gold);
+    m
+}
+
+/// A drop tower's ride ring round its tower at the origin: a band of outward-facing seats
+/// with lights that glow at night.
+pub fn drop_ring() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (band, seat) = (Rgb(0xE0564A), Rgb(0x2E3440));
+    m.frustum(12, -0.3, 3.4, 0.6, 3.4, band, Rgb(0xF6F1E7));
+    m.frustum(12, -0.6, 2.4, -0.3, 3.4, band, band);
+    for k in 0..8 {
+        let a = k as f32 / 8.0 * TAU;
+        let at = Vec3::new(a.cos(), 0.0, a.sin()) * 3.75;
+        let q = Quat::from_rotation_y(-a + PI * 0.5);
+        let mut s = MeshBuilder::new();
+        s.cube(Vec3::new(0.0, -0.3, 0.0), Vec3::new(0.3, 0.05, 0.3), seat);
+        s.cube(Vec3::new(0.0, 0.2, -0.3), Vec3::new(0.3, 0.5, 0.05), seat);
+        s.cube(
+            Vec3::new(0.0, 0.75, -0.1),
+            Vec3::new(0.32, 0.06, 0.25),
+            band,
+        );
+        m.append(&s, Mat4::from_rotation_translation(q, at));
+    }
+    let from = m.verts.len();
+    for k in 0..16 {
+        let a = (k as f32 + 0.5) / 16.0 * TAU;
+        m.blob(
+            Vec3::new(a.cos() * 3.42, 0.15, a.sin() * 3.42),
+            Vec3::splat(0.08),
+            false,
+            0.0,
+            k,
+            [Rgb(0xFFE07A), Rgb(0x9AE0FF)][k as usize % 2],
+        );
+    }
+    for v in &mut m.verts[from..] {
+        v.normal[3] = -64;
+    }
+    m
+}
+
+/// A rubber ring for floating on, round the origin on the water. White, for tinting.
+pub fn swim_ring() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let w = Rgb(0xFFFFFF);
+    let (n, k) = (10, 4);
+    let at = |i: u32, j: u32| {
+        let a = i as f32 / n as f32 * TAU;
+        let b = j as f32 / k as f32 * TAU;
+        let r = 0.55 + b.cos() * 0.2;
+        Vec3::new(a.cos() * r, b.sin() * 0.2, a.sin() * r)
+    };
+    for i in 0..n {
+        for j in 0..k {
+            m.quad(at(i, j), at(i, j + 1), at(i + 1, j + 1), at(i + 1, j), w);
+        }
+    }
+    m
+}
+
+/// A water park's slides, in the park's frame: smooth open troughs spiralling down from
+/// the tower, a little water running in each.
+pub fn water_slides() -> MeshBuilder {
+    use zawnabout_sim::landmark::{SLIDES, slide};
+    let mut m = MeshBuilder::new();
+    let paint = [Rgb(0xE0564A), Rgb(0x4A90C8), Rgb(0xE88AB0)];
+    let water = Rgb(0xA8E6F6);
+    let (n, sides, w) = (90, 6, 0.85);
+    for s in 0..SLIDES {
+        let c = paint[s as usize % paint.len()];
+        let inner = c.mix(Rgb(0xFFFFFF), 0.25);
+        let ring = |u: f32| {
+            let at = slide(s, u);
+            let ahead = (slide(s, (u + 0.005).min(1.0)) - slide(s, (u - 0.005).max(0.0)))
+                .normalize_or(Vec3::Z);
+            let right = ahead.cross(Vec3::Y).normalize_or(Vec3::X);
+            let up = right.cross(ahead);
+            (0..=sides)
+                .map(|k| {
+                    let a = (k as f32 / sides as f32 - 0.5) * 3.6;
+                    at + right * a.sin() * w + up * (1.0 - a.cos()) * w
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut prev = ring(0.0);
+        for i in 1..=n {
+            let next = ring(i as f32 / n as f32);
+            for k in 0..sides {
+                let (a, b, cc, d) = (prev[k], prev[k + 1], next[k + 1], next[k]);
+                m.quad(a, b, cc, d, inner);
+                m.quad(d, cc, b, a, c);
+            }
+            // A thin sheet of water down the middle.
+            let lift = Vec3::Y * 0.03;
+            let (a, b) = (
+                prev[sides / 2 - 1].lerp(prev[sides / 2], 0.5),
+                prev[sides / 2 + 1].lerp(prev[sides / 2], 0.5),
+            );
+            let (cc, d) = (
+                next[sides / 2 + 1].lerp(next[sides / 2], 0.5),
+                next[sides / 2 - 1].lerp(next[sides / 2], 0.5),
+            );
+            m.quad(a + lift, b + lift, cc + lift, d + lift, water);
+            prev = next;
+        }
+    }
+    m
+}
+
+/// A little farm tractor, nose toward +z, wheels on the ground: a green body and bonnet,
+/// a cab with a roof, big rear wheels and small front ones, and a driver.
+pub fn tractor() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (green, yellow, tyre, glass) = (Rgb(0x3E9A4E), Rgb(0xF2C14E), Rgb(0x2A2A2E), Rgb(0x9FC7DE));
+    m.cube(Vec3::new(0.0, 1.1, 0.4), Vec3::new(0.55, 0.45, 1.3), green);
+    m.cube(Vec3::new(0.0, 1.65, 1.05), Vec3::new(0.4, 0.15, 0.6), green);
+    m.cube(Vec3::new(0.0, 2.0, -0.45), Vec3::new(0.6, 0.6, 0.55), glass);
+    m.cube(
+        Vec3::new(0.0, 2.65, -0.45),
+        Vec3::new(0.7, 0.06, 0.65),
+        green,
+    );
+    m.cube(
+        Vec3::new(0.0, 1.35, -0.45),
+        Vec3::new(0.25, 0.4, 0.2),
+        Rgb(0xE88A5A),
+    );
+    tube(
+        &mut m,
+        4,
+        Vec3::new(0.3, 1.7, 1.3),
+        0.06,
+        Vec3::new(0.3, 2.4, 1.3),
+        0.06,
+        tyre,
+    );
+    for x in [-1.0f32, 1.0] {
+        let mut w = MeshBuilder::new();
+        w.frustum(8, -0.3, 0.75, 0.3, 0.75, tyre, yellow);
+        m.append(
+            &w,
+            Mat4::from_rotation_translation(
+                Quat::from_rotation_z(PI * 0.5),
+                Vec3::new(x * 0.85, 0.75, -0.6),
+            ),
+        );
+        let mut f = MeshBuilder::new();
+        f.frustum(8, -0.18, 0.42, 0.18, 0.42, tyre, yellow);
+        m.append(
+            &f,
+            Mat4::from_rotation_translation(
+                Quat::from_rotation_z(PI * 0.5),
+                Vec3::new(x * 0.62, 0.42, 1.3),
+            ),
+        );
+    }
+    m
+}
+
+/// A crane trolley riding a boom.
+pub fn trolley() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(Vec3::ZERO, Vec3::new(2.4, 0.7, 2.0), Rgb(0x2E6FA8));
+    m
+}
+
+/// A pair of crane cables hanging from the origin, unit long, to stretch to any drop.
+pub fn cables() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    for x in [-1.0f32, 1.0] {
+        m.cube(
+            Vec3::new(x * 0.8, -0.5, 0.0),
+            Vec3::new(0.05, 0.5, 0.05),
+            Rgb(0x3A3A40),
+        );
+    }
+    m
+}
+
+/// A shipping container, 12 m long along z, its base at the origin. White, for tinting.
+pub fn container() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let w = Rgb(0xFFFFFF);
+    m.cube(Vec3::new(0.0, 1.3, 0.0), Vec3::new(1.2, 1.3, 6.0), w);
+    for z in [-4.0f32, -2.0, 0.0, 2.0, 4.0] {
+        m.cube(
+            Vec3::new(0.0, 1.3, z),
+            Vec3::new(1.25, 1.25, 0.08),
+            Rgb(0xE6E6E6),
+        );
+    }
+    m
+}
+
+/// A bicycle, rolling toward +z, wheels on the ground: two thin wheels, a frame, handlebars
+/// and a saddle. White, for tinting the frame.
+pub fn bicycle() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (frame, tyre) = (Rgb(0xFFFFFF), Rgb(0x2A2A2E));
+    for z in [-0.55f32, 0.55] {
+        let n = 10;
+        for k in 0..n {
+            let (a, b) = (k as f32 / n as f32 * TAU, (k + 1) as f32 / n as f32 * TAU);
+            let p = |a: f32| Vec3::new(0.0, 0.34 + a.sin() * 0.34, z + a.cos() * 0.34);
+            m.quad(
+                p(a) - Vec3::X * 0.03,
+                p(b) - Vec3::X * 0.03,
+                p(b) + Vec3::X * 0.03,
+                p(a) + Vec3::X * 0.03,
+                tyre,
+            );
+            m.quad(
+                p(a) + Vec3::X * 0.03,
+                p(b) + Vec3::X * 0.03,
+                p(b) - Vec3::X * 0.03,
+                p(a) - Vec3::X * 0.03,
+                tyre,
+            );
+        }
+    }
+    for (a, b) in [
+        (Vec3::new(0.0, 0.34, -0.55), Vec3::new(0.0, 0.85, -0.15)),
+        (Vec3::new(0.0, 0.34, -0.55), Vec3::new(0.0, 0.4, 0.0)),
+        (Vec3::new(0.0, 0.4, 0.0), Vec3::new(0.0, 0.85, -0.15)),
+        (Vec3::new(0.0, 0.4, 0.0), Vec3::new(0.0, 0.9, 0.42)),
+        (Vec3::new(0.0, 0.85, -0.15), Vec3::new(0.0, 0.9, 0.42)),
+        (Vec3::new(0.0, 0.34, 0.55), Vec3::new(0.0, 1.0, 0.45)),
+    ] {
+        tube(&mut m, 3, a, 0.03, b, 0.03, frame);
+    }
+    m.cube(
+        Vec3::new(0.0, 1.0, 0.45),
+        Vec3::new(0.25, 0.025, 0.025),
+        tyre,
+    );
+    m.cube(
+        Vec3::new(0.0, 0.9, -0.17),
+        Vec3::new(0.08, 0.03, 0.13),
+        tyre,
+    );
+    m
+}
+
+/// A fishing rod held at the origin, reaching out toward +z and up, with its line
+/// dropping 4.2 m to a red float.
+pub fn fishing_rod() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (rod, line) = (Rgb(0x6B4A2E), Rgb(0xEDEDED));
+    let tip = Vec3::new(0.0, 1.6, 2.6);
+    tube(&mut m, 3, Vec3::ZERO, 0.03, tip, 0.012, rod);
+    m.thin_tri(
+        tip - Vec3::X * 0.01,
+        tip + Vec3::X * 0.01,
+        tip - Vec3::Y * 4.2,
+        line,
+    );
+    m.blob(
+        tip - Vec3::Y * 4.2,
+        Vec3::splat(0.06),
+        false,
+        0.0,
+        5,
+        Rgb(0xE0564A),
+    );
+    m
+}

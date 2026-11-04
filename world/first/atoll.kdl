@@ -86,6 +86,7 @@ caves grotto {
         p -150 -100 -50
     }
     cavern hidden-grotto x=50 y=-70 z=0 w=200 h=80 d=180 shape=dome glow=0.35 decor=shroom {
+        spout grotto-spout x=80 z=30 w=6
         note "Sunlit pool under the heart islet. A treasure spot."
         lake grotto-pool level=-100 x=50 z=0 r=70
         beacon grotto-beacon x=-10 y=-105 z=40

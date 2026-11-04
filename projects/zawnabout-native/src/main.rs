@@ -165,6 +165,10 @@ fn host_command(
                 s.meshes
             );
         }
+        "profile" => {
+            let frames = words.get(1).and_then(|n| n.parse().ok()).unwrap_or(300);
+            println!("profile {}", gfx.profile(game, frames));
+        }
         "quit" => return false,
         _ => {}
     }

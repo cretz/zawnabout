@@ -15,7 +15,13 @@ pub struct Path {
     along: Vec<f32>,
     /// Goes round instead of back and forth.
     pub looped: bool,
+    /// Where trains on a looped line halt, front first, in order along it.
+    pub stops: Vec<f32>,
 }
+
+/// How hard trains speed up and brake (m/s^2), and how long they wait at a station (s).
+pub const TRAIN_ACCEL: f32 = 0.9;
+pub const TRAIN_DWELL: f32 = 20.0;
 
 impl Path {
     pub fn new(pts: Vec<Vec3>, looped: bool) -> Self {
@@ -23,7 +29,68 @@ impl Path {
         for w in pts.windows(2) {
             along.push(along[along.len() - 1] + w[0].distance(w[1]));
         }
-        Self { pts, along, looped }
+        Self {
+            pts,
+            along,
+            looped,
+            stops: Vec::new(),
+        }
+    }
+
+    /// Time to run `len` meters from a halt to a halt, topping out at `top`.
+    fn run_time(len: f32, top: f32) -> f32 {
+        let a = TRAIN_ACCEL;
+        if len >= top * top / a {
+            len / top + top / a
+        } else {
+            2.0 * (len / a).sqrt()
+        }
+    }
+
+    /// Seconds for one lap of a line with stops, waits included.
+    pub fn lap_time(&self, top: f32) -> f32 {
+        let n = self.stops.len();
+        (0..n)
+            .map(|i| TRAIN_DWELL + Self::run_time(self.stop_gap(i), top))
+            .sum()
+    }
+
+    fn stop_gap(&self, i: usize) -> f32 {
+        let n = self.stops.len();
+        (self.stops[(i + 1) % n] - self.stops[i])
+            .rem_euclid(self.len())
+            .max(1.0)
+    }
+
+    /// How far along a train's front is `t` seconds into its timetable, and how fast it
+    /// goes: waiting at each stop, then speeding up, running at `top` and braking into the
+    /// next one.
+    pub fn timetable(&self, t: f32, top: f32) -> (f32, f32) {
+        let a = TRAIN_ACCEL;
+        let mut t = t.rem_euclid(self.lap_time(top));
+        for (i, &from) in self.stops.iter().enumerate() {
+            let len = self.stop_gap(i);
+            let run = Self::run_time(len, top);
+            if t < TRAIN_DWELL {
+                return (from, 0.0);
+            }
+            t -= TRAIN_DWELL;
+            if t < run {
+                let peak = top.min((len * a).sqrt());
+                let ramp = peak / a;
+                let (d, v) = if t < ramp {
+                    (0.5 * a * t * t, a * t)
+                } else if t < run - ramp {
+                    (0.5 * a * ramp * ramp + peak * (t - ramp), peak)
+                } else {
+                    let left = run - t;
+                    (len - 0.5 * a * left * left, a * left)
+                };
+                return (from + d, v);
+            }
+            t -= run;
+        }
+        (self.stops[0], 0.0)
     }
 
     pub fn len(&self) -> f32 {
@@ -64,6 +131,8 @@ pub struct Vehicle {
     /// Sideways from the path center, to the right (cars keep to their lane).
     pub lane: f32,
     pub variant: u8,
+    /// How far behind its train's front a carriage runs, on lines with stops.
+    pub lead: f32,
 }
 
 /// Where a vehicle is right now.
@@ -160,9 +229,54 @@ pub fn lift_spec(kind: &str) -> Option<LiftSpec> {
     }
 }
 
+/// A cruise ship's length, height of its top deck over the water, and beam.
+pub const CRUISE_SIZE: Vec3 = Vec3::new(250.0, 42.0, 36.0);
+/// A cruise ship's decks, bow to stern, as (middle along its length, half length, base
+/// height, height, half beam): the hull, then three tiers of cabins stepping back, the
+/// last the sky deck forward of the funnels.
+pub const CRUISE_DECKS: [(f32, f32, f32, f32, f32); 4] = [
+    (0.0, 125.0, 0.0, 14.0, 18.0),
+    (-8.0, 98.0, 14.0, 12.0, 17.0),
+    (-16.0, 78.0, 26.0, 10.0, 15.5),
+    (22.0, 34.0, 36.0, 6.0, 11.0),
+];
+/// Where along a cruise ship its two funnels stand.
+pub const CRUISE_FUNNELS: [f32; 2] = [-48.0, -70.0];
+
 /// Cars in a train, engine included, and the distance between their middles.
 pub const TRAIN_CARS: u32 = 7;
 pub const TRAIN_GAP: f32 = 21.0;
+/// Cars in a metro train, the distance between their middles, and their variants: the
+/// leading cab, the middle cars and the trailing cab.
+pub const METRO_CARS: u32 = 4;
+pub const METRO_GAP: f32 = 17.0;
+pub const METRO_CAB: u8 = 4;
+pub const METRO_MID: u8 = 5;
+pub const METRO_TAIL: u8 = 6;
+
+/// Where trains on railway `road` halt: each station that snaps to this line, with the
+/// train centered on its platform. Matches where [`crate::World`] puts the stations.
+fn station_stops(
+    def: &crate::terrain::WorldDef,
+    road: usize,
+    path: &Path,
+    cars: u32,
+    gap: f32,
+) -> Vec<f32> {
+    let mut stops: Vec<f32> = def
+        .marks
+        .iter()
+        .filter(|m| m.kind == "station")
+        .filter_map(|m| {
+            let at = Vec2::new(m.pos[0], m.pos[2]);
+            let (r, k) = crate::world::nearest_rail(def, at)?;
+            (r == road).then(|| path.along[k] + (cars - 1) as f32 * gap * 0.5)
+        })
+        .map(|s| s.rem_euclid(path.len()))
+        .collect();
+    stops.sort_by(f32::total_cmp);
+    stops
+}
 
 /// How far under the cable a chair's seat and a cabin's floor hang.
 pub const CHAIR_DROP: f32 = 3.7;
@@ -229,45 +343,52 @@ impl Traffic {
                 ..v
             });
         };
-        for r in def.routes {
-            if lift_spec(r.kind).is_some() {
-                continue;
-            }
-            let pts = r
-                .pts
-                .iter()
-                .map(|p| Vec3::new(p[0], if p[2] <= NO_Y { def.sea_level } else { p[2] }, p[1]))
-                .collect();
-            let path = t.paths.len();
-            t.paths.push(Path::new(pts, r.looped));
-            let len = t.paths[path].len();
-            let (kind, speed, size, count) = match r.kind {
-                "yacht" => (Kind::Sailboat, 9.0, Vec3::new(14.0, 2.4, 4.6), 2),
-                "seaplane" => (Kind::Seaplane, 42.0, Vec3::new(12.0, 3.5, 14.0), 1),
-                "plane" => (Kind::Airliner, 70.0, Vec3::new(34.0, 4.0, 32.0), 1),
-                "balloon" => (Kind::Balloon, 5.0, Vec3::new(16.0, 22.0, 16.0), 2),
-                _ => (Kind::Ferry, 14.0, Vec3::new(42.0, 6.0, 12.0), 1),
-            };
-            for k in 0..count {
-                push(
-                    &mut t,
-                    Vehicle {
-                        id: 0,
-                        kind,
-                        path,
-                        speed,
-                        offset: len * k as f32 / count as f32,
-                        size,
-                        lane: 0.0,
-                        variant: if kind == Kind::Balloon {
-                            (path * 2 + k) as u8
-                        } else {
-                            k as u8
+        // Routes in file order, but cruise ships come after the trains below, so adding one
+        // keeps the numbers of everything else.
+        let route_vehicles = |t: &mut Traffic, cruise: bool| {
+            for r in def.routes {
+                if lift_spec(r.kind).is_some() || (r.kind == "cruise") != cruise {
+                    continue;
+                }
+                let pts = r
+                    .pts
+                    .iter()
+                    .map(|p| Vec3::new(p[0], if p[2] <= NO_Y { def.sea_level } else { p[2] }, p[1]))
+                    .collect();
+                let path = t.paths.len();
+                t.paths.push(Path::new(pts, r.looped));
+                let len = t.paths[path].len();
+                let (kind, speed, size, count) = match r.kind {
+                    "yacht" => (Kind::Sailboat, 9.0, Vec3::new(14.0, 2.4, 4.6), 2),
+                    "cruise" => (Kind::Cruise, 9.0, CRUISE_SIZE, 1),
+                    "seaplane" => (Kind::Seaplane, 42.0, Vec3::new(12.0, 3.5, 14.0), 1),
+                    "plane" => (Kind::Airliner, 70.0, Vec3::new(34.0, 4.0, 32.0), 1),
+                    "balloon" => (Kind::Balloon, 5.0, Vec3::new(16.0, 22.0, 16.0), 2),
+                    _ => (Kind::Ferry, 14.0, Vec3::new(42.0, 6.0, 12.0), 1),
+                };
+                for k in 0..count {
+                    push(
+                        t,
+                        Vehicle {
+                            id: 0,
+                            kind,
+                            path,
+                            speed,
+                            offset: len * k as f32 / count as f32,
+                            size,
+                            lane: 0.0,
+                            lead: 0.0,
+                            variant: if kind == Kind::Balloon {
+                                (path * 2 + k) as u8
+                            } else {
+                                k as u8
+                            },
                         },
-                    },
-                );
+                    );
+                }
             }
-        }
+        };
+        route_vehicles(&mut t, false);
         // Cars on every road, both ways, about one per 220m each way.
         for (i, road) in def.roads.iter().enumerate() {
             if road.runway || road.rail {
@@ -315,13 +436,14 @@ impl Traffic {
                             _ => Vec3::new(4.2, 1.5, 1.9),
                         },
                         lane: road.w * 0.22,
+                        lead: 0.0,
                         variant,
                     },
                 );
             }
         }
-        // Trains on every railway: two of them, an engine and six carriages each, going
-        // round and round.
+        // Trains on every railway: two on each, going round and round and halting at its
+        // stations. Main lines run an engine and six carriages, subways four metro cars.
         for (i, road) in def.roads.iter().enumerate() {
             if !road.rail {
                 continue;
@@ -336,29 +458,51 @@ impl Traffic {
             let looped = pts[0].distance(pts[pts.len() - 1]) < 2.0;
             let path = t.paths.len();
             t.paths.push(Path::new(pts, looped));
-            let len = t.paths[path].len();
+            let (cars, gap, top) = if road.subway {
+                (METRO_CARS, METRO_GAP, 15.0)
+            } else {
+                (TRAIN_CARS, TRAIN_GAP, 17.0)
+            };
+            if looped {
+                let stops = station_stops(def, i, &t.paths[path], cars, gap);
+                t.paths[path].stops = stops;
+            }
+            let p = &t.paths[path];
+            let len = p.len();
+            let lap = if p.stops.is_empty() {
+                len / top
+            } else {
+                p.lap_time(top)
+            };
             for train in 0..2u32 {
-                for car in 0..TRAIN_CARS {
+                for car in 0..cars {
+                    let variant = match (road.subway, car) {
+                        (false, 0) => 0,
+                        (false, _) => 1 + (train * 3 + car) as u8 % 3,
+                        (true, 0) => METRO_CAB,
+                        (true, c) if c == cars - 1 => METRO_TAIL,
+                        (true, _) => METRO_MID,
+                    };
+                    let lead = car as f32 * gap;
                     push(
                         &mut t,
                         Vehicle {
                             id: 0,
                             kind: Kind::Train,
                             path,
-                            speed: 17.0,
-                            offset: len * train as f32 / 2.0 - car as f32 * TRAIN_GAP,
-                            size: Vec3::new(TRAIN_GAP - 1.2, 4.2, 3.2),
+                            speed: top,
+                            // Half a lap apart in time.
+                            offset: lap * top * train as f32 / 2.0,
+                            size: Vec3::new(gap - 1.2, 4.2, 3.2),
                             lane: 0.0,
-                            variant: if car == 0 {
-                                0
-                            } else {
-                                1 + (train * 3 + car) as u8 % 3
-                            },
+                            variant,
+                            lead,
                         },
                     );
                 }
             }
         }
+        route_vehicles(&mut t, true);
         // Lifts last, so the other vehicles keep their numbers.
         for r in def.routes {
             // Lifts: chairs or cabins round a loop of cable, up one side and down the
@@ -382,6 +526,7 @@ impl Traffic {
                             size: spec.size,
                             lane: spec.gauge,
                             variant: (k % 4) as u8,
+                            lead: 0.0,
                         },
                     );
                 }
@@ -436,15 +581,21 @@ impl Traffic {
     /// Where vehicle `v` is at `time` seconds. The path is rounded off, so corners are
     /// curves and riders are never jolted.
     pub fn pose(&self, v: &Vehicle, time: f32) -> Pose {
-        let len = self.paths[v.path].len();
-        let u = v.offset + v.speed * time;
+        let path = &self.paths[v.path];
+        let len = path.len();
+        let (u, speed) = if path.stops.is_empty() {
+            (v.offset + v.speed * time, v.speed)
+        } else {
+            let (front, speed) = path.timetable(time + v.offset / v.speed, v.speed);
+            (front - v.lead, speed)
+        };
         let look = 12.0f32.min(len * 0.25).max(0.5);
         let at = |k: f32| self.spot(v, u + k * look);
         let (back2, back, here, ahead, ahead2) = (at(-2.0), at(-1.0), at(0.0), at(1.0), at(2.0));
         let pos = (back + here * 2.0 + ahead) * 0.25;
         let dir = (ahead - back).normalize_or(Vec3::Z);
         let turn = wrap(heading_of(ahead2 - here) - heading_of(here - back2));
-        let yaw_rate = turn / (2.0 * look) * v.speed;
+        let yaw_rate = turn / (2.0 * look) * speed;
         let flying = matches!(v.kind, Kind::Seaplane | Kind::Airliner);
         let bank = if flying && pos.y > 4.0 {
             (yaw_rate * v.speed / 9.81).atan().clamp(-0.6, 0.6)
@@ -461,7 +612,7 @@ impl Traffic {
                 0.0
             },
             bank,
-            vel: dir * v.speed,
+            vel: dir * speed,
             yaw_rate,
         }
     }
@@ -524,6 +675,31 @@ impl Traffic {
                 block(Vec3::new(1.3, 1.4, 1.3), 0.0),
                 self.shape(i).expect("balloons are solid"),
             ],
+            Kind::Cruise => {
+                let a = p.axis();
+                let along = Vec3::new(a.x, 0.0, a.y);
+                let mut out: Vec<Shape> = CRUISE_DECKS
+                    .iter()
+                    .map(|&(x, hx, y, h, hz)| {
+                        Shape::Block(Block {
+                            base: p.pos + along * x + Vec3::Y * y,
+                            half: Vec3::new(hx, h, hz),
+                            axis: a,
+                            roof: 0.0,
+                        })
+                    })
+                    .collect();
+                for x in CRUISE_FUNNELS {
+                    out.push(Shape::Frustum(crate::shape::Frustum {
+                        base: p.pos + along * x + Vec3::Y * 36.0,
+                        height: 14.0,
+                        r0: 5.0,
+                        r1: 4.4,
+                        spin: 0.0,
+                    }));
+                }
+                out
+            }
             Kind::Ferry => vec![
                 block(Vec3::new(w * 0.5, 2.0, d * 0.5), 0.0),
                 block(Vec3::new(w * 0.275, 3.0, d * 0.4), 2.0),

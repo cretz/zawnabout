@@ -434,6 +434,8 @@ caves tarn {
 
 caves deep {
     cavern great-hall x=300 y=-700 z=-100 w=2300 h=520 d=1500 rot=-6 shape=hall glow=0.3 {
+        spout hall-spout x=-600 z=-500 w=12
+        spout hall-spout-2 x=1000 z=-400 w=9
         note "As open as the sky. Bank, climb, dive between pillars. An underground city sits on the floor."
         pillar hall-pillar-1 x=-300 z=-400 r=60
         pillar hall-pillar-2 x=500 z=-550 r=80
@@ -454,6 +456,8 @@ caves deep {
     }
 
     cavern glass-lake x=-1550 y=-560 z=250 w=900 h=380 d=1000 rot=15 shape=dome glow=0.35 decor=crystal {
+        spout glass-spout x=-1480 z=180 w=10
+        spout glass-spout-2 x=-1700 z=420 w=7
         note "Crystal glow off still water. The underground river leaves from the south end."
         lake glass-lake-water level=-680 {
             p -1900 0

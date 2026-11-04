@@ -363,9 +363,70 @@ pub fn rivers(terrain: &Terrain) -> Vec<WaterPart> {
     parts
 }
 
+/// Water pouring from cracks in cavern roofs: where each leaves the roof, where it lands
+/// on the floor or the cave lake, and how wide it is.
+pub fn spouts(terrain: &Terrain) -> Vec<(Vec3, Vec3, f32)> {
+    let mut out = Vec::new();
+    for m in terrain.def.marks {
+        let Some(w) = m
+            .kind
+            .strip_prefix("spout:")
+            .and_then(|w| w.parse::<f32>().ok())
+        else {
+            continue;
+        };
+        let mid = Vec3::from(m.pos);
+        // Up through the open cave to the roof.
+        let mut top = mid;
+        while terrain.sdf(top) > 0.0 && top.y < mid.y + 2000.0 {
+            top.y += terrain.sdf(top).max(0.5);
+        }
+        let floor = terrain.support(mid.x, mid.z, mid.y);
+        let land = terrain
+            .cave_water(mid.x, mid.z, floor)
+            .map_or(floor, |l| l.max(floor));
+        if top.y - land > 4.0 {
+            out.push((top + Vec3::Y * 2.0, Vec3::new(mid.x, land, mid.z), w));
+        }
+    }
+    out
+}
+
+/// Spouts as round curtains of falling water.
+fn spout_parts(terrain: &Terrain) -> Vec<WaterPart> {
+    spouts(terrain)
+        .into_iter()
+        .map(|(top, foot, w)| {
+            let mut m = MeshBuilder::new();
+            let n = 10;
+            let r = w * 0.5;
+            let flow = Vec2::new(0.0, 9.0);
+            let ring = |k: u32, y: f32, r: f32| {
+                let a = k as f32 / n as f32 * std::f32::consts::TAU;
+                Vec3::new(top.x + a.cos() * r, y, top.z + a.sin() * r)
+            };
+            for k in 0..n {
+                // Narrow where it leaves the crack, spreading a little as it falls.
+                let (a0, a1) = (ring(k, top.y, r * 0.6), ring(k + 1, top.y, r * 0.6));
+                let (b0, b1) = (ring(k, foot.y, r), ring(k + 1, foot.y, r));
+                let v = |p: Vec3| vert(p, CAVE, OPAQUE_DEPTH * 0.6, flow, 0.0, true);
+                tri(&mut m, v(a0), v(b0), v(b1));
+                tri(&mut m, v(a0), v(b1), v(a1));
+            }
+            WaterPart {
+                mesh: m,
+                cave: true,
+            }
+        })
+        .collect()
+}
+
 /// The foot of every falls, with its width, for spray.
 pub fn falls_feet(terrain: &Terrain) -> Vec<(Vec3, f32)> {
-    let mut out = Vec::new();
+    let mut out: Vec<(Vec3, f32)> = spouts(terrain)
+        .into_iter()
+        .map(|(_, foot, w)| (foot, w))
+        .collect();
     for (ri, r) in terrain.def.rivers.iter().enumerate() {
         let lv = terrain.river_levels(ri);
         let mut was = false;
@@ -388,6 +449,7 @@ pub fn all(terrain: &Terrain) -> Vec<WaterPart> {
     out.extend(lakes(terrain));
     out.extend(pools(terrain));
     out.extend(rivers(terrain));
+    out.extend(spout_parts(terrain));
     out.retain(|p| !p.mesh.verts.is_empty());
     out
 }

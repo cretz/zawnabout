@@ -1,0 +1,37 @@
+# Ride the crescent line a full lap on the engine: over the bridges, through the Moon Hill
+# tunnel and halting at every station.
+ride train
+wait 0.5
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+expect ground
+shot ride-train.png
