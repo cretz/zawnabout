@@ -29,10 +29,11 @@ pub enum Action {
     Flap,
     Tuck,
     Brake,
+    Breath,
 }
 
 impl Action {
-    pub const ALL: [Action; 7] = [
+    pub const ALL: [Action; 8] = [
         Action::PitchUp,
         Action::PitchDown,
         Action::TurnLeft,
@@ -40,6 +41,7 @@ impl Action {
         Action::Flap,
         Action::Tuck,
         Action::Brake,
+        Action::Breath,
     ];
 
     pub fn name(self) -> &'static str {
@@ -51,6 +53,7 @@ impl Action {
             Action::Flap => "flap",
             Action::Tuck => "tuck",
             Action::Brake => "brake",
+            Action::Breath => "breath",
         }
     }
 
@@ -87,10 +90,16 @@ impl Default for Bindings {
             ("ShiftRight", Tuck),
             ("KeyE", Brake),
             ("KeyX", Brake),
+            ("KeyF", Breath),
+            ("KeyR", Breath),
+            ("KeyC", Brake),
+            ("KeyQ", Brake),
         ];
         let buttons = [
             (0, Flap),
             (1, Brake),
+            (2, Breath),
+            (3, Brake),
             (4, Brake),
             (6, Brake),
             (5, Tuck),
@@ -123,6 +132,7 @@ pub struct Overrides {
     pub flap: Option<bool>,
     pub tuck: Option<bool>,
     pub brake: Option<bool>,
+    pub breath: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -237,11 +247,14 @@ impl InputState {
             digital(Action::TurnRight) - digital(Action::TurnLeft),
             digital(Action::PitchUp) - digital(Action::PitchDown),
         );
-        // Keys ramp so a tap is a nudge and a hold is a full turn.
+        // Keys ramp so a tap is a nudge and a hold is a full turn. Turning comes in fast
+        // to half, then builds more slowly, so holding a key keeps tightening the turn.
         for i in 0..2 {
             let (cur, tgt) = (self.key_axes[i], target[i]);
             let rate = if tgt == 0.0 || tgt.signum() != cur.signum() && cur != 0.0 {
                 opts.key_return
+            } else if i == 0 && cur.abs() >= 0.5 {
+                opts.key_ramp * 0.4
             } else {
                 opts.key_ramp
             };
@@ -288,6 +301,7 @@ impl InputState {
             tuck: o.tuck.unwrap_or(self.down(Action::Tuck, binds)),
             brake: o.brake.unwrap_or(self.down(Action::Brake, binds)),
             land_at: None,
+            breath: o.breath.unwrap_or(self.down(Action::Breath, binds)),
         };
         self.taps = 0;
         input

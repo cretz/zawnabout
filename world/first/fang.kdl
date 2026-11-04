@@ -39,10 +39,13 @@ mountain fang-peak x=0 z=0 h=950 r=950 shape=crater rim=950 inner=260 floor=790 
     perch fang-rim x=0 z=-300
     beacon fang-beacon x=200 z=-150
 }
-ridge fang-spur-east width=350 {
-    p 300 -100 h=800
-    p 800 -150 h=350
-    p 1250 -50 h=60
+ridge fang-spur-east width=760 smooth=#true {
+    note "A long gentle shoulder, so the ski runs can come down it from under the rim."
+    p 300 -100 h=820
+    p 700 -130 h=640
+    p 1080 -150 h=470
+    p 1240 -100 h=220
+    p 1330 -50 h=40
 }
 ridge fang-spur-north width=300 {
     p 100 -300 h=800
@@ -117,6 +120,55 @@ village canopy style=stilts tech=simple {
     beacon canopy-beacon x=-1000 z=100
 }
 
+// The ski area on the east spur: snow runs from under the rim down to a lodge village,
+// two chairlifts, and a road round the north shore from the stilt village.
+snowfield fang-runs {
+    note "Groomed runs. Skiers come down all day."
+    p 330 -330
+    p 700 -390
+    p 1000 -380
+    p 1090 -200
+    p 1010 60
+    p 700 110
+    p 380 130
+    p 290 -90
+}
+village fang-lodge style=hill tech=mid {
+    note "Chalets, the lift stations and a lodge at the foot of the runs, above the sea cliffs."
+    p 890 -220
+    p 1030 -240
+    p 1140 -70
+    p 1150 40
+    p 960 60
+    p 880 -80
+    tier y=410
+    tier y=440
+    tier y=470
+    tier y=500
+}
+route fang-chair-1 kind=chairlift {
+    note "From the lodge to just under the rim."
+    p 1060 -20
+    p 420 -110
+}
+route fang-chair-2 kind=chairlift {
+    p 960 -190
+    p 650 -330
+}
+road fang-road w=9 {
+    note "Round the north shore from the stilt village, then up the spur to the lodge."
+    p -1000 -150
+    p -900 -550
+    p -550 -880
+    p -100 -980
+    p 350 -950
+    p 700 -760
+    p 850 -560
+    p 900 -420
+    p 950 -300
+    p 990 -190
+}
+
 dugout fang-nook-1 x=-500 y=60 z=-930 facing=north r=22
 dugout fang-nook-2 x=-200 y=140 z=-1090 facing=north r=22
 dugout fang-nook-3 x=250 y=90 z=-1080 facing=north r=22
@@ -137,7 +189,7 @@ caves old-tube {
         p 500 500 0
         p 400 350 -300
     }
-    cavern ember-hall x=200 y=300 z=-400 w=600 h=250 d=500 rot=25 shape=dome glow=0.3 {
+    cavern ember-hall x=200 y=300 z=-400 w=600 h=250 d=500 rot=25 shape=dome glow=0.3 decor=ember {
         note "Old lava chamber. Warm colors."
         beacon ember-beacon x=200 y=180 z=-400
     }
@@ -152,7 +204,7 @@ caves old-tube {
         p 300 -250 -100
         p 100 -430 0
     }
-    cavern fang-deep x=0 y=-650 z=100 w=1800 h=450 d=1500 rot=20 shape=hall glow=0.3 {
+    cavern fang-deep x=0 y=-650 z=100 w=1800 h=450 d=1500 rot=20 shape=hall glow=0.3 decor=ember {
         note "The emptied magma chamber. Huge, warm glow from the walls, the deepest heat in the world."
         beacon fang-deep-beacon x=-300 y=-860 z=300
     }

@@ -1,0 +1,6 @@
+# Over moonharbor, land on the TV tower's pod, the highest perch in the city.
+goto 1500 -900 160 180
+land-perch crescent/moon-tower
+wait-until landed 60
+expect on-perch crescent/moon-tower
+shot perch-tv-tower.png

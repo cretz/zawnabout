@@ -8,6 +8,7 @@ use zawnabout_sim::{DT, Dragon, EntityId, Mode, ParamDef, Params, Sim};
 
 use crate::camera::{Camera, CameraParams, Target};
 use crate::feedback::{Feedback, FreeCam, Pin, json_str};
+use crate::fx::Fx;
 use crate::input::{Action, Bindings, ControlParams, InputState};
 use crate::pose::DragonVisual;
 
@@ -25,7 +26,7 @@ zawnabout_sim::params! {
         /// Fog end (m).
         fog_end: f32 = 9000.0, [50, 16000],
         /// How far trees, flowers and clouds draw (m).
-        prop_range: f32 = 1600.0, [200, 9000],
+        prop_range: f32 = 2200.0, [200, 9000],
         /// Trees nearer than this get their full detail mesh (m).
         detail_range: f32 = 450.0, [0, 4000],
         /// Blob shadow strength.
@@ -34,7 +35,27 @@ zawnabout_sim::params! {
         landing_rings: bool = true, [0, 1],
         /// How far away landing rings show (m).
         ring_range: f32 = 450.0, [50, 2000],
+        /// Day (0) to night (1) when the day stands still. At night a bright moon lights
+        /// the world and windows and lamps glow.
+        night: f32 = 0.0, [0, 1],
+        /// Seconds for a whole day and night, 0 to stand still with the sun above. Night
+        /// takes about a quarter of it.
+        day_length: f32 = 1440.0, [0, 7200],
+        /// Hour of day at the start.
+        start_hour: f32 = 9.5, [0, 24],
     }
+}
+
+/// The sun and sky for a moment of the day.
+#[derive(Clone, Copy, Debug)]
+pub struct Sky {
+    /// Toward the light that casts: the sun by day, the moon by night.
+    pub light_dir: Vec3,
+    /// 0 by day to 1 at night.
+    pub night: f32,
+    /// 1 when the sun is low and golden, at dawn and dusk.
+    pub dusk: f32,
+    pub hour: f32,
 }
 
 /// A ring drawn on the ground or a perch.
@@ -64,12 +85,16 @@ pub struct Game {
     pub visuals: Vec<(EntityId, DragonVisual)>,
     /// A landing spot picked by a tap, sent with the next tick's input.
     pub land_request: Option<Vec3>,
+    /// Seconds left before a dragged look eases back.
+    look_hold: f32,
     /// Notes mode: frozen world, free camera, pins.
     pub feedback: Feedback,
     pub paused: bool,
     pub time: f64,
     acc: f32,
     trace: Option<Trace>,
+    /// Fire and sparks, client only.
+    pub fx: Fx,
 }
 
 fn list<P: Params>(p: &P, out: &mut Vec<(String, f32, ParamDef)>) {
@@ -104,14 +129,59 @@ impl Game {
             camera: Camera::default(),
             visuals,
             land_request: None,
+            look_hold: 0.0,
             feedback: Feedback::default(),
             paused: false,
             time: 0.0,
             acc: 0.0,
             trace: None,
+            fx: Fx::default(),
         };
         game.update_camera(0.0);
         game
+    }
+
+    /// Time of day from the sim's clock, so everyone sees the same sky.
+    pub fn sky(&self) -> Sky {
+        let l = &self.look;
+        let dir = |yaw: f32, pitch: f32| {
+            Vec3::new(
+                yaw.sin() * pitch.cos(),
+                pitch.sin(),
+                yaw.cos() * pitch.cos(),
+            )
+        };
+        if l.day_length <= 0.0 {
+            return Sky {
+                light_dir: dir(l.sun_yaw.to_radians(), l.sun_height.to_radians()),
+                night: l.night.clamp(0.0, 1.0),
+                dusk: 0.0,
+                hour: 12.0,
+            };
+        }
+        let secs = (self.sim.tick as f64 * DT as f64) as f32;
+        let hour = clock(cycle(l.start_hour) + secs / l.day_length);
+        // Up in the east at six, highest at noon, down in the west at six.
+        let turn = (hour - 6.0) / 24.0 * std::f32::consts::TAU;
+        let elev = turn.sin() * 62f32.to_radians();
+        let yaw = std::f32::consts::FRAC_PI_2 + (hour - 6.0) / 12.0 * std::f32::consts::PI;
+        let deg = elev.to_degrees();
+        let night = smoothstep(3.0, -7.0, deg);
+        // The moon rides opposite the sun, a little off so its light slants.
+        let light_dir = if deg > -4.0 {
+            dir(yaw, elev.max(2f32.to_radians()))
+        } else {
+            dir(
+                yaw + std::f32::consts::PI + 0.4,
+                (-elev).max(15f32.to_radians()),
+            )
+        };
+        Sky {
+            light_dir,
+            night,
+            dusk: 1.0 - smoothstep(2.0, 22.0, deg.abs()),
+            hour,
+        }
     }
 
     pub fn player_dragon(&self) -> &Dragon {
@@ -166,6 +236,7 @@ impl Game {
         let mut input = self.input.sample(DT, &self.bindings, &self.controls);
         input.land_at = self.land_request.take();
         self.sim.step(&[(self.player, input)]);
+        self.fx.tick(&self.sim, DT);
         for d in &self.sim.dragons {
             match self.visuals.iter_mut().find(|(id, _)| *id == d.id) {
                 Some((_, v)) => v.tick(d, &self.sim.flight, &self.sim.world, DT),
@@ -201,16 +272,44 @@ impl Game {
         }
     }
 
+    /// Looks around by a drag of `dx`, `dy` pixels. The view eases back behind the dragon
+    /// a moment after the drag stops.
+    pub fn look_drag(&mut self, dx: f32, dy: f32) {
+        let f = &mut self.camera.free_look;
+        // Turning wraps all the way round, kept within half a turn so it eases back the
+        // short way.
+        let pi = std::f32::consts::PI;
+        f.x = (f.x - dx * 0.006 + pi).rem_euclid(2.0 * pi) - pi;
+        f.y = (f.y - dy * 0.004).clamp(-0.6, 1.1);
+        self.look_hold = 1.0;
+    }
+
     fn update_camera(&mut self, dt: f32) {
+        if self.look_hold > 0.0 {
+            self.look_hold -= dt;
+        } else {
+            self.camera.free_look *= (-2.5 * dt).exp();
+        }
         let d = self.player_dragon();
-        let pos = self
-            .visual(self.player)
-            .map(|v| v.interpolated(self.alpha()).0)
-            .unwrap_or(d.pos);
+        // Follow the pose as drawn this frame, not the last tick, so turns stay smooth
+        // whatever the frame rate.
+        let (pos, heading) = match self.visual(self.player) {
+            Some(v) => {
+                let (pos, rot) = v.interpolated(self.alpha());
+                let fwd = rot * Vec3::Z;
+                let heading = if fwd.x.abs() + fwd.z.abs() > 0.1 {
+                    fwd.x.atan2(fwd.z)
+                } else {
+                    d.heading
+                };
+                (pos, heading)
+            }
+            None => (d.pos, d.heading),
+        };
         let target = Target {
             pos,
             vel: d.vel,
-            heading: d.heading,
+            heading,
             bank: d.bank,
             mode: d.mode,
         };
@@ -231,23 +330,113 @@ impl Game {
     fn surface_hit(&self, near: Vec3, dir: Vec3) -> Option<Vec3> {
         let world = &self.sim.world;
         let mut t = 0.0;
+        let mut above = near.y;
         while t < 9000.0 {
             let at = near + dir * t;
-            let floor = world.support(at.x, at.z, at.y);
+            // What stands under the last sample: once a step drops below it, the ray went
+            // through it. Asking under this sample would skip a roof it is now inside.
+            // Into the side of something taller than the ray: find the face.
+            if world.solid_at(at) {
+                let back = 1.0 + t * 0.01;
+                let mut k = (t - back).max(0.0);
+                while k <= t {
+                    let q = near + dir * k;
+                    if world.solid_at(q) {
+                        if world.wall_normal(q).is_some() {
+                            return Some(q);
+                        }
+                        // Ground is landed on where it was hit, so a tap through a cave
+                        // mouth lands inside. A building or prop is landed on top of.
+                        let reach = if world.terrain.sdf(q) < 0.0 {
+                            2.0
+                        } else {
+                            500.0
+                        };
+                        let top = world.support(q.x, q.z, q.y + reach);
+                        return Some(Vec3::new(q.x, top, q.z));
+                    }
+                    k += 0.2;
+                }
+            }
+            let floor = world.support(at.x, at.z, above.max(at.y));
             if at.y <= floor {
+                // Well below the top means the ray went in through a side: find the face and
+                // cling to it if it is a wall.
+                if floor - at.y > 2.5 {
+                    let back = 1.0 + t * 0.01;
+                    let mut k = (t - back).max(0.0);
+                    while k < t {
+                        let q = near + dir * k;
+                        if world.support(q.x, q.z, q.y + 300.0) > q.y + 0.5 {
+                            if world.wall_normal(q).is_some() {
+                                return Some(q);
+                            }
+                            break;
+                        }
+                        k += 0.2;
+                    }
+                }
                 return Some(Vec3::new(at.x, floor, at.z));
             }
+            above = at.y;
             t += 1.0 + t * 0.01;
         }
         None
     }
 
+    /// Where to stand on vehicle `i`: toward the bow, clear of cabins and funnels.
+    pub fn deck(&self, i: usize) -> Option<Vec3> {
+        let t = &self.sim.world.traffic;
+        let v = t.vehicles.get(i)?;
+        let pose = t.poses[i];
+        let a = pose.axis();
+        let (along, across) = match v.kind {
+            zawnabout_sim::town::Kind::Ferry => (0.36, 0.0),
+            // Beside the mast, clear of the sails along the middle.
+            zawnabout_sim::town::Kind::Sailboat => (-0.2, 0.3),
+            zawnabout_sim::town::Kind::Car
+            | zawnabout_sim::town::Kind::Train
+            | zawnabout_sim::town::Kind::LiftChair
+            | zawnabout_sim::town::Kind::LiftCabin => (0.0, 0.0),
+            _ => (0.1, 0.0),
+        };
+        let p = pose.pos
+            + Vec3::new(a.x, 0.0, a.y) * v.size.x * along
+            + Vec3::new(-a.y, 0.0, a.x) * v.size.z * across;
+        // Chairs and cabins hang below the cable: look down from just above them.
+        let above = match v.kind {
+            zawnabout_sim::town::Kind::LiftChair | zawnabout_sim::town::Kind::LiftCabin => 0.5,
+            _ => 50.0,
+        };
+        let top = self.sim.world.support(p.x, p.z, p.y + above);
+        Some(Vec3::new(p.x, top, p.z))
+    }
+
     /// The world point under normalized screen coordinates (0..1, origin top left): a
-    /// perch when one is near the ray, else the first surface hit. Returns the spot and how
-    /// close counts as arriving.
+    /// boat or plane, a perch when one is near the ray, else the first surface hit. Returns
+    /// the spot and how close counts as arriving.
     pub fn pick(&self, nx: f32, ny: f32, aspect: f32) -> Option<(Vec3, f32)> {
         let (near, dir) = self.ray(nx, ny, aspect);
         let world = &self.sim.world;
+        let ground = self.surface_hit(near, dir);
+        let ground_t = ground.map_or(f32::MAX, |g| (g - near).length());
+        let traffic = &world.traffic;
+        let vehicle = (0..traffic.vehicles.len())
+            .filter_map(|i| {
+                let v = &traffic.vehicles[i];
+                // Aim at where it stands, which for chairs and cabins is under the cable.
+                let c = self.deck(i)? - Vec3::Y * v.size.y * 0.5;
+                let t = (c - near).dot(dir);
+                let miss = (near + dir * t - c).length();
+                // Generous, since they move: half their length plus a bit with distance,
+                // and never less than a couple of meters, so small chairs are easy to hit.
+                let reach = (v.size.x * 0.5).max(2.5) + t * 0.025;
+                (t > 0.0 && t < ground_t + 5.0 && miss < reach).then_some((t, i))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, i)) = vehicle {
+            return self.deck(i).map(|p| (p, 3.0));
+        }
         let perch = world
             .perches
             .iter()
@@ -260,7 +449,7 @@ impl Game {
         if let Some((_, p)) = perch {
             return Some((p.pos, p.radius));
         }
-        self.surface_hit(near, dir).map(|p| (p, 2.0))
+        ground.map(|p| (p, 2.0))
     }
 
     /// Enters or leaves notes mode. Entering freezes everything and starts the free
@@ -396,7 +585,11 @@ impl Game {
                 }
             }
         }
-        let swoop = self.player_dragon().swoop.as_ref().map(|s| s.target);
+        let swoop = self
+            .player_dragon()
+            .swoop
+            .as_ref()
+            .map(|s| s.goal(&self.sim.world));
         if let Some(target) = swoop.or(self.land_request) {
             out.push(Marker {
                 pos: target,
@@ -438,6 +631,11 @@ impl Game {
                     && (feet.y - p.pos.y).abs() < 1.5
             }
             ["speed-above", _] => d.speed() > num(1)?,
+            ["lit", id] => self.sim.beacon(id).ok_or("no such beacon")?.1,
+            ["riding", _] => {
+                d.mode == Mode::Ground
+                    && self.sim.world.carrier(d.pos.x, d.pos.z, feet.y) == Some(num(1)? as usize)
+            }
             ["speed-below", _] => d.speed() < num(1)?,
             ["height-above", _] => {
                 feet.y - self.sim.world.support(feet.x, feet.z, feet.y) > num(1)?
@@ -505,7 +703,7 @@ impl Game {
     pub fn state(&self) -> String {
         let d = self.player_dragon();
         format!(
-            "t={:.2} mode={:?} pos=({:.1},{:.1},{:.1}) speed={:.1} vy={:.1} heading={:.2} path={:.2} aoa={:.2} bank={:.2} flap={} tuck={:.2} brake={:.2}",
+            "t={:.2} mode={:?} pos=({:.1},{:.1},{:.1}) speed={:.1} vy={:.1} heading={:.2} path={:.2} aoa={:.2} bank={:.2} flap={} tuck={:.2} brake={:.2} breath={:.2}",
             self.sim.tick as f32 * DT,
             d.mode,
             d.pos.x,
@@ -519,7 +717,8 @@ impl Game {
             d.bank,
             d.stroke.active,
             d.tuck,
-            d.brake
+            d.brake,
+            d.breath
         )
     }
 
@@ -577,6 +776,21 @@ impl Game {
                 self.land_request = Some(Vec3::new(x, y, z));
                 Ok(format!("flying to ({x:.1},{y:.1},{z:.1})"))
             }
+            // land-at x y z: an exact spot, such as one on a wall.
+            ["land-at", _, _, _] => {
+                let p = Vec3::new(num(1)?, num(2)?, num(3)?);
+                self.land_request = Some(p);
+                Ok(format!("flying to {p}"))
+            }
+            // tap-screen nx ny: a tap at normalized screen coordinates, as on a phone.
+            ["tap-screen", _, _] => {
+                let aspect = 16.0 / 9.0;
+                if self.tap(num(1)?, num(2)?, aspect) {
+                    Ok(format!("tapped, landing at {:?}", self.land_request))
+                } else {
+                    Err("nothing there".into())
+                }
+            }
             ["land-perch", id] => {
                 let p = *self
                     .sim
@@ -630,6 +844,108 @@ impl Game {
                 o.brake = Some(true);
                 Ok(String::new())
             }
+            ["hold", "breath"] => {
+                o.breath = Some(true);
+                Ok(String::new())
+            }
+            ["vehicles", ..] => {
+                let n = if words.len() > 1 {
+                    num(1)? as usize
+                } else {
+                    10
+                };
+                let at = self.player_dragon().pos;
+                let t = &self.sim.world.traffic;
+                let mut list: Vec<usize> = (0..t.vehicles.len()).collect();
+                list.sort_by(|a, b| {
+                    t.poses[*a]
+                        .pos
+                        .distance(at)
+                        .total_cmp(&t.poses[*b].pos.distance(at))
+                });
+                Ok(list
+                    .iter()
+                    .take(n)
+                    .map(|&i| {
+                        let p = t.poses[i];
+                        format!(
+                            "vehicle {i} {:?} at ({:.1},{:.1},{:.1}) heading {:.2} dist={:.0}",
+                            t.vehicles[i].kind,
+                            p.pos.x,
+                            p.pos.y,
+                            p.pos.z,
+                            p.heading,
+                            p.pos.distance(at)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(
+                        "
+",
+                    ))
+            }
+            // ride n: stands the dragon on top of vehicle n.
+            ["land-on", _] => {
+                let i = num(1)? as usize;
+                self.land_request = Some(self.deck(i).ok_or("no such vehicle")?);
+                Ok(String::new())
+            }
+            ["ride", _] => {
+                let i = num(1)? as usize;
+                let Vec3 { x, y: top, z } = self.deck(i).ok_or("no such vehicle")?;
+                let p = Vec3::new(x, top, z);
+                let stand = self.sim.flight.stand_height;
+                let d = self
+                    .sim
+                    .dragon_mut(self.player)
+                    .expect("player dragon exists");
+                d.pos = Vec3::new(p.x, top + stand, p.z);
+                d.vel = Vec3::ZERO;
+                d.mode = Mode::Ground;
+                d.swoop = None;
+                Ok(format!("riding vehicle {i}"))
+            }
+            // time [hour]: shows the time of day, or jumps to an hour.
+            ["time"] => Ok(format!("{:.2}", self.sky().hour)),
+            ["time", _] => {
+                let want = num(1)?;
+                let secs = (self.sim.tick as f64 * DT as f64) as f32;
+                let len = self.look.day_length.max(1.0);
+                self.look.start_hour = clock(cycle(want) - secs / len);
+                Ok(format!("{:.2}", self.sky().hour))
+            }
+            // light x: lights a beacon by id, or `all` of them, for testing.
+            ["light", id] => {
+                if *id == "all" {
+                    self.sim.lit.iter_mut().for_each(|l| *l = true);
+                    return Ok(format!("{} beacons lit", self.sim.lit.len()));
+                }
+                let (i, _) = self.sim.beacon(id).ok_or("no such beacon")?;
+                self.sim.lit[i] = true;
+                Ok(format!("lit {id}"))
+            }
+            ["beacons", ..] => {
+                let n = if words.len() > 1 { num(1)? as usize } else { 5 };
+                let at = self.player_dragon().pos;
+                let mut list: Vec<_> = self.sim.world.beacons.iter().enumerate().collect();
+                list.sort_by(|a, b| a.1.flame.distance(at).total_cmp(&b.1.flame.distance(at)));
+                Ok(list
+                    .iter()
+                    .take(n)
+                    .map(|(i, b)| {
+                        format!(
+                            "beacon {} at ({:.1},{:.1},{:.1}) {} dist={:.0}",
+                            b.id,
+                            b.flame.x,
+                            b.flame.y,
+                            b.flame.z,
+                            if self.sim.lit[*i] { "lit" } else { "dark" },
+                            b.flame.distance(at)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
             ["release", what] => {
                 match *what {
                     "pitch" => o.pitch = None,
@@ -637,6 +953,7 @@ impl Game {
                     "flap" => o.flap = None,
                     "tuck" => o.tuck = None,
                     "brake" => o.brake = None,
+                    "breath" => o.breath = None,
                     "all" => *o = Default::default(),
                     _ => return Err(format!("unknown input {what}")),
                 }
@@ -766,4 +1083,35 @@ impl Game {
         self.camera.reset();
         self.update_camera(0.0);
     }
+}
+
+/// Daytime, 5:30 to 19:30, takes this much of each cycle, so nights pass quicker.
+const DAYTIME: f32 = 0.72;
+const DAWN: f32 = 5.5;
+const DUSK: f32 = 19.5;
+
+/// The hour at a fraction of the way round a cycle that starts at dawn.
+fn clock(f: f32) -> f32 {
+    let f = f.rem_euclid(1.0);
+    let hour = if f < DAYTIME {
+        DAWN + f / DAYTIME * (DUSK - DAWN)
+    } else {
+        DUSK + (f - DAYTIME) / (1.0 - DAYTIME) * (24.0 - DUSK + DAWN)
+    };
+    hour.rem_euclid(24.0)
+}
+
+/// How far round a cycle that starts at dawn `hour` is: the inverse of [`clock`].
+fn cycle(hour: f32) -> f32 {
+    let since = (hour - DAWN).rem_euclid(24.0);
+    if since < DUSK - DAWN {
+        since / (DUSK - DAWN) * DAYTIME
+    } else {
+        DAYTIME + (since - (DUSK - DAWN)) / (24.0 - DUSK + DAWN) * (1.0 - DAYTIME)
+    }
+}
+
+fn smoothstep(lo: f32, hi: f32, x: f32) -> f32 {
+    let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }

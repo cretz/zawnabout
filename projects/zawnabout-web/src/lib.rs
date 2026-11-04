@@ -61,7 +61,9 @@ mod web {
             };
             surface.configure(&device, &config);
             let game = Game::new(seed as u64);
-            let gfx = Gfx::new(Renderer::new(device, queue, view_format, size), &game);
+            let mut gfx = Gfx::new(Renderer::new(device, queue, view_format, size), &game);
+            // One terrain chunk per frame keeps phones smooth while flying.
+            gfx.chunk_budget = 1;
             Ok(App {
                 game,
                 gfx,
@@ -126,6 +128,11 @@ mod web {
 
         pub fn gamepad(&mut self, axes: &[f32], buttons: &[f32]) {
             self.game.input.gamepad(axes, buttons);
+        }
+
+        /// Looks around by a drag on the screen, in CSS pixels.
+        pub fn look_drag(&mut self, dx: f32, dy: f32) {
+            self.game.look_drag(dx, dy);
         }
 
         pub fn touch_stick(&mut self, x: f32, y: f32) {

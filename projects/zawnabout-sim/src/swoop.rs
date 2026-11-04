@@ -28,6 +28,21 @@ pub struct Swoop {
     pub speed: f32,
     /// Braking for this swoop's cruise speed (m/s^2).
     braking: f32,
+    /// Landing on a moving boat or plane: the flight bends to follow it.
+    pub carrier: Option<Carrier>,
+    /// How far the flight was bent last tick, for its speed.
+    pub shift: Vec3,
+    /// Landing on the side of something: which way the wall faces.
+    pub wall: Option<Vec3>,
+}
+
+/// A vehicle a swoop lands on: which one, where on it, and where that was at the start.
+#[derive(Clone, Copy, Debug)]
+pub struct Carrier {
+    pub index: usize,
+    /// The landing spot in the vehicle's frame.
+    local: Vec3,
+    start: Vec3,
 }
 
 fn bezier(p: &[Vec3; 4], t: f32) -> Vec3 {
@@ -38,7 +53,13 @@ fn bezier(p: &[Vec3; 4], t: f32) -> Vec3 {
 impl Swoop {
     /// Plans a flight from `pos` (body center, moving at `vel`) to feet at `target`.
     pub fn plan(world: &World, pos: Vec3, vel: Vec3, target: Vec3, stand_height: f32) -> Self {
-        let end = target + Vec3::Y * stand_height;
+        let carrier = world.carrier(target.x, target.z, target.y);
+        let wall = carrier
+            .is_none()
+            .then(|| world.wall_normal(target))
+            .flatten();
+        // Belly to the wall, or feet on the ground.
+        let end = target + wall.unwrap_or(Vec3::Y) * stand_height;
         let flat = Vec3::new(end.x - pos.x, 0.0, end.z - pos.z);
         let dist = flat.length().max(1.0);
         let across = flat / dist;
@@ -62,9 +83,15 @@ impl Swoop {
         let reach = (dist / 3.0).clamp(4.0, 120.0);
         let mut p1 = pos + leave * reach;
         // Arrive from above and a little behind, so the last stretch drops onto the spot.
-        let mut p2 = end - across * reach * 0.5 + Vec3::Y * (reach * 0.6).max(6.0);
+        let mut p2 = match wall {
+            // Fly straight at a wall, from out in front of it.
+            Some(n) => end + n * (reach * 0.7).max(6.0) + Vec3::Y * reach * 0.1,
+            None => end - across * reach * 0.5 + Vec3::Y * (reach * 0.6).max(6.0),
+        };
         p1.y = p1.y.max(clear);
-        p2.y = p2.y.max(clear.min(end.y + reach * 1.5));
+        if wall.is_none() {
+            p2.y = p2.y.max(clear.min(end.y + reach * 1.5));
+        }
 
         let mut s = Self {
             target,
@@ -73,6 +100,13 @@ impl Swoop {
             travelled: 0.0,
             speed: speed.max(6.0),
             braking: BRAKING,
+            carrier: carrier.map(|index| Carrier {
+                index,
+                local: world.traffic.poses[index].to_local(target),
+                start: target,
+            }),
+            shift: Vec3::ZERO,
+            wall,
         };
         s.measure();
         s
@@ -123,6 +157,25 @@ impl Swoop {
             bezier(&self.points, (t + 0.01).min(1.0)) - bezier(&self.points, (t - 0.01).max(0.0));
         let vel = ahead.normalize_or_zero() * self.speed;
         (pos, vel, self.length() - self.travelled < 0.05)
+    }
+
+    /// How far the landing spot has moved with its vehicle since the start, blended in
+    /// over the flight so it starts in still air and ends on the deck.
+    pub fn bend(&self, world: &World) -> Vec3 {
+        let Some(c) = self.carrier else {
+            return Vec3::ZERO;
+        };
+        let now = world.traffic.poses[c.index].to_world(c.local);
+        let t = (self.progress() / 0.7).clamp(0.0, 1.0);
+        (now - c.start) * (t * t * (3.0 - 2.0 * t))
+    }
+
+    /// Where the feet will land right now: on a moving deck, wherever it has got to.
+    pub fn goal(&self, world: &World) -> Vec3 {
+        match self.carrier {
+            Some(c) => world.traffic.poses[c.index].to_world(c.local),
+            None => self.target,
+        }
     }
 
     /// Whether this is the final hard stop.

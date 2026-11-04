@@ -24,6 +24,14 @@ pub struct WorldDef {
     pub marks: &'static [Mark],
     pub voids: &'static [Void],
     pub pillars: &'static [Pillar],
+    /// Lakes in caves, each sitting in a basin void.
+    pub pools: &'static [Lake],
+    /// Parents come before their branches.
+    pub rivers: &'static [River],
+    pub towns: &'static [Town],
+    pub shelves: &'static [Shelf],
+    pub roads: &'static [Road],
+    pub routes: &'static [Route],
 }
 
 /// An island outline. `edges[i]` is the coast kind from point `i` to the next:
@@ -41,6 +49,8 @@ pub struct Land {
 pub struct Ridge {
     pub id: &'static str,
     pub width: f32,
+    /// No crags: an even slope, such as for ski runs.
+    pub smooth: bool,
     pub pts: &'static [[f32; 3]],
 }
 
@@ -117,6 +127,8 @@ pub enum CoverKind {
     Forest,
     Meadow,
     Town,
+    /// Snow lying on the ground, such as ski runs.
+    Snow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -155,6 +167,9 @@ pub enum VoidShape {
     Carved,
     /// One capsule of a passage or mouth, from `a` to `b` with radius `r`.
     Tube,
+    /// A lake basin in a cave floor: `half` is the radii, with depth as y, and `center.y`
+    /// the water level.
+    Basin,
 }
 
 /// An empty space in the rock. Rooms use `center`, `half` extents and a turn about y,
@@ -171,6 +186,24 @@ pub struct Void {
     pub b: [f32; 3],
     pub r: f32,
     pub glow: f32,
+    pub decor: Decor,
+    /// A mouth that lets daylight stream in.
+    pub light: bool,
+}
+
+/// What grows or stands in a cavern. Placed by the sim, with crystal and plant colors
+/// picked per cavern.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Decor {
+    Bare,
+    /// Some of everything.
+    Mixed,
+    Crystal,
+    Shroom,
+    /// Warm, old lava rooms: amber crystals and glowing cracks.
+    Ember,
+    /// Fallen stonework of an old people.
+    Ruins,
 }
 
 /// Rock left standing inside a cavern, from floor `y0` to roof `y1`.
@@ -192,6 +225,88 @@ pub struct Mark {
     pub pos: [f32; 3],
     /// No height given, so it sits on the ground.
     pub ground: bool,
+}
+
+/// A river or branch. Points are x, z and, for cave rivers, a rough water height.
+#[derive(Debug)]
+pub struct River {
+    pub id: &'static str,
+    pub w: f32,
+    pub under: bool,
+    /// Index of the river this branch joins, or -1.
+    pub parent: i32,
+    /// The branch leaves its parent (a delta arm) instead of flowing into it.
+    pub from_parent: bool,
+    pub pts: &'static [[f32; 3]],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Style {
+    Plain,
+    Canal,
+    Hill,
+    Cliff,
+    Stone,
+    Seafaring,
+    Modern,
+    Cavern,
+    Stilts,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum Tech {
+    Simple,
+    Old,
+    Mid,
+    Modern,
+}
+
+/// A city or village. `tiers` are terrace heights, lowest first. Cave towns sit at `y`.
+#[derive(Debug)]
+pub struct Town {
+    pub id: &'static str,
+    pub style: Style,
+    pub tech: Tech,
+    pub village: bool,
+    pub under: bool,
+    pub y: f32,
+    pub tiers: &'static [f32],
+    pub pts: &'static [[f32; 2]],
+}
+
+/// A flat ledge at height `y` along a path, `w` wide.
+#[derive(Debug)]
+pub struct Shelf {
+    pub id: &'static str,
+    pub y: f32,
+    pub depth: f32,
+    pub w: f32,
+    pub pts: &'static [[f32; 2]],
+}
+
+/// Heights below this in road points mean "follow the ground".
+pub const NO_Y: f32 = -1.0e4;
+
+/// A path a vehicle follows: `kind` is ferry, yacht, seaplane or plane. Points are x, z
+/// and a height or [`NO_Y`] for sea level.
+#[derive(Debug)]
+pub struct Route {
+    pub id: &'static str,
+    pub kind: &'static str,
+    /// Ends where it starts: it goes round instead of back and forth.
+    pub looped: bool,
+    pub pts: &'static [[f32; 3]],
+}
+
+/// A road or runway. Points are x, z and a forced height or [`NO_Y`].
+#[derive(Debug)]
+pub struct Road {
+    pub id: &'static str,
+    pub runway: bool,
+    /// A railway: trains instead of cars, track instead of tarmac.
+    pub rail: bool,
+    pub w: f32,
+    pub pts: &'static [[f32; 3]],
 }
 
 include!(concat!(env!("OUT_DIR"), "/world.rs"));

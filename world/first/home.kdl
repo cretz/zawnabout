@@ -110,6 +110,9 @@ mountain hearthpeak x=200 z=-1200 h=820 r=420 shape=crag stretch=1.6 rot=-10 {
     perch summit-perch x=240 z=-1180
 }
 
+// A tall crag on the east cliffs. The sea gate cave opens low in its seaward face.
+mountain gate-head x=2000 z=620 h=150 r=200 shape=crag stretch=1.4 rot=70
+
 // The hidden tarn sits in a cirque of crags on the spine. Only seen from above.
 mountain tarn-crags x=-650 z=-950 h=520 r=320 shape=crater rim=520 inner=200 floor=445 stretch=1.3 rot=25
 lake mirror-tarn level=430 {
@@ -127,7 +130,9 @@ plateau highfall top=260 edge=cliff jag=20 {
     p -1800 -800
     p -1450 -700
     p -1150 -720
-    p -900 -650
+    p -950 -720
+    p -830 -790
+    p -760 -640
     p -800 -480
     p -720 -300 sharp=#true
     p -760 100
@@ -308,6 +313,12 @@ city kettle-harbor style=canal tech=mid {
     site kettle-light kind=lighthouse x=1150 z=1500
 }
 
+route summit-gondola kind=gondola {
+    note "Cabins from the top of the hill city up the east spur to just under the summit."
+    p 1120 40
+    p 380 -1050
+}
+
 city terrace-hill style=hill tech=mid {
     note "Inland city stepping up a long hill. Rooftops make good perches."
     p 1050 0
@@ -355,19 +366,32 @@ city sunset-tiers style=cliff tech=mid {
 }
 
 road meadow-harbor w=10 {
+    p -150 250
     p -150 300
     p -200 550
     p -150 700
 }
-road meadow-hill w=10 {
+road meadow-hill w=14 {
+    note "Carries on from the plateau road, over the river and east to the hill."
+    p -300 200
+    p -150 250
     p 0 300
     p 450 450
     p 900 380
     p 1250 350
 }
+road harbor-hill w=14 {
+    note "Highway from the harbor city round to the hill city, closing the loop through the village."
+    p -150 700
+    p 250 780
+    p 700 760
+    p 1000 600
+    p 1150 450
+    p 1250 350
+}
 road meadow-plateau w=10 {
     note "Cut into the plateau's south face, climbing to the tiers."
-    p -300 200 40
+    p -300 12 200
     p -800 50 500
     p -1150 150 450
     p -1450 260 480
@@ -425,9 +449,11 @@ caves deep {
         }
         beacon hall-beacon-1 x=-200 y=-950 z=250
         beacon hall-beacon-2 x=1000 y=-950 z=-300
+        ruin hall-arch kind=arch x=700 y=-900 z=-450
+        ruin hall-columns kind=columns x=850 y=-900 z=-380
     }
 
-    cavern glass-lake x=-1550 y=-560 z=250 w=900 h=380 d=1000 rot=15 shape=dome glow=0.35 {
+    cavern glass-lake x=-1550 y=-560 z=250 w=900 h=380 d=1000 rot=15 shape=dome glow=0.35 decor=crystal {
         note "Crystal glow off still water. The underground river leaves from the south end."
         lake glass-lake-water level=-680 {
             p -1900 0
@@ -439,14 +465,21 @@ caves deep {
         beacon glass-beacon x=-1850 y=-670 z=300
     }
 
-    cavern drop-hall x=1700 y=-1050 z=1150 w=800 h=900 d=700 rot=20 shape=shaft glow=0.25 {
+    cavern drop-hall x=1700 y=-1050 z=1150 w=800 h=900 d=700 rot=20 shape=shaft glow=0.25 decor=shroom {
         note "Tall shaft. The river falls almost 800m. The deep road leaves from the bottom."
         beacon drop-beacon x=1500 y=-1490 z=1200
     }
 
-    cavern north-vault x=0 y=-1100 z=-2300 w=2600 h=600 d=1300 rot=-8 shape=hall glow=0.25 {
+    cavern north-vault x=0 y=-1100 z=-2300 w=2600 h=600 d=1300 rot=-8 shape=hall glow=0.25 decor=ruins {
         note "Under the north sea. Huge and empty, with a sea stack as its only door to the sky."
         beacon north-vault-beacon x=-400 y=-1390 z=-2250
+        ruin vault-arch kind=arch x=-250 y=-1300 z=-2250
+        ruin vault-columns kind=columns x=-150 y=-1300 z=-2120
+        ruin vault-elder kind=statue x=-330 y=-1300 z=-2160
+        ruin vault-wall kind=wall x=-480 y=-1300 z=-2380
+        ruin vault-columns-2 kind=columns x=250 y=-1300 z=-2300
+        ruin vault-arch-2 kind=arch x=420 y=-1300 z=-2420
+        ruin vault-stair kind=stair x=80 y=-1300 z=-2450
     }
 
     passage west-run w=180 {
@@ -465,8 +498,8 @@ caves deep {
         p -900 -695 950
         p 0 -700 1000
         p 800 -702 1050
-        falls deep-falls h=775
         p 1350 -705 1100
+        falls deep-falls h=775
         p 1500 -1480 1150
     }
     passage east-run w=200 {
@@ -488,12 +521,14 @@ caves deep {
         p 100 60 -1450
         p 150 90 -1680
     }
-    mouth falls-door kind=waterfall w=70 hidden=#true light=#true {
+    mouth falls-door kind=waterfall w=90 hidden=#true light=#true {
         note "Behind the high falls. Light comes through the water curtain."
-        p -1300 -420 0
+        p -1380 -540 60
+        p -1250 -430 0
         p -1050 -200 -100
         p -850 20 -150
         p -760 70 -150
+        p -715 75 -150
     }
     mouth bell-sink kind=sinkhole w=90 hidden=#true light=#true {
         note "Hidden in the thick wood. A single beam of daylight into the great hall."
@@ -503,19 +538,20 @@ caves deep {
     }
     mouth sea-gate kind=cliff w=70 {
         note "Low in the east sea cliff, out of the drop hall."
-        p 1950 -800 1100
-        p 2050 -300 950
-        p 1960 45 860
+        p 1900 -700 1050
+        p 1870 -250 760
+        p 1930 30 640
+        p 2080 40 610
     }
     mouth north-stack-door kind=stack w=60 hidden=#true light=#true {
         note "Through a lone sea stack off the north coast, straight down into the north vault."
-        p 600 90 -2600
-        p 600 -300 -2560
+        p 640 95 -2575
+        p 615 -300 -2555
         p 550 -800 -2450
     }
 }
 
-spire north-stack x=600 z=-2600 h=95 r=70 top=flat {
-    note "Lone stack off the north cliffs. Hollow in the middle."
-    perch north-stack-top x=640 y=95 z=-2620
+spire north-stack x=600 z=-2600 h=95 r=85 top=flat {
+    note "Lone stack off the north cliffs, split down one side by its shaft."
+    perch north-stack-top x=560 y=95 z=-2640
 }

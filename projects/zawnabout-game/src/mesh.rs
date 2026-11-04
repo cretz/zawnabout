@@ -14,6 +14,11 @@ pub struct Vertex {
     pub color: [u8; 4],
 }
 
+/// Vertex flag for scales that catch the light: a gloss with twinkling glints.
+pub const SHEEN: i8 = 90;
+/// Vertex flag for polished gold, which mirrors the sky.
+pub const METAL: i8 = 70;
+
 /// An sRGB color from a hex literal such as `0xF08A5D`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb(pub u32);
@@ -68,6 +73,29 @@ impl MeshBuilder {
         }
     }
 
+    /// A triangle with its own color at each corner, shading smoothly between them.
+    pub fn tri_colors(&mut self, a: Vec3, b: Vec3, c: Vec3, colors: [Rgb; 3], flag: i8) {
+        let from = self.verts.len();
+        self.tri_flagged(a, b, c, colors[0], flag);
+        for (v, c) in self.verts[from..].iter_mut().zip(colors) {
+            v.color = c.bytes();
+        }
+    }
+
+    /// Sets the flag of every vertex from `from` on, such as [`SHEEN`].
+    pub fn flag_from(&mut self, from: usize, flag: i8) {
+        for v in &mut self.verts[from..] {
+            v.normal[3] = flag;
+        }
+    }
+
+    /// Marks every vertex from `from` on as glowing on its own, like a lamp.
+    pub fn glow_from(&mut self, from: usize) {
+        for v in &mut self.verts[from..] {
+            v.normal[3] = -127;
+        }
+    }
+
     /// A planar quad `a b c d` in winding order.
     pub fn quad(&mut self, a: Vec3, b: Vec3, c: Vec3, d: Vec3, color: Rgb) {
         self.tri(a, b, c, color);
@@ -94,6 +122,21 @@ impl MeshBuilder {
                     color: v.color,
                 });
             }
+        }
+    }
+
+    /// Appends another mesh moved by `m`, a uniform scale, turn and shift, keeping its
+    /// normals as they are (smooth stays smooth).
+    pub fn place(&mut self, other: &MeshBuilder, m: Mat4) {
+        for v in &other.verts {
+            let p = m.transform_point3(Vec3::from_array(v.pos));
+            let n = Vec3::new(v.normal[0] as f32, v.normal[1] as f32, v.normal[2] as f32);
+            let n = m.transform_vector3(n).normalize_or_zero() * 127.0;
+            self.verts.push(Vertex {
+                pos: p.to_array(),
+                normal: [n.x as i8, n.y as i8, n.z as i8, v.normal[3]],
+                color: v.color,
+            });
         }
     }
 

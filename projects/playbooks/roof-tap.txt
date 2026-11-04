@@ -1,0 +1,9 @@
+# Tap a house roof in home village, as on a phone, and stand on it.
+size 1280 720
+goto -2064 990 18 0
+wait 2
+tap-screen 0.735 0.62
+wait-until landed 20
+expect ground
+expect near -2098 17.4 1082 4
+shot roof-tap.png

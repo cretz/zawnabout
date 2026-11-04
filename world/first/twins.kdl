@@ -130,27 +130,34 @@ dugout strait-hole x=300 y=12 z=-330 facing=north r=20 {
 // Elder halls. Isolated. Carved by the old stone folk long ago.
 
 caves elder-halls {
-    cavern elder-hall x=-700 y=280 z=-300 w=500 h=200 d=350 rot=-10 shape=carved glow=0.3 {
+    cavern elder-hall x=-700 y=170 z=-420 w=500 h=140 d=300 rot=-10 shape=carved glow=0.3 decor=ruins {
         note "Straight walls and columns, much older than the town."
-        beacon elder-hall-beacon x=-700 y=185 z=-300
+        beacon elder-hall-beacon x=-700 y=105 z=-420
+        ruin elder-arch kind=arch x=-860 y=170 z=-440
+        ruin elder-columns kind=columns x=-780 y=170 z=-360
+        ruin elder-statue kind=statue x=-620 y=170 z=-470
+        ruin elder-wall kind=wall x=-540 y=170 z=-400
+        ruin elder-steps kind=stair x=-700 y=170 z=-330
+        ruin elder-columns-2 kind=columns x=-640 y=170 z=-520
     }
-    cavern elder-deep x=-700 y=-220 z=-250 w=900 h=300 d=700 rot=-10 shape=hall glow=0.25 {
+    cavern elder-deep x=-700 y=-220 z=-250 w=900 h=300 d=700 rot=-10 shape=hall glow=0.25 decor=crystal {
         note "Natural hall under the island that the carvers broke into."
         beacon elder-deep-beacon x=-500 y=-360 z=-150
     }
     passage elder-stair w=60 {
-        p -600 180 -300
-        p -650 50 -200
+        p -600 150 -420
+        p -650 50 -250
         p -700 -100 -250
     }
     mouth elder-gate kind=gate w=80 light=#true {
         note "Huge carved door facing the town. Not hidden at all."
-        p -700 250 -150
-        p -650 230 100
+        p -700 160 -400
+        p -680 190 -150
+        p -650 220 100
         p -600 230 300
     }
     mouth elder-chimney kind=chimney w=40 hidden=#true light=#true {
-        p -700 380 -300
-        p -740 650 -330
+        p -700 220 -440
+        p -740 650 -460
     }
 }

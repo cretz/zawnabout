@@ -180,7 +180,7 @@ road crescent-road w=14 {
 // The vault under the lagoon. Part of the deep, reached from home by the deep road.
 
 caves vault {
-    cavern lagoon-vault x=0 y=-750 z=0 w=1900 h=450 d=1700 rot=-15 shape=dome glow=0.3 {
+    cavern lagoon-vault x=0 y=-750 z=0 w=1900 h=450 d=1700 rot=-15 shape=dome glow=0.3 decor=shroom {
         note "Blue glow. Daylight drops through the eye in one beam."
         beacon vault-beacon x=-300 y=-970 z=200
     }
@@ -194,5 +194,46 @@ caves vault {
         p -900 -600 0
         p -1300 -250 -150
         p -1800 90 -300
+    }
+}
+
+// The railway: one big loop round the whole crescent, just outside the ring road, through
+// a tunnel under Moon Hill. Two trains go round all day. Land on one and ride it.
+railway crescent-line {
+    note "The full loop round the lagoon: city, hill tunnel, airport, north arm, bridges, south key."
+    p 663 6 1377
+    p 307 12 1379
+    p -205 13 1330
+    p -614 14 1177
+    p -1023 13 819
+    p -1279 15 409
+    p -1180 15 -51
+    p -1127 15 -512
+    p -870 15 -972
+    p -410 14 -1178
+    p 308 12 -1109
+    p 1021 11 -1072
+    p 1275 8 -816
+    p 1478 8 -510
+    p 1530 10 -122
+    p 1530 9 204
+    p 1377 7 612
+    p 1225 8 817
+    p 715 6 1276
+    p 663 6 1377
+    station moon-station x=-960 z=760
+    station airport-station x=300 z=-1050
+    station north-station x=1420 z=-470
+    station key-station x=300 z=1320
+}
+caves moon-rail {
+    passage rail-tunnel w=20 tight=#true {
+        note "The railway's tunnel under Moon Hill."
+        p -1300 23 520
+        p -1279 23 409
+        p -1180 23 -51
+        p -1127 23 -512
+        p -870 23 -972
+        p -800 23 -1030
     }
 }

@@ -1,7 +1,7 @@
 //! The chase camera. It trails the flight path, pulls back and widens with speed, and
 //! leans a little into banks.
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use zawnabout_sim::{Mode, World};
 
 zawnabout_sim::params! {
@@ -54,6 +54,8 @@ pub struct Camera {
     pub look: Vec3,
     pub fov: f32,
     pub roll: f32,
+    /// A look around from dragging: turn about the dragon (rad) and tilt up or down.
+    pub free_look: Vec2,
     dir: Vec3,
     fresh: bool,
 }
@@ -65,6 +67,7 @@ impl Default for Camera {
             look: Vec3::ZERO,
             fov: 62.0,
             roll: 0.0,
+            free_look: Vec2::ZERO,
             dir: Vec3::Z,
             fresh: true,
         }
@@ -106,7 +109,10 @@ impl Camera {
         let dist = p.ground_distance
             + (p.distance - p.ground_distance) * air
             + speed.min(p.fast_speed) * p.distance_per_speed;
-        let back = Quat::from_rotation_y(p.orbit.to_radians()) * self.dir;
+        let back = Quat::from_rotation_y(p.orbit.to_radians() + self.free_look.x) * self.dir;
+        // Tilting swings the camera over or under the dragon.
+        let side = Vec3::Y.cross(back).normalize_or(Vec3::X);
+        let back = Quat::from_axis_angle(side, -self.free_look.y) * back;
         let want_pos = t.pos - back * dist + Vec3::Y * (p.height + slow * p.hover_height);
         self.pos = self.pos.lerp(want_pos, ease(p.catch_up));
         // Stay out of spires and rocks, and above whatever is underneath.
@@ -124,8 +130,10 @@ impl Camera {
                 break;
             }
         }
+        // Looking around centers on the dragon instead of ahead of it.
+        let looking = (self.free_look.length() * 2.0).min(1.0);
         let ahead = if p.orbit == 0.0 {
-            p.look_ahead * (1.0 - slow)
+            p.look_ahead * (1.0 - slow) * (1.0 - looking)
         } else {
             0.0
         };

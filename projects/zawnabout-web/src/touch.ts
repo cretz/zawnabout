@@ -1,6 +1,19 @@
 import type { App } from "../pkg/zawnabout_web.js";
 
-const RADIUS = 60;
+const RADIUS = 80;
+/** Small wobbles of the thumb near the middle do nothing. */
+const DEAD = 0.08;
+
+/** Softens the middle of the stick so small moves make small corrections, and full tilt
+ *  is still full. */
+function response(dx: number, dy: number): [number, number] {
+  const len = Math.hypot(dx, dy);
+  if (len <= DEAD) return [0, 0];
+  const t = Math.min((len - DEAD) / (1 - DEAD), 1);
+  const curved = t * (0.35 + 0.65 * t);
+  const k = curved / len;
+  return [dx * k, dy * k];
+}
 
 /** A floating stick on the left half of the screen and action buttons on the right. A
  *  quick tap on the stick area calls `onTap` with page coordinates. */
@@ -44,7 +57,8 @@ export function setupTouch(app: App, onTap: (x: number, y: number) => void) {
     }
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
     // Screen Y grows downward, the stick's up is +1.
-    app.touch_stick(dx / RADIUS, -dy / RADIUS);
+    const [sx, sy] = response(dx / RADIUS, -dy / RADIUS);
+    app.touch_stick(sx, sy);
   });
   const end = (e: PointerEvent) => {
     if (e.pointerId !== stickId) return;
@@ -64,6 +78,15 @@ export function setupTouch(app: App, onTap: (x: number, y: number) => void) {
       button.classList.toggle("down", down);
       app.touch_action(action, down);
     };
+    // Toggle buttons stay on until tapped again, so a thumb is free for flying.
+    if (button.dataset.toggle !== undefined) {
+      let on = false;
+      button.addEventListener("pointerdown", () => {
+        on = !on;
+        set(on);
+      });
+      continue;
+    }
     button.addEventListener("pointerdown", (e) => {
       button.setPointerCapture(e.pointerId);
       set(true);

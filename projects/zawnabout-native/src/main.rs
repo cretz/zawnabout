@@ -153,8 +153,16 @@ fn host_command(
             let _ = gfx.capture(game);
             let s = gfx.renderer.stats;
             println!(
-                "stats draws={} triangles={} terrain={} props={} meshes={}",
-                s.draws, s.triangles, s.terrain, s.props, s.meshes
+                "stats draws={} (static {} terrain {} water {}) triangles={} terrain={} props={} water={} meshes={}",
+                s.draws,
+                s.draws_static,
+                s.draws_terrain,
+                s.draws_water,
+                s.triangles,
+                s.terrain,
+                s.props,
+                s.water,
+                s.meshes
             );
         }
         "quit" => return false,

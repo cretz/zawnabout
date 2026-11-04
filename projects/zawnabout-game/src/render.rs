@@ -8,6 +8,8 @@ use wgpu::util::DeviceExt;
 use crate::mesh::{MeshBuilder, Vertex};
 
 pub const SAMPLES: u32 = 4;
+/// Point lights per frame.
+pub const MAX_LIGHTS: usize = 8;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -50,6 +52,8 @@ pub struct Lighting {
     pub cave_ambient: Vec3,
     /// How far underground the camera is, 0 to 1. Turns the far haze dark.
     pub underground: f32,
+    /// Day 0 to night 1: stars and a moon in the sky, lit windows.
+    pub night: f32,
 }
 
 /// Everything one frame draws.
@@ -68,9 +72,20 @@ pub struct Frame {
     /// Deep underground nothing outside can be seen except through openings, where sky
     /// alone looks right, so all statics (sea, lakes, props, clouds) are skipped.
     pub deep: bool,
+    /// Cave insides are drawn this frame.
+    pub caves: bool,
     pub shadows: Vec<Instance>,
     /// Soft glowing rings, such as landing markers.
     pub rings: Vec<Instance>,
+    /// Glowing see-through things in the world, such as fire and light shafts. Hidden
+    /// behind solid things but never hiding anything.
+    pub fx: Vec<(MeshId, Instance)>,
+    /// Point lights: position, reach and color. At most [`MAX_LIGHTS`] are used.
+    pub lights: Vec<(Vec3, f32, Vec3)>,
+    /// See-through water, drawn after everything solid, with bounding spheres.
+    pub water: Vec<(MeshId, Vec3, f32)>,
+    /// Seconds, for moving water.
+    pub time: f32,
 }
 
 #[repr(C)]
@@ -87,6 +102,9 @@ struct Globals {
     ambient_ground: [f32; 4],
     fog: [f32; 4],
     cave: [f32; 4],
+    misc: [f32; 4],
+    /// Per light: position and reach, then color.
+    lights: [[f32; 4]; MAX_LIGHTS * 2],
 }
 
 struct GpuMesh {
@@ -112,6 +130,21 @@ pub struct Cull {
     /// A cheaper mesh for beyond the frame's detail range times `detail`.
     pub far: Option<MeshId>,
     pub detail: f32,
+    /// Under ground: drawn only with the cave insides, even deep down.
+    pub cave: bool,
+    /// Part of a group of tiles that draws as one merged mesh when far away.
+    pub group: Option<Group>,
+}
+
+/// A group of tiles: within `range` times the frame's detail range its tiles draw one by
+/// one, beyond it the group's merged mesh draws instead.
+#[derive(Clone, Copy, Debug)]
+pub struct Group {
+    pub center: Vec3,
+    pub radius: f32,
+    pub range: f32,
+    /// This is the merged mesh, not one of the tiles.
+    pub merged: bool,
 }
 
 impl Cull {
@@ -121,6 +154,8 @@ impl Cull {
         reach: 1.0,
         far: None,
         detail: 1.0,
+        cave: false,
+        group: None,
     };
 }
 
@@ -128,10 +163,15 @@ impl Cull {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
     pub draws: u32,
+    /// Draws by group: static batches, terrain chunks and water.
+    pub draws_static: u32,
+    pub draws_terrain: u32,
+    pub draws_water: u32,
     pub triangles: u64,
     pub terrain: u64,
     /// Instanced static props, clouds included.
     pub props: u64,
+    pub water: u64,
     pub meshes: u32,
 }
 
@@ -148,8 +188,11 @@ pub struct Renderer {
     bind: wgpu::BindGroup,
     sky: wgpu::RenderPipeline,
     lit: wgpu::RenderPipeline,
+    ground: wgpu::RenderPipeline,
+    water: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
     glow: wgpu::RenderPipeline,
+    fx: wgpu::RenderPipeline,
     meshes: Vec<Option<GpuMesh>>,
     free: Vec<u32>,
     statics: Vec<StaticBatch>,
@@ -287,6 +330,24 @@ impl Renderer {
         let mesh_buffers = [Some(vertex_layout), Some(instance_layout)];
         let sky = pipeline("sky", "vs_sky", "fs_sky", &[], false, false, None);
         let lit = pipeline("lit", "vs_lit", "fs_lit", &mesh_buffers, true, true, None);
+        let ground = pipeline(
+            "ground",
+            "vs_lit",
+            "fs_ground",
+            &mesh_buffers,
+            true,
+            true,
+            None,
+        );
+        let water = pipeline(
+            "water",
+            "vs_lit",
+            "fs_water",
+            &mesh_buffers,
+            false,
+            true,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+        );
         let shadow = pipeline(
             "shadow",
             "vs_lit",
@@ -315,6 +376,15 @@ impl Renderer {
             false,
             Some(premultiplied),
         );
+        let fx = pipeline(
+            "fx",
+            "vs_lit",
+            "fs_glow",
+            &mesh_buffers,
+            false,
+            true,
+            Some(premultiplied),
+        );
         let dynamic = Self::instance_buffer(&device, 256);
         let identity = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("identity instance"),
@@ -334,8 +404,11 @@ impl Renderer {
             bind,
             sky,
             lit,
+            ground,
+            water,
             shadow,
             glow,
+            fx,
             meshes: Vec::new(),
             free: Vec::new(),
             statics: Vec::new(),
@@ -467,6 +540,20 @@ impl Renderer {
             ambient_ground: vec4(l.ambient_ground, 0.0),
             fog: [l.fog_start, l.fog_end, l.bands, l.shadow],
             cave: vec4(l.cave_ambient, l.underground),
+            misc: [
+                frame.time,
+                l.night,
+                frame.lights.len().min(MAX_LIGHTS) as f32,
+                0.0,
+            ],
+            lights: {
+                let mut out = [[0.0; 4]; MAX_LIGHTS * 2];
+                for (i, (p, r, c)) in frame.lights.iter().take(MAX_LIGHTS).enumerate() {
+                    out[i * 2] = vec4(*p, *r);
+                    out[i * 2 + 1] = vec4(*c, 0.0);
+                }
+                out
+            },
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -479,6 +566,10 @@ impl Renderer {
         instances.extend_from_slice(&frame.shadows);
         let ring_start = instances.len() as u32;
         instances.extend_from_slice(&frame.rings);
+        let mut fx = frame.fx.clone();
+        fx.sort_by_key(|(m, _)| m.0);
+        let fx_start = instances.len();
+        instances.extend(fx.iter().map(|(_, i)| *i));
         let needed = (instances.len() * size_of::<Instance>()) as u64;
         if needed > self.dynamic.size() {
             self.dynamic = Self::instance_buffer(&self.device, instances.len().next_power_of_two());
@@ -523,11 +614,26 @@ impl Renderer {
 
             pass.set_pipeline(&self.lit);
             let planes = frustum(frame.view_proj);
-            for s in self.statics.iter().filter(|_| !frame.deep) {
+            // Peeking in from outside shows cave walls but not everything inside.
+            let inside = frame.lighting.underground > 0.1;
+            let shown = |c: &Cull| {
+                if c.cave {
+                    frame.caves && inside
+                } else {
+                    !frame.deep
+                }
+            };
+            for s in self.statics.iter().filter(|s| shown(&s.cull)) {
                 let c = &s.cull;
                 let dist = (c.center - frame.cam_pos).length() - c.radius;
                 if dist > frame.prop_range * c.reach || !in_view(&planes, c.center, c.radius) {
                     continue;
+                }
+                if let Some(g) = c.group {
+                    let away = (g.center - frame.cam_pos).length() - g.radius;
+                    if (away >= g.range * frame.detail_range) != g.merged {
+                        continue;
+                    }
                 }
                 let id = match c.far {
                     Some(far) if dist > frame.detail_range * c.detail => far,
@@ -540,8 +646,10 @@ impl Renderer {
                 pass.set_vertex_buffer(1, s.buf.slice(..));
                 pass.draw(0..mesh.count, 0..s.count);
                 stats.draws += 1;
+                stats.draws_static += 1;
                 stats.props += (mesh.count / 3) as u64 * s.count as u64;
             }
+            pass.set_pipeline(&self.ground);
             for (id, center, radius) in &frame.terrain {
                 if !in_view(&planes, *center, *radius) {
                     continue;
@@ -553,8 +661,10 @@ impl Renderer {
                 pass.set_vertex_buffer(1, self.identity.slice(..));
                 pass.draw(0..mesh.count, 0..1);
                 stats.draws += 1;
+                stats.draws_terrain += 1;
                 stats.terrain += (mesh.count / 3) as u64;
             }
+            pass.set_pipeline(&self.lit);
             let mut i = 0;
             while i < draws.len() {
                 let id = draws[i].0;
@@ -563,6 +673,40 @@ impl Renderer {
                     pass.set_vertex_buffer(0, mesh.buf.slice(..));
                     pass.set_vertex_buffer(1, self.dynamic.slice(..));
                     pass.draw(0..mesh.count, i as u32..end as u32);
+                    stats.draws += 1;
+                    stats.triangles += (mesh.count / 3) as u64 * (end - i) as u64;
+                }
+                i = end;
+            }
+
+            pass.set_pipeline(&self.water);
+            for (id, center, radius) in &frame.water {
+                if !in_view(&planes, *center, *radius) {
+                    continue;
+                }
+                let Some(mesh) = &self.meshes[id.0 as usize] else {
+                    continue;
+                };
+                pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                pass.set_vertex_buffer(1, self.identity.slice(..));
+                pass.draw(0..mesh.count, 0..1);
+                stats.draws += 1;
+                stats.draws_water += 1;
+                stats.water += (mesh.count / 3) as u64;
+            }
+
+            pass.set_pipeline(&self.fx);
+            let mut i = 0;
+            while i < fx.len() {
+                let id = fx[i].0;
+                let end = i + fx[i..].iter().take_while(|(m, _)| *m == id).count();
+                if let Some(mesh) = &self.meshes[id.0 as usize] {
+                    pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                    pass.set_vertex_buffer(1, self.dynamic.slice(..));
+                    pass.draw(
+                        0..mesh.count,
+                        (fx_start + i) as u32..(fx_start + end) as u32,
+                    );
                     stats.draws += 1;
                     stats.triangles += (mesh.count / 3) as u64 * (end - i) as u64;
                 }
@@ -593,7 +737,7 @@ impl Renderer {
             }
         }
         self.queue.submit([enc.finish()]);
-        stats.triangles += stats.terrain + stats.props;
+        stats.triangles += stats.terrain + stats.props + stats.water;
         self.stats = stats;
     }
 }

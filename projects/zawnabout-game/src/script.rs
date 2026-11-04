@@ -44,11 +44,17 @@ impl Script {
     /// Runs every line that is due after `dt` more seconds.
     pub fn update(&mut self, game: &mut Game, dt: f32) -> Vec<Output> {
         let mut out = Vec::new();
-        self.wait -= dt;
+        // A wait only counts down once any wait-until before it is over.
+        if self.until.is_none() {
+            self.wait -= dt;
+        }
         if let Some((cond, left)) = &mut self.until {
             let words: Vec<&str> = cond.split_whitespace().collect();
             match game.check(&words) {
-                Ok(true) => self.until = None,
+                Ok(true) => {
+                    self.until = None;
+                    self.wait = 0.0;
+                }
                 Ok(false) if *left > dt => *left -= dt,
                 Ok(false) => {
                     out.push(Output::Log(format!("FAIL timed out waiting for {cond}")));

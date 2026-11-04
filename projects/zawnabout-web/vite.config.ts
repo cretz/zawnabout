@@ -7,7 +7,7 @@ import { defineConfig, type Plugin } from "vite";
 // Design notes left in notes mode live in the repo, one JSON file each, so the agent can
 // read them and reply. Only the dev server has this endpoint: a static build has no
 // server, and the page falls back to keeping notes in the browser.
-const NOTES = join(dirname(fileURLToPath(import.meta.url)), "../../world/feedback");
+const NOTES = join(dirname(fileURLToPath(import.meta.url)), "../../../working-area/feedback");
 const ID = /^[0-9]{8}-[0-9]{6}-[a-z0-9]{4}$/;
 
 function body(req: IncomingMessage): Promise<string> {

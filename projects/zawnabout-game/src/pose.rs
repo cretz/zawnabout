@@ -8,7 +8,8 @@ use zawnabout_sim::{Dragon, FlightParams, Mode, World};
 
 use crate::mesh::hash;
 use crate::models::{
-    ELBOW, EYES, HIPS, NECK_BASE, NECK_LEN, SHOULDER, TAIL_BASE, TAIL_LEN, TAIL_SEGMENTS,
+    ELBOW, EYES, HIPS, NECK_BASE, NECK_LEN, SHOULDER, SNOUT, TAIL_BASE, TAIL_LEN, TAIL_ROOT,
+    TAIL_SEGMENTS, TAIL_TAPER, WHISKER_LEN, WHISKER_SEGMENTS,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +24,12 @@ pub enum Part {
     Hand(usize),
     /// Dizzy stars after a bonk.
     Star,
+    /// The feather fan at the tail's tip.
+    Plume,
+    /// One piece of a whisker.
+    Whisker,
+    /// A ruff of feathers on the neck or head.
+    Mane,
 }
 
 /// Wing joint angles (left side, mirrored for right).
@@ -84,6 +91,10 @@ pub struct DragonVisual {
     time: f32,
     was_ground: bool,
     seed: u32,
+    /// Airspeed, smoothed, so whiskers and feathers stream back as it builds.
+    speed: f32,
+    /// Leaning with the slope underfoot, so the feet sit on a hillside.
+    tilt: Quat,
 }
 
 impl DragonVisual {
@@ -107,6 +118,8 @@ impl DragonVisual {
             time: 0.0,
             was_ground: d.mode == Mode::Ground,
             seed: d.id.0,
+            speed: 0.0,
+            tilt: Quat::IDENTITY,
         }
     }
 
@@ -192,16 +205,40 @@ impl DragonVisual {
         self.legs += (legs - self.legs) * ease(6.0);
         self.stride = d.stride;
 
-        // Tail lags turns, sways gently and wags when standing around.
-        let wag = if ground && speed < 1.0 { 0.16 } else { 0.05 };
-        let droop = if ground { -0.12 } else { 0.02 };
+        self.speed += (speed - self.speed) * ease(2.0);
+        // Stand along a hillside, partly: fully level looks like sinking into the
+        // slope, fully tilted looks like falling over.
+        let tilt = if ground && d.cling.is_none() && !world.on_structure(d.pos.x, d.pos.z, feet) {
+            let n = world.ground_normal(d.pos.x, d.pos.z);
+            Quat::from_rotation_arc(Vec3::Y, n.lerp(Vec3::Y, 0.35).normalize())
+        } else {
+            Quat::IDENTITY
+        };
+        self.tilt = self.tilt.slerp(tilt, ease(6.0));
+        // The tail flows: a slow wave runs down it, growing toward the tip, it lags turns
+        // and climbs, and wags when standing around.
+        let wag = if ground && speed < 1.0 {
+            0.16
+        } else if ground {
+            0.05
+        } else {
+            0.07
+        };
+        let droop = if ground { -0.1 } else { 0.02 };
+        let lift = if ground {
+            0.0
+        } else {
+            (-d.vel.y * 0.012).clamp(-0.12, 0.12)
+        };
         for (i, seg) in self.tail.iter_mut().enumerate() {
             let fi = i as f32;
-            let yaw =
-                (-turn_rate * 0.12).clamp(-0.3, 0.3) + (self.time * 2.2 - fi * 0.7).sin() * wag;
-            let pitch = if ground && i >= 3 { 0.12 } else { droop }
-                + (self.time * 1.3 - fi * 0.5).sin() * 0.03;
-            *seg += (Vec2::new(yaw, pitch) - *seg) * ease(5.0 - fi * 0.4);
+            let reach = 0.6 + fi * 0.12;
+            let yaw = (-turn_rate * 0.1).clamp(-0.28, 0.28)
+                + (self.time * 2.0 - fi * 0.75).sin() * wag * reach;
+            let pitch = if ground && i >= 4 { 0.1 } else { droop }
+                + lift
+                + (self.time * 1.3 - fi * 0.6).sin() * 0.035 * reach;
+            *seg += (Vec2::new(yaw, pitch) - *seg) * ease((5.0 - fi * 0.4).max(1.6));
         }
 
         // Neck looks into turns, and around now and then when idle.
@@ -242,9 +279,18 @@ impl DragonVisual {
     pub fn parts(&self, alpha: f32, out: &mut Vec<(Part, Mat4, Vec4)>) {
         let (pos, rot) = self.interpolated(alpha);
         let s = self.squash * (self.time * 18.0).cos().abs();
-        let scale = Vec3::new(1.0 + 0.1 * s, 1.0 - 0.16 * s, 1.0 + 0.06 * s);
+        // Slow breaths swell the chest.
+        let breath = (self.time * 1.6).sin() * 0.015;
+        let scale = Vec3::new(
+            1.0 + 0.1 * s + breath,
+            1.0 - 0.16 * s + breath,
+            1.0 + 0.06 * s,
+        );
+        // Whiskers and feathers stream back as the speed builds, and flutter.
+        let trail = (self.speed / 30.0).clamp(0.0, 1.0);
+        let flutter = |k: f32| (self.time * (3.0 + trail * 9.0) + k).sin() * (0.05 + trail * 0.05);
         let root = Mat4::from_translation(pos)
-            * Mat4::from_quat(rot * Quat::from_rotation_z(self.roll))
+            * Mat4::from_quat(self.tilt * rot * Quat::from_rotation_z(self.roll))
             * Mat4::from_scale(scale);
         let white = Vec4::ONE;
         let mut push = |part, m: Mat4| out.push((part, m, white));
@@ -258,6 +304,11 @@ impl DragonVisual {
             m *= Mat4::from_rotation_y(yaw) * Mat4::from_rotation_x(-pitch);
             if i < 2 {
                 push(Part::Neck(i), m);
+                push(
+                    Part::Mane,
+                    m * Mat4::from_translation(Vec3::new(0.0, 0.3, NECK_LEN * 0.55))
+                        * Mat4::from_rotation_x(-0.25 * trail + flutter(i as f32 * 1.7)),
+                );
                 m *= Mat4::from_translation(Vec3::Z * NECK_LEN);
             }
         }
@@ -266,6 +317,25 @@ impl DragonVisual {
             * Mat4::from_translation(Vec3::new(0.0, -0.26, -0.1))
             * Mat4::from_scale(Vec3::splat(1.25));
         push(Part::Head, head);
+        push(
+            Part::Mane,
+            head * Mat4::from_translation(Vec3::new(0.0, 0.52, -0.12))
+                * Mat4::from_rotation_x(0.15 - 0.3 * trail + flutter(4.0)),
+        );
+        for side in [1.0f32, -1.0] {
+            let mut w = head
+                * Mat4::from_translation(SNOUT * Vec3::new(side, 1.0, 1.0))
+                * Mat4::from_rotation_y(side * (1.75 + 0.6 * trail))
+                * Mat4::from_rotation_x(0.12 - 0.12 * trail);
+            for k in 0..WHISKER_SEGMENTS {
+                let wave = (self.time * (2.2 + trail * 6.0) - k as f32 * 1.1 + side).sin();
+                // Each piece curls a little further back, so they sweep like ribbons.
+                w *= Mat4::from_rotation_y(side * (0.35 + wave * 0.2))
+                    * Mat4::from_rotation_x(0.06 * (1.0 - trail) + wave * 0.1);
+                push(Part::Whisker, w);
+                w *= Mat4::from_translation(Vec3::Z * WHISKER_LEN);
+            }
+        }
         if self.bonk < 1.4 {
             // Three little stars circle the head, shrinking away.
             let size = 0.3 * (1.0 - self.bonk / 1.4).sqrt();
@@ -302,11 +372,22 @@ impl DragonVisual {
         );
 
         let mut m = root * Mat4::from_translation(TAIL_BASE);
+        let mut size = TAIL_ROOT;
         for (i, seg) in self.tail.iter().enumerate() {
             m *= Mat4::from_rotation_y(seg.x) * Mat4::from_rotation_x(seg.y);
-            push(Part::Tail(i), m);
+            push(
+                Part::Tail(i),
+                m * Mat4::from_scale(Vec3::new(size, size, 1.0)),
+            );
             m *= Mat4::from_translation(Vec3::NEG_Z * TAIL_LEN);
+            size *= TAIL_TAPER;
         }
+        let last = self.tail[TAIL_SEGMENTS - 1];
+        push(
+            Part::Plume,
+            m * Mat4::from_rotation_y(last.x * 1.5 + flutter(2.3))
+                * Mat4::from_rotation_x(last.y * 1.5),
+        );
 
         let walk = (self.stride * 1.4).sin();
         for (pair, hip) in HIPS.iter().enumerate() {

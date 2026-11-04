@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 
 use glam::{Vec2, Vec3};
-use zawnabout_sim::terrain::{CoverKind, Density, Terrain, smoothstep, void_bounds};
+use zawnabout_sim::terrain::{CoverKind, Density, Terrain, noise, smoothstep, void_bounds};
 
 use crate::mesh::{MeshBuilder, Rgb};
 use crate::render::{MeshId, Renderer};
@@ -19,9 +19,9 @@ const N: usize = 32;
 const CELL0: f32 = 6.0;
 const MAX_LOD: u8 = 5;
 /// A node splits while the camera is within this many node sizes of it.
-const SPLIT: f32 = 1.25;
-/// Chunks entirely below this are under the opaque sea and never drawn.
-const UNDERWATER: f32 = -2.5;
+const SPLIT: f32 = 0.88;
+/// Chunks entirely below this are under opaque sea and never drawn.
+const UNDERWATER: f32 = -crate::water::OPAQUE_DEPTH - 2.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
@@ -47,12 +47,21 @@ impl Key {
     }
 }
 
-/// A built chunk: its outside mesh, its cave inside mesh, and bounding spheres.
+/// A built chunk: its outside mesh (with mouths and the first stretch into caves), its
+/// deep cave mesh, and bounding spheres.
 #[derive(Clone, Copy, Default)]
 struct Built {
     outer: Option<(MeshId, Vec3, f32)>,
     inner: Option<(MeshId, Vec3, f32)>,
 }
+
+/// Cave walls shallower than this draw with the outside, so mouths show their tunnels
+/// from afar instead of holes onto the sky.
+const SHALLOW: f32 = 220.0;
+/// How far away deep cave walls draw, even underground.
+const CAVE_RANGE: f32 = 1800.0;
+/// How far away deep cave walls draw from outside, when only peeking in a mouth.
+const PEEK_RANGE: f32 = 400.0;
 
 fn upload(renderer: &mut Renderer, mesh: &MeshBuilder) -> Option<(MeshId, Vec3, f32)> {
     if mesh.verts.is_empty() {
@@ -79,10 +88,16 @@ pub struct TerrainMeshes {
 
 impl TerrainMeshes {
     /// Meshes to draw this frame. Cave insides only draw when `caves` is set, since they
-    /// are hidden from outside. Deep underground (`underground` near 1) the surface far
-    /// overhead is hidden, so only nearby surface chunks draw.
-    pub fn draw_list(&self, cam: Vec3, caves: bool, underground: f32) -> Vec<(MeshId, Vec3, f32)> {
-        let deep = underground > 0.85;
+    /// are hidden from outside. When `deep` underground the surface far overhead is
+    /// hidden, so only nearby surface chunks draw.
+    pub fn draw_list(
+        &self,
+        cam: Vec3,
+        caves: bool,
+        underground: f32,
+        deep: bool,
+    ) -> Vec<(MeshId, Vec3, f32)> {
+        let cave_range = PEEK_RANGE + (CAVE_RANGE - PEEK_RANGE) * (underground * 2.0).min(1.0);
         self.drawn
             .iter()
             .filter_map(|k| self.built.get(k))
@@ -90,7 +105,11 @@ impl TerrainMeshes {
                 let outer = b
                     .outer
                     .filter(|(_, c, r)| !deep || c.distance(cam) - r < 300.0);
-                [outer, b.inner.filter(|_| caves)]
+                // Caves are dim and twisty, so far cave walls are not worth drawing.
+                let inner = b
+                    .inner
+                    .filter(|(_, c, r)| caves && c.distance(cam) - r < cave_range);
+                [outer, inner]
             })
             .flatten()
             .collect()
@@ -108,6 +127,9 @@ impl TerrainMeshes {
             (-reach / root).floor() as i32,
             (reach / root).floor() as i32,
         );
+        // Deep in a cave, haze hides fine detail and a fine chunk overhead would mesh the
+        // whole roof far above at full detail, so split less.
+        let split = SPLIT * (1.0 - 0.4 * (1.0 - terrain.daylight(cam)));
         let mut out = Vec::new();
         let mut stack = Vec::new();
         for z in lo..=hi {
@@ -123,7 +145,7 @@ impl TerrainMeshes {
             let flat = Vec2::new(cam.x, cam.z).clamp(a, b) - Vec2::new(cam.x, cam.z);
             let up = (cam.y - 400.0).max(0.0);
             let d = (flat.length_squared() + up * up).sqrt();
-            if k.lod > 0 && d < k.size() * SPLIT {
+            if k.lod > 0 && d < k.size() * split {
                 for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                     stack.push(Key {
                         lod: k.lod - 1,
@@ -207,6 +229,10 @@ const SNOW: Rgb = Rgb(0xF0F2F5);
 const TOWN: Rgb = Rgb(0xD9CBA8);
 const CAVE_ROCK: [Rgb; 3] = [Rgb(0x8C8078), Rgb(0x7E746E), Rgb(0x988A7C)];
 const CAVE_FLOOR: [Rgb; 2] = [Rgb(0x9C9070), Rgb(0x7F9A68)];
+/// Dressed stone along canals.
+const QUAY: [Rgb; 2] = [Rgb(0xC2B59E), Rgb(0xB5A890)];
+/// Sand and pebbles under water.
+const BED: [Rgb; 3] = [Rgb(0xD9C99A), Rgb(0xC9BC92), Rgb(0xB8B08C)];
 
 fn hash(p: Vec3) -> f32 {
     let x = (p.x * 0.37).floor() as i32;
@@ -221,18 +247,55 @@ fn hash(p: Vec3) -> f32 {
     (h & 0xFFFF) as f32 / 65536.0
 }
 
-fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool) -> Rgb {
+/// The grass color at a spot out in the open, or none where it is sand, rock, snow, town
+/// or quay.
+pub fn lawn(terrain: &Terrain, c: Vec3, n: Vec3) -> Option<Rgb> {
+    if c.y < 3.5 || c.y > 680.0 || n.y < 0.75 || terrain.quay(c.x, c.z) {
+        return None;
+    }
     let h = hash(c);
     let pick = |list: &[Rgb]| list[(h * list.len() as f32) as usize % list.len()];
+    Some(match terrain.cover(c.x, c.z) {
+        Some(cv) => match (cv.kind, cv.density) {
+            (CoverKind::Town | CoverKind::Snow, _) => return None,
+            (CoverKind::Forest, Density::Dense) => pick(&FOREST),
+            (CoverKind::Forest, Density::Rain) => RAIN.mix(pick(&FOREST), h * 0.4),
+            (CoverKind::Forest, Density::Open) => pick(&GRASS).mix(FOREST[0], 0.35),
+            (CoverKind::Meadow, _) => MEADOW.mix(pick(&GRASS), h * 0.4),
+        },
+        None => pick(&GRASS),
+    })
+}
+
+fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool) -> Rgb {
+    let h = hash(c);
+    let pick = |list: &[Rgb]| list[(h * list.len() as f32) as usize % list.len()];
+    if !inside && terrain.quay(c.x, c.z) {
+        return pick(&QUAY);
+    }
+    if wet {
+        return pick(&BED);
+    }
     if inside {
-        return if n.y > 0.65 {
-            pick(&CAVE_FLOOR)
-        } else {
-            pick(&CAVE_ROCK)
-        };
+        // Floors gather moss in broad patches and fade into the walls with the slope, so
+        // the ground reads as one surface rather than a checkerboard of triangles.
+        let moss = smoothstep(-0.15, 0.35, noise(97, c.x / 80.0, c.z / 80.0));
+        let floor = CAVE_FLOOR[0].mix(CAVE_FLOOR[1], moss);
+        let rock = CAVE_ROCK[0].mix(CAVE_ROCK[2], noise(98, c.y / 40.0, c.x / 90.0) * 0.5 + 0.5);
+        let ground = rock.mix(floor, smoothstep(0.55, 0.85, n.y));
+        return ground.mix(Rgb(0x000000), h * 0.07);
     }
     if c.y < 0.6 {
         return pick(&SAND);
+    }
+    // Snow lies on ski runs even where they steepen, rock only shows on real drops.
+    let snow = n.y > 0.4
+        && terrain
+            .cover(c.x, c.z)
+            .is_some_and(|cv| cv.kind == CoverKind::Snow);
+    if snow {
+        // Groomed runs: bright, faintly blue in the hollows.
+        return SNOW.mix(Rgb(0xD6E0EE), h * 0.5);
     }
     if n.y < 0.55 {
         return pick(&ROCK);
@@ -246,6 +309,7 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool) -> Rgb {
     let base = match terrain.cover(c.x, c.z) {
         Some(cv) => match (cv.kind, cv.density) {
             (CoverKind::Town, _) => TOWN.mix(pick(&GRASS), 0.15 + h * 0.15),
+            (CoverKind::Snow, _) => SNOW,
             (CoverKind::Forest, Density::Dense) => pick(&FOREST),
             (CoverKind::Forest, Density::Rain) => RAIN.mix(pick(&FOREST), h * 0.4),
             (CoverKind::Forest, Density::Open) => pick(&GRASS).mix(FOREST[0], 0.35),
@@ -265,7 +329,8 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool) -> Rgb {
     }
 }
 
-/// Surface nets over one chunk. Returns the outside surface and the cave insides.
+/// Surface nets over one chunk. Returns the outside surface, with mouths and shallow cave
+/// walls, and the deep cave walls.
 fn build(terrain: &Terrain, key: Key) -> (MeshBuilder, MeshBuilder) {
     let mut m = MeshBuilder::new();
     let mut inner = MeshBuilder::new();
@@ -311,27 +376,113 @@ fn build(terrain: &Terrain, key: Key) -> (MeshBuilder, MeshBuilder) {
             origin.y + corner_xz(j),
         )
     };
-    // Rock distance at every corner. Only corners near caves need the full 3D test.
+    // Rock distance at every corner. Only corners near caves need the full 3D test, and
+    // of those only the ones near a surface: a coarse pass first finds where that is.
     let ncy = ny + 1;
     let mut field = vec![0.0f32; nc * ncy * nc];
+    let cave_zone =
+        |y: f32, h: f32| !list.is_empty() && y > cave_lo - pad && y < cave_hi + pad && y < h + pad;
+    const C: usize = 4;
+    let coarse = |n: usize| (n - 1).div_ceil(C) + 1;
+    let fine = |c: usize, n: usize| (c * C).min(n - 1);
+    let (cx, cy) = (coarse(nc), coarse(ncy));
+    let mut rough = vec![0.0f32; cx * cy * cx];
+    for cj in 0..cx {
+        for ck in 0..cy {
+            for ci in 0..cx {
+                let (i, k, j) = (fine(ci, nc), fine(ck, ncy), fine(cj, nc));
+                let h = heights[j * nc + i];
+                let y = y0 + k as f32 * cell;
+                rough[(cj * cy + ck) * cx + ci] = if cave_zone(y, h) {
+                    terrain.sdf_with(at(i, k, j), h, &list)
+                } else {
+                    y - h
+                };
+            }
+        }
+    }
+    // Coarse values are only trusted this far from a surface.
+    let band = C as f32 * cell * 1.5;
+    let lerp_axis = |f: usize, n: usize| {
+        let c = (f / C).min(coarse(n) - 2);
+        let (a, b) = (fine(c, n), fine(c + 1, n));
+        (c, (f - a) as f32 / (b - a).max(1) as f32)
+    };
     for j in 0..nc {
+        let (cj, tj) = lerp_axis(j, nc);
         for k in 0..ncy {
+            let (ck, tk) = lerp_axis(k, ncy);
             for i in 0..nc {
                 let h = heights[j * nc + i];
                 let y = y0 + k as f32 * cell;
                 let mut d = y - h;
-                if !list.is_empty() && y > cave_lo - pad && y < cave_hi + pad && y < h + pad {
-                    d = terrain.sdf_with(at(i, k, j), h, &list);
+                if cave_zone(y, h) {
+                    let (ci, ti) = lerp_axis(i, nc);
+                    let r = |a: usize, b: usize, c: usize| {
+                        rough[((cj + c) * cy + ck + b) * cx + ci + a]
+                    };
+                    let mixf = |a: f32, b: f32, t: f32| a + (b - a) * t;
+                    let guess = mixf(
+                        mixf(
+                            mixf(r(0, 0, 0), r(1, 0, 0), ti),
+                            mixf(r(0, 1, 0), r(1, 1, 0), ti),
+                            tk,
+                        ),
+                        mixf(
+                            mixf(r(0, 0, 1), r(1, 0, 1), ti),
+                            mixf(r(0, 1, 1), r(1, 1, 1), ti),
+                            tk,
+                        ),
+                        tj,
+                    );
+                    // Trust the guess only when the whole coarse cell is far on one side.
+                    let corners = [
+                        r(0, 0, 0),
+                        r(1, 0, 0),
+                        r(0, 1, 0),
+                        r(1, 1, 0),
+                        r(0, 0, 1),
+                        r(1, 0, 1),
+                        r(0, 1, 1),
+                        r(1, 1, 1),
+                    ];
+                    let clear =
+                        corners.iter().all(|c| *c > band) || corners.iter().all(|c| *c < -band);
+                    d = if clear {
+                        guess
+                    } else {
+                        terrain.sdf_with(at(i, k, j), h, &list)
+                    };
                 }
                 field[(j * ncy + k) * nc + i] = d;
             }
         }
     }
     let sdf = |i: usize, k: usize, j: usize| -> f32 { field[(j * ncy + k) * nc + i] };
-    let ground_at = |p: Vec3| -> f32 {
-        let i = (((p.x - origin.x) / cell).round() as i64 + 1).clamp(0, nc as i64 - 1) as usize;
-        let j = (((p.z - origin.y) / cell).round() as i64 + 1).clamp(0, nc as i64 - 1) as usize;
-        heights[j * nc + i]
+    // For each column, the lowest corner with open air all the way up to the sky. Below
+    // the ground it means a sinkhole, shaft or skylight opens there.
+    let mut open_from = vec![ncy; nc * nc];
+    let mut skylight = false;
+    for j in 0..nc {
+        for i in 0..nc {
+            let mut k = ncy;
+            while k > 0 && sdf(i, k - 1, j) > 0.0 {
+                k -= 1;
+            }
+            open_from[j * nc + i] = k;
+            skylight |= y0 + k as f32 * cell < heights[j * nc + i] - cell * 2.0;
+        }
+    }
+    // Whether open sky lies straight above `p`.
+    let sky_above = |p: Vec3| {
+        let i = ((p.x - origin.x) / cell + 1.0)
+            .round()
+            .clamp(0.0, (nc - 1) as f32) as usize;
+        let j = ((p.z - origin.y) / cell + 1.0)
+            .round()
+            .clamp(0.0, (nc - 1) as f32) as usize;
+        let k = ((p.y - y0) / cell).ceil().max(0.0) as usize;
+        k >= open_from[j * nc + i]
     };
 
     // One vertex per cell that the surface passes through, at the mean edge crossing.
@@ -355,6 +506,22 @@ fn build(terrain: &Terrain, key: Key) -> (MeshBuilder, MeshBuilder) {
     for j in 0..nx {
         for k in 0..ny {
             for i in 0..nx {
+                // Most cells are all rock or all air: no surface, nothing to do.
+                let first = sdf(i, k, j) < 0.0;
+                let mixed = [
+                    (1, 0, 0),
+                    (0, 1, 0),
+                    (1, 1, 0),
+                    (0, 0, 1),
+                    (1, 0, 1),
+                    (0, 1, 1),
+                    (1, 1, 1),
+                ]
+                .iter()
+                .any(|&(a, b, c)| (sdf(i + a, k + b, j + c) < 0.0) != first);
+                if !mixed {
+                    continue;
+                }
                 let mut sum = Vec3::ZERO;
                 let mut count = 0;
                 for ((ai, ak, aj), (bi, bk, bj)) in edges {
@@ -382,16 +549,40 @@ fn build(terrain: &Terrain, key: Key) -> (MeshBuilder, MeshBuilder) {
             return;
         };
         let mid = (a + b + c + d) * 0.25;
-        let depth = ground_at(mid) - mid.y;
-        // A cave wall sits on a cave space. A cliff face only looks deep, so it is not one.
-        let inside = depth > 4.0 && !list.is_empty() && terrain.voids_sdf(mid, &list) < cell * 1.5;
-        let depth = if inside { depth } else { 0.0 };
+        // A cave wall sits on a cave space well under the real ground. A cliff face or a
+        // slope over a shallow cave only looks deep on the coarse grid, so it is not one.
+        let depth = if list.is_empty() {
+            0.0
+        } else {
+            terrain.height(mid.x, mid.z) - mid.y
+        };
+        let cave = depth > 4.0 + cell * 0.5 && terrain.voids_sdf(mid, &list) < cell * 0.75 + 2.0;
+        // Rock under a skylight is lit and seen from outside like the open ground.
+        let lit = cave && sky_above(mid);
+        let dark = ((1.0 - smoothstep(4.0, 45.0, depth)) * 255.0) as u8;
+        let depth = if cave && !lit { depth } else { 0.0 };
+        // The first stretch into a cave stays with the outside, so mouths look like
+        // openings from afar instead of holes onto the sky.
+        let inside = cave && depth > 60.0;
         if !inside && a.y.max(b.y).max(c.y).max(d.y) < UNDERWATER {
             return;
         }
         // Sky light fades with depth. The shader reads it from vertex alpha.
         let light = ((1.0 - smoothstep(4.0, 45.0, depth)) * 255.0) as u8;
-        let out = if inside { &mut inner } else { &mut m };
+        // How high each corner sits above the water near here, for the shore in the shader.
+        // Caves only know their own pools and rivers, never the sea or lakes far above.
+        let level = if cave {
+            terrain.cave_water(mid.x, mid.z, mid.y - 13.0)
+        } else {
+            terrain.water(mid.x, mid.z, mid.y - 13.0)
+        };
+        // Shallow walls, and walls of a cave that opens to the sky in this chunk, can be
+        // seen from outside, so they join the outside mesh.
+        let out = if !inside || depth < SHALLOW || skylight {
+            &mut m
+        } else {
+            &mut inner
+        };
         let (a, b, c, d) = (a - sink, b - sink, c - sink, d - sink);
         let n = (b - a).cross(c - a);
         let (a, b, c, d) = if n.dot(outward) < 0.0 {
@@ -401,10 +592,25 @@ fn build(terrain: &Terrain, key: Key) -> (MeshBuilder, MeshBuilder) {
         };
         for (p, q, r) in [(a, b, c), (a, c, d)] {
             let n = (q - p).cross(r - p).normalize_or_zero();
-            out.tri(p, q, r, color(terrain, (p + q + r) / 3.0, n, inside));
+            let wet = level.is_some_and(|l| (p.y + q.y + r.y) / 3.0 < l);
+            out.tri(p, q, r, color(terrain, (p + q + r) / 3.0, n, cave, wet));
             let at = out.verts.len() - 3;
             for v in &mut out.verts[at..] {
-                v.color[3] = light;
+                // Under a skylight each corner asks for itself, so the patch of daylight
+                // fades out at its edge instead of ending in a hard square.
+                v.color[3] = if cave {
+                    if sky_above(Vec3::from(v.pos) + sink) {
+                        dark.max(170)
+                    } else {
+                        dark
+                    }
+                } else {
+                    light
+                };
+                v.normal[3] = match level {
+                    Some(l) => ((v.pos[1] + sink.y - l) * 10.0).clamp(-127.0, 127.0) as i8,
+                    None => 127,
+                };
             }
         }
     };

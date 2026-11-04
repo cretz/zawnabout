@@ -32,8 +32,10 @@ function controlsHtml(touch: boolean): string {
         ["Left side", "Drag to steer"],
         ["Flap", "Tap, or hold to keep flapping"],
         ["Dive", "Hold to tuck your wings"],
-        ["Brake", "Hold to slow down and land"],
+        ["Brake", "Hold to slow down, land or turn tight"],
         ["Brake + Flap", "Hover in place"],
+        ["Fire", "Hold to breathe fire. Light the beacons!"],
+        ["On the ground", "Push the stick all the way to run"],
         ["Tap a glowing spot", "Fly there and land"],
         ["Pencil button", "Notes mode: pause, look around, leave notes"],
       ]
@@ -41,18 +43,22 @@ function controlsHtml(touch: boolean): string {
         ["<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows", "Steer, walk"],
         ["<kbd>Space</kbd>", "Flap (tap faster to flap harder)"],
         ["<kbd>Shift</kbd>", "Tuck wings and dive"],
-        ["<kbd>E</kbd> or <kbd>X</kbd>", "Brake and land"],
+        ["<kbd>E</kbd>, <kbd>Q</kbd> or <kbd>X</kbd>", "Brake: slow down, land, turn tight"],
         ["Brake + Flap", "Hover in place"],
+        ["<kbd>F</kbd> or <kbd>R</kbd>", "Breathe fire. Light the beacons!"],
+        ["Hold <kbd>W</kbd> on the ground", "Run"],
         ["Click a glowing spot", "Fly there and land"],
         ["<kbd>N</kbd>", "Notes mode: pause, fly around, leave notes"],
-        ["Gamepad", "Stick, A to flap, triggers"],
+        ["<kbd>Esc</kbd> or <kbd>P</kbd>", "Pause"],
+        ["Gamepad", "Stick, A flap, X fire, B or Y brake, triggers"],
       ];
   return rows.map(([k, v]) => `<span class="keys">${k}</span><span>${v}</span>`).join("");
 }
 
 function sizeCanvas(canvas: HTMLCanvasElement) {
-  // Cap the pixel ratio so tablets stay smooth.
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  // Cap the pixel ratio so tablets and phones stay smooth. Touch screens get a bit less.
+  const touch = window.matchMedia("(pointer: coarse)").matches;
+  const dpr = Math.min(window.devicePixelRatio || 1, touch ? 1.5 : 2);
   const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
   const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
   if (canvas.width !== w || canvas.height !== h) {
@@ -116,13 +122,35 @@ async function start() {
   const minimap = setupMinimap(app, touch);
   // A tap on the touch stick area picks a note spot in notes mode, else a landing spot.
   if (touch)
-    setupTouch(app, (x, y) => (notes.active() ? notes.pick(x, y) : app.tap(x / innerWidth, y / innerHeight)));
+    setupTouch(app, (x, y) => {
+      if (!notes.active()) app.tap(x / innerWidth, y / innerHeight);
+      else if (!notes.writing()) notes.pick(x, y);
+    });
 
   const welcome = $("welcome");
   $("controls").innerHTML = controlsHtml(touch);
   if (touch) $("start-hint").textContent = "Tap to start";
-  const showHelp = (show: boolean) => welcome.classList.toggle("hidden", !show);
+  // The welcome card doubles as the pause screen: the world waits while it is up.
+  let started = false;
+  const showHelp = (show: boolean) => {
+    if (show === !welcome.classList.contains("hidden")) return;
+    welcome.classList.toggle("hidden", !show);
+    if (show && started) {
+      $("welcome-title").textContent = "Paused";
+      $("start-hint").textContent = touch ? "Tap to keep flying" : "Press Esc or any key to keep flying";
+    }
+    if (!show) {
+      started = true;
+      app.blur();
+    }
+    app.command(show ? "pause" : "resume");
+  };
   if (!query.has("nowelcome")) showHelp(true);
+  else started = true;
+  // Leaving the tab pauses too.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && !notes.active()) showHelp(true);
+  });
   $("help-btn").addEventListener("click", () => showHelp(welcome.classList.contains("hidden")));
   welcome.addEventListener("pointerdown", () => showHelp(false));
 
@@ -138,11 +166,15 @@ async function start() {
       notes.toggle();
       return;
     }
-    if (e.code === "KeyH" || e.code === "Escape") {
+    if (e.code === "KeyH" || e.code === "Escape" || e.code === "KeyP") {
       showHelp(welcome.classList.contains("hidden"));
       return;
     }
-    showHelp(false);
+    if (!welcome.classList.contains("hidden")) {
+      // The key that closes the card only closes it.
+      showHelp(false);
+      return;
+    }
     if (GAME_KEYS.has(e.code)) e.preventDefault();
     app.key(e.code, true, e.repeat);
   });
@@ -151,16 +183,29 @@ async function start() {
     app.key(e.code, false, false);
   });
   window.addEventListener("blur", () => app.blur());
-  // Click or tap the world to fly there and land.
-  let press = { x: 0, y: 0, at: 0 };
-  canvas.addEventListener("pointerdown", (e) => (press = { x: e.clientX, y: e.clientY, at: performance.now() }));
+  // Click or tap the world to fly there and land. Drag it to look around.
+  let press: { x: number; y: number; at: number; id: number; drag: boolean } | null = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    press = { x: e.clientX, y: e.clientY, at: performance.now(), id: e.pointerId, drag: false };
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!press || e.pointerId !== press.id || notes.active()) return;
+    if (!press.drag && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= 12) {
+      press.drag = true;
+      canvas.setPointerCapture(e.pointerId);
+    }
+    if (press.drag) app.look_drag(e.movementX || 0, e.movementY || 0);
+  });
   canvas.addEventListener("pointerup", (e) => {
     showHelp(false);
-    if (notes.active()) return;
-    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 12 && performance.now() - press.at < 400) {
+    const p = press;
+    press = null;
+    if (!p || notes.active() || p.drag) return;
+    if (Math.hypot(e.clientX - p.x, e.clientY - p.y) < 12 && performance.now() - p.at < 400) {
       app.tap(e.clientX / canvas.clientWidth, e.clientY / canvas.clientHeight);
     }
   });
+  canvas.addEventListener("pointercancel", () => (press = null));
   window.addEventListener("contextmenu", (e) => e.preventDefault());
 
   const debugPanel = debug ? setupDebug(app, saveSettings) : null;

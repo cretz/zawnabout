@@ -58,6 +58,7 @@ pub fn render(terrain: &Terrain, size: u32, marks: bool) -> Vec<u8> {
                         Some(CoverKind::Town) => [0.86, 0.66, 0.5],
                         Some(CoverKind::Forest) => [0.3, 0.55, 0.28],
                         Some(CoverKind::Meadow) => [0.72, 0.85, 0.45],
+                        Some(CoverKind::Snow) => [0.94, 0.96, 0.98],
                         None => [0.52, 0.74, 0.38],
                     };
                     let land = if y < 3.5 {

@@ -38,10 +38,67 @@ impl Frustum {
     }
 }
 
+/// A turned box standing on its base, with an optional gable roof whose ridge runs along
+/// local x. Walls are solid, the roof only holds you up.
+#[derive(Clone, Copy, Debug)]
+pub struct Block {
+    /// Center of the bottom face.
+    pub base: Vec3,
+    /// Half width (local x), wall height, half depth (local z).
+    pub half: Vec3,
+    /// World direction of local x on the ground, unit length. Local z is this turned a
+    /// quarter, `(-axis.y, axis.x)`, the same way a turn about y turns x into -z.
+    pub axis: Vec2,
+    /// Height of the ridge above the walls, 0 for a flat roof.
+    pub roof: f32,
+}
+
+impl Block {
+    /// `p` in the block's frame: x along the ridge, y up from the base.
+    fn local(&self, p: Vec3) -> Vec3 {
+        let d = Vec2::new(p.x - self.base.x, p.z - self.base.z);
+        let a = self.axis;
+        Vec3::new(d.dot(a), p.y - self.base.y, d.dot(Vec2::new(-a.y, a.x)))
+    }
+
+    fn world_dir(&self, v: Vec3) -> Vec3 {
+        let a = self.axis;
+        Vec3::new(a.x * v.x - a.y * v.z, v.y, a.y * v.x + a.x * v.z)
+    }
+
+    /// For a spot on this block's sloping roof, the point on the ridge beside it.
+    pub fn ridge_beside(&self, p: Vec3) -> Option<Vec3> {
+        if self.roof < 0.5 {
+            return None;
+        }
+        let q = self.local(p);
+        let top = self.top_at(q.z);
+        let on = q.x.abs() <= self.half.x && q.z.abs() <= self.half.z && (q.y - top).abs() < 0.8;
+        on.then(|| {
+            let along = self.world_dir(Vec3::new(
+                q.x.clamp(-self.half.x + 0.8, self.half.x - 0.8),
+                0.0,
+                0.0,
+            ));
+            Vec3::new(
+                self.base.x,
+                self.base.y + self.half.y + self.roof,
+                self.base.z,
+            ) + along
+        })
+    }
+
+    /// Roof height above the base at local depth `z`.
+    pub fn top_at(&self, z: f32) -> f32 {
+        self.half.y + self.roof * (1.0 - z.abs() / self.half.z).max(0.0)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Shape {
     Frustum(Frustum),
     Sphere { center: Vec3, radius: f32 },
+    Block(Block),
 }
 
 impl Shape {
@@ -50,6 +107,10 @@ impl Shape {
         match self {
             Shape::Frustum(f) => (Vec2::new(f.base.x, f.base.z), f.r0.max(f.r1)),
             Shape::Sphere { center, radius } => (Vec2::new(center.x, center.z), *radius),
+            Shape::Block(b) => (
+                Vec2::new(b.base.x, b.base.z),
+                Vec2::new(b.half.x, b.half.z).length(),
+            ),
         }
     }
 
@@ -64,6 +125,10 @@ impl Shape {
                 let d = Vec2::new(x - center.x, z - center.z).length();
                 // Only the gently sloped cap is standable.
                 (d <= radius * 0.7).then(|| center.y + (radius * radius - d * d).sqrt())
+            }
+            Shape::Block(b) => {
+                let q = b.local(Vec3::new(x, b.base.y, z));
+                (q.x.abs() <= b.half.x && q.z.abs() <= b.half.z).then(|| b.base.y + b.top_at(q.z))
             }
         }
     }
@@ -104,6 +169,39 @@ impl Shape {
                 let d = to.length();
                 let depth = radius + r - d;
                 (depth > 0.0).then(|| (if d > 1e-4 { to / d } else { Vec3::Y }, depth))
+            }
+            Shape::Block(b) => {
+                let q = b.local(p);
+                let h = b.half;
+                if q.y < -r || q.y > h.y + b.roof + r {
+                    return None;
+                }
+                if q.y > h.y {
+                    // Above the walls only the roof surface pushes, straight up.
+                    let inside = q.x.abs() < h.x && q.z.abs() < h.z;
+                    let depth = b.top_at(q.z) + r - q.y;
+                    return (inside && depth > 0.0 && depth < r * 2.0 + b.roof)
+                        .then_some((Vec3::Y, depth.min(r * 2.0)));
+                }
+                let near = Vec3::new(
+                    q.x.clamp(-h.x, h.x),
+                    q.y.clamp(0.0, h.y),
+                    q.z.clamp(-h.z, h.z),
+                );
+                let off = q - near;
+                let d = off.length();
+                if d > 1e-4 {
+                    return (d < r).then(|| (b.world_dir(off / d), r - d));
+                }
+                // Inside the walls: out through the nearest face.
+                let gaps = [h.x - q.x, h.x + q.x, h.y - q.y, h.z - q.z, h.z + q.z];
+                let dirs = [Vec3::X, -Vec3::X, Vec3::Y, Vec3::Z, -Vec3::Z];
+                let (k, gap) =
+                    gaps.iter().enumerate().fold(
+                        (0, f32::MAX),
+                        |a, (i, g)| if *g < a.1 { (i, *g) } else { a },
+                    );
+                Some((b.world_dir(dirs[k]), gap + r))
             }
         }
     }

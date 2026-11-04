@@ -86,7 +86,11 @@ pub fn spec(name: &str) -> Option<Spec> {
                 Pts::D2(&["edge", "sharp"]),
             )
         },
-        "ridge" => s(&[("width", 'n', true)], &[], Pts::D2(&["h", "sharp"])),
+        "ridge" => s(
+            &[("width", 'n', true), ("smooth", 'b', false)],
+            &[],
+            Pts::D2(&["h", "sharp"]),
+        ),
         "mountain" => s(
             &[
                 XZ[0],
@@ -169,8 +173,9 @@ pub fn spec(name: &str) -> Option<Spec> {
                 ("rot", 'n', false),
                 ("shape", 's', false),
                 ("glow", 'n', false),
+                ("decor", 's', false),
             ],
-            &["pillar", "city", "lake", "beacon", "perch", "site"],
+            &["pillar", "city", "lake", "beacon", "perch", "site", "ruin"],
             Pts::None,
         ),
         "passage" => s(
@@ -227,7 +232,7 @@ pub fn spec(name: &str) -> Option<Spec> {
             &[],
             Pts::D2(&["sharp"]),
         ),
-        "meadow" => s(&[], &[], Pts::D2(&["sharp"])),
+        "meadow" | "snowfield" => s(&[], &[], Pts::D2(&["sharp"])),
         "city" | "village" => s(TOWN, TOWN_KIDS, Pts::D2(&["sharp"])),
         "tier" => bare(0, &[("y", 'n', true)]),
         "site" => s(
@@ -242,8 +247,32 @@ pub fn spec(name: &str) -> Option<Spec> {
         ),
         "road" => s(&[("w", 'n', true)], &[], Pts::Any(&["sharp"])),
         "runway" => s(&[("w", 'n', true)], &[], Pts::D2(&[])),
-        "route" => s(&[("kind", 's', true)], &[], Pts::Any(&[])),
+        "railway" => s(&[], &["station"], Pts::Any(&["sharp"])),
+        "station" => s(XZ.as_slice(), &[], Pts::None),
+        "route" => s(&[("kind", 's', true)], &[], Pts::Any(&["sharp"])),
         "beacon" | "perch" => s(MARK, &[], Pts::None),
+        "ruin" => s(
+            &[
+                ("kind", 's', true),
+                ("x", 'n', true),
+                ("y", 'n', false),
+                ("z", 'n', true),
+            ],
+            &[],
+            Pts::None,
+        ),
+        "landmark" => s(
+            &[
+                ("kind", 's', true),
+                ("x", 'n', true),
+                ("y", 'n', false),
+                ("z", 'n', true),
+                ("rot", 'n', false),
+                ("text", 's', false),
+            ],
+            &[],
+            Pts::None,
+        ),
         "roost" => s(&[], &[], Pts::D2(&[])),
         _ => return None,
     })

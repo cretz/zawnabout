@@ -154,6 +154,40 @@ button {
   height: min(380px, 70vmin);
 }
 
+#map-close {
+  z-index: 4;
+  right: auto;
+  width: 40px;
+  height: 40px;
+  font-size: 18px;
+}
+
+#travel {
+  position: fixed;
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 14px;
+  background: var(--cream);
+  box-shadow: var(--shadow);
+}
+
+#travel button {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 700;
+  background: var(--coral);
+  color: var(--cream);
+}
+
+#travel button[data-go="no"] {
+  background: #e9dfcf;
+  color: #5a4a3e;
+}
+
 .round.third {
   right: calc(max(14px, env(safe-area-inset-right)) + 108px);
   font-size: 20px;
@@ -172,7 +206,7 @@ button {
 /* Notes mode: a bar across the top, the note list on the right, a note dialog. */
 #notes-bar {
   position: fixed;
-  z-index: 2;
+  z-index: 6;
   top: max(14px, env(safe-area-inset-top));
   left: 50%;
   transform: translateX(-50%);
@@ -200,6 +234,8 @@ button {
 
 #notes-panel {
   position: fixed;
+  /* Above the touch layer, so taps on notes never reach the world behind. */
+  z-index: 6;
   top: calc(max(14px, env(safe-area-inset-top)) + 58px);
   right: max(14px, env(safe-area-inset-right));
   bottom: max(14px, env(safe-area-inset-bottom));
@@ -255,6 +291,7 @@ button {
 }
 
 #note-dialog {
+  z-index: 7;
   width: min(460px, calc(100vw - 28px));
 }
 
@@ -319,7 +356,15 @@ button {
     right: max(14px, env(safe-area-inset-right));
     bottom: auto;
     width: auto;
-    max-height: 32vh;
+    max-height: 26vh;
+    padding: 8px 12px;
+  }
+
+  /* The note dialog sits at the top, clear of the on screen keyboard. */
+  #note-dialog {
+    top: max(14px, env(safe-area-inset-top));
+    transform: translateX(-50%);
+    padding: 14px 16px;
   }
 }
 
@@ -370,7 +415,7 @@ button {
   bottom: max(28px, env(safe-area-inset-bottom));
   display: grid;
   grid-template-columns: auto auto;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   gap: 14px;
   align-items: end;
   pointer-events: auto;
@@ -388,7 +433,7 @@ button {
 
 .pad.big {
   grid-column: 2;
-  grid-row: 1 / span 2;
+  grid-row: 2 / span 2;
   width: 112px;
   height: 112px;
   background: var(--coral);
@@ -401,6 +446,14 @@ button {
   width: 72px;
   height: 72px;
   font-size: 15px;
+}
+
+.pad.fire {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  background: #ffb35c;
+  color: white;
 }
 
 .pad.down {

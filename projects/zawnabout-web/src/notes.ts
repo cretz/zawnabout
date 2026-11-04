@@ -1,6 +1,6 @@
 import type { App } from "../pkg/zawnabout_web.js";
 
-/** A design note, as stored in `world/feedback/<id>.json`. */
+/** A design note, as stored in `working-area/feedback/<id>.json`, outside the repo. */
 interface Note {
   id?: string;
   created?: string;
@@ -103,7 +103,7 @@ export function setupNotes(app: App, canvas: HTMLCanvasElement, touch: boolean) 
   };
 
   const render = () => {
-    where.textContent = store.server ? "saved to world/feedback" : "kept in this browser";
+    where.textContent = store.server ? "saved to working-area/feedback" : "kept in this browser";
     download.classList.toggle("hidden", store.server || notes.length === 0);
     list.innerHTML = "";
     if (notes.length === 0) {
@@ -175,8 +175,10 @@ export function setupNotes(app: App, canvas: HTMLCanvasElement, touch: boolean) 
     e.stopPropagation();
   });
 
-  // Load once up front so the map shows pins before notes mode is opened.
+  // Load once up front so the map shows pins before notes mode is opened. On small
+  // screens the list starts folded, so the world stays in view.
   refresh();
+  if (touch && innerWidth <= 640) panel.classList.add("collapsed");
 
   const set = (on: boolean) => {
     app.notes(on);

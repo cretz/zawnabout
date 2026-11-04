@@ -6,7 +6,7 @@ world first {
     sky 3000
     deep -1600
     sea level=0 floor=-90
-    spawn island=home x=-200 z=320
+    spawn island=home x=-480 z=430
     note "Fly from the home meadow in any direction and hit something worth seeing within a minute."
     note "Sky is tall for big cloud formations and storms. Leave room up high for sky cities later."
 }
@@ -65,10 +65,12 @@ caves sunken {
         p 960 -180 4820
         p 900 -330 4700
     }
-    cavern sunken-hall x=820 y=-480 z=4500 w=1500 h=360 d=1200 rot=25 shape=dome glow=0.25 {
+    cavern sunken-hall x=820 y=-480 z=4500 w=1500 h=360 d=1200 rot=25 shape=dome glow=0.25 decor=crystal {
         note "One big quiet dome with a pool. Light from the stack hole falls in a single beam."
-        lake sunken-pool level=-640 x=700 z=4450 r=320
+        lake sunken-pool level=-585 x=700 z=4450 r=320
         beacon sunken-beacon x=950 y=-600 z=4600
+        ruin sunken-statue kind=statue x=1000 y=-560 z=4650
+        ruin sunken-columns kind=columns x=880 y=-560 z=4700
     }
 }
 
@@ -88,44 +90,219 @@ cavern road-hall x=1000 y=-1000 z=-450 w=1500 h=420 d=1200 rot=40 shape=hall glo
     beacon road-hall-beacon x=800 y=-1190 z=-350
 }
 
-// Vehicle routes, reserved for later.
+// Vehicle routes. Closed ones go round, open ones go back and forth.
 
 route ferry-loop kind=ferry {
-    note "Home harbor to tidewater to moonharbor and back."
+    note "Home harbor to tidewater to moonharbor, into the crescent lagoon and back, all by sea."
     p -1800 1750
     p -1800 2700
-    p -4200 1800
-    p -4200 -1000
+    p -3000 3050
+    p -4300 2200
+    p -4250 -1000
     p -2200 -3300
-    p -300 -3650
-    p 1000 -3000
+    p -300 -3560
+    p 300 -2500
+    p 1200 -200
+    p 2600 100
+    p 3750 -350
     p 3700 -800
     p 3550 -1000
     p 2000 -1400
     p 3550 -1000
     p 3700 -800
+    p 3750 -350
     p 1500 600
     p 0 2500
     p -1800 2700
     p -1800 1750
 }
 route seaplane-hop kind=seaplane {
-    p 2600 -2000 0
-    p 0 -400 200
-    p -1800 1700 0
-    p -3500 -1000 250
-    p -4300 -2700 0
+    note "Crescent lagoon to home harbor to the atoll and back, round the coasts."
+    p 2600 0 -2000
+    p 2200 40 -1500
+    p 1400 180 -700
+    p 1700 260 1200
+    p -500 160 2700
+    p -1500 40 2500
+    p -1800 0 1750
+    p -2300 60 2700
+    p -3200 220 3100
+    p -4700 320 1600
+    p -4800 280 -1200
+    p -4650 60 -2500
+    p -4300 0 -2920
 }
-route airliner-approach kind=plane {
-    note "Long straight approach onto the crescent runway from the open sea to the east."
-    p 5200 -3060 500
-    p 4200 -3135 200
-    p 3350 -3200 15
+route airliner-circuit kind=plane {
+    note "Long straight approach onto the crescent runway from the open sea to the east, a touch and go, then round again over the open sea."
+    p 5200 500 -3060
+    p 4200 200 -3135
+    p 3350 13.4 -3200 sharp=#true
+    p 2700 13.4 -3250 sharp=#true
+    p 2050 30 -3300 sharp=#true
+    p 1000 260 -3380
+    p 200 650 -4300
+    p 900 900 -5400
+    p 3200 900 -5500
+    p 5300 800 -4700
+    p 5600 650 -3500
+    p 5200 500 -3060
+}
+route balloon-meadows kind=balloon {
+    note "Two balloons drifting over the home meadows and the village, low enough to land on."
+    p -2400 260 900
+    p -1500 300 1500
+    p -700 320 1300
+    p -900 300 500
+    p -1800 280 300
+    p -2400 260 900
+}
+route balloon-crescent kind=balloon {
+    note "Over moonharbor and the crescent lagoon."
+    p 2000 320 -2600
+    p 3000 360 -2200
+    p 3300 340 -1200
+    p 2300 320 -900
+    p 2000 320 -2600
+}
+route balloon-twins kind=balloon {
+    note "Between the twin islands, over the land bridge."
+    p -700 300 -4300
+    p 400 340 -4800
+    p 700 320 -3800
+    p -700 300 -4300
 }
 route yacht-lane kind=yacht {
     p 3750 -1000
     p 4600 600
     p 3600 1900
     p 2300 1000
+    p 3850 -300
     p 3750 -1000
 }
+route yacht-south kind=yacht {
+    note "A long reach south of home, out toward fang and back past the needles."
+    p 240 3000
+    p 1200 4500
+    p -600 5100
+    p -2200 3900
+    p 240 3000
+}
+route yacht-north kind=yacht {
+    note "Racing round the open water north of the crescent."
+    p 600 -5300
+    p 3800 -5100
+    p 5200 -4200
+    p 2500 -4300
+    p 600 -5300
+}
+route yacht-lagoon kind=yacht {
+    note "Lazy laps of the crescent lagoon, round its little island."
+    p 2200 -2500
+    p 3300 -2500
+    p 3400 -1500
+    p 2300 -1400
+    p 2200 -2500
+}
+
+// Landmarks: odd, homely things real places have. Solid, so all of them can be landed on.
+
+landmark old-ring kind=stones x=-3100 z=1700 rot=20 {
+    note "A ring of standing stones in the south-west meadows. Nobody remembers who raised it."
+}
+landmark south-wind-1 kind=turbine x=-1150 z=1840 rot=200
+landmark south-wind-2 kind=turbine x=-950 z=1940 rot=200
+landmark south-wind-3 kind=turbine x=-760 z=2010 rot=200 {
+    note "The wind farm on the south coast plain. Perch on a turbine's nacelle and watch the blades go round."
+}
+landmark tarn-camp kind=campsite x=-2300 z=-50 {
+    note "Tents and a campfire by the high tarn. The fire always burns."
+}
+landmark sky-ear kind=telescope x=-2450 z=-20 {
+    note "A radio telescope dish beside the tarn camp, listening to the sky. Land in the bowl."
+}
+landmark meadow-picnic kind=picnic x=-2230 z=1260 rot=35
+landmark meadow-phone kind=phonebox x=-2205 z=1236 rot=35 {
+    note "A red phone box beside the picnic tables, in the middle of a meadow. Lit at night."
+}
+landmark field-scarecrow kind=scarecrow x=-1600 z=900 rot=60
+landmark moon-drivein kind=drivein x=2800 z=-800 rot=30 {
+    note "A drive-in movie screen on the crescent flats, with cars parked up for the show."
+}
+landmark north-beach-umbrellas kind=umbrellas x=3100 z=-3480 rot=10
+landmark moon-sign kind=sign x=1450 z=-1880 rot=15 text="MOONHARBOR" {
+    note "Big white letters on the hill above the city."
+}
+landmark meadow-fair kind=ferris x=-360 z=1680 rot=110 {
+    note "A little fair by the east meadows. The wheel turns all day."
+}
+landmark old-swing kind=swing x=-2600 z=1900 rot=30
+landmark twin-maze kind=maze x=-2100 z=-4150 rot=8 {
+    note "A hedge maze on the old island, with something in the middle."
+}
+landmark north-sandcastle kind=sandcastle x=3020 z=-3500 rot=190
+landmark summit-snowman kind=snowman x=-1710 z=-420 rot=160 {
+    note "Who built this up here?"
+}
+landmark cliff-bench kind=bench x=-3500 z=750 rot=270 {
+    note "A bench on the west cliffs, for watching the sunset."
+}
+landmark gnome-moot kind=gnomes x=-2300 z=1550
+landmark crescent-bees kind=beehives x=1800 z=-3120 rot=20
+landmark farm-pumpkins kind=pumpkins x=-1650 z=960
+landmark nowhere-stop kind=busstop x=-2500 z=1500 rot=75 {
+    note "A bus stop with no road. The bus never comes."
+}
+landmark farm-tower kind=watertower x=1720 z=-3180
+landmark crater-spring kind=hotspring x=3450 z=3150 {
+    note "A steaming pool up by the crater lake."
+}
+landmark flats-chess kind=chess x=2640 z=-720 rot=15 {
+    note "A giant game of chess on the crescent flats, left half played. White to move."
+}
+landmark ridge-cairns kind=cairns x=-1500 z=-700
+landmark wood-treehouse kind=treehouse x=-3300 z=500 rot=150 {
+    note "A treehouse in the west woods, ladder down and lamp lit."
+}
+landmark wood-well kind=well x=-3100 z=300 rot=20 {
+    note "A wishing well in the woods."
+}
+landmark fair-lemonade kind=lemonade x=-420 z=1760 rot=110
+landmark crater-igloo kind=igloo x=3900 z=3264 rot=90 {
+    note "An igloo on the crater rim, lamp lit inside."
+}
+landmark meadow-washing kind=laundry x=-2340 z=1440 rot=60
+landmark fang-sundial kind=sundial x=3120 z=2400
+landmark crescent-circus kind=circus x=2200 z=-3000 rot=200 {
+    note "The circus came to the crescent and never left."
+}
+landmark fair-fountain kind=fountain x=-300 z=1620
+landmark stop-postbox kind=postbox x=-2512 z=1488 rot=75
+landmark atoll-bandstand kind=bandstand x=-4260 z=-2736 {
+    note "A bandstand on the atoll's islet. The band has stepped out."
+}
+
+// The big places towns have.
+landmark moon-stadium kind=stadium x=1400 z=-1640 rot=10 {
+    note "Moonharbor's football ground. Floodlights at night."
+}
+landmark moon-mall kind=mall x=1820 z=-980 rot=200 {
+    note "The big mall on the edge of Moonharbor, its car park full."
+}
+landmark hill-waterpark kind=waterpark x=-680 z=1420 rot=0 {
+    note "Slides, a wave pool and a lazy river at the foot of the hill city."
+}
+landmark hill-themepark kind=themepark x=-1100 z=1150 rot=15 {
+    note "A roller coaster round a castle, a carousel and a drop tower."
+}
+landmark hill-zoo kind=zoo x=-320 z=580 rot=0 {
+    note "Elephants, giraffes, zebras, lions and penguins."
+}
+landmark bay-statue kind=statue x=-900 y=0 z=2500 rot=200 {
+    note "A great copper figure on its rock in Kettle bay, lamp held high for ships."
+}
+landmark village-grocery kind=grocery x=-1900 z=1150 rot=35
+landmark hill-grocery kind=grocery x=-300 z=1300 rot=10
+landmark moon-grocery kind=grocery x=1640 z=-1340 rot=100
+landmark harbor-park kind=park x=-1300 z=1900 rot=20
+landmark hill-park kind=park x=-200 z=1100 rot=0
+landmark moon-park kind=park x=1160 z=-1640 rot=10

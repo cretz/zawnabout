@@ -1,0 +1,8 @@
+# Stand on the ferry and ride it for a while: it carries you along and you stay aboard.
+ride 0
+wait 0.5
+expect riding 0
+wait 8
+expect riding 0
+expect ground
+shot ride-ferry.png

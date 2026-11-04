@@ -17,10 +17,61 @@ export function setupMinimap(app: App, touch: boolean) {
   base.width = base.height = MAP_PIXELS;
   base.getContext("2d")!.putImageData(image, 0, 0);
 
+  // Small: a click makes it big. Big: a click picks a spot and asks to fly there.
   let big = false;
-  canvas.addEventListener("click", () => {
-    big = !big;
+  let pick: { x: number; z: number } | null = null;
+  const ask = document.createElement("div");
+  ask.id = "travel";
+  ask.className = "hidden";
+  ask.innerHTML = `<button data-go="yes">Fly here</button><button data-go="no">Cancel</button>`;
+  document.body.appendChild(ask);
+  const close = document.createElement("button");
+  close.id = "map-close";
+  close.className = "round hidden";
+  close.textContent = "✕";
+  close.title = "Close map";
+  document.body.appendChild(close);
+  const setBig = (on: boolean) => {
+    big = on;
+    pick = null;
     canvas.classList.toggle("big", big);
+    ask.classList.add("hidden");
+    close.classList.toggle("hidden", !big);
+    if (big) {
+      // Sit the close button on the map's corner once it has grown.
+      requestAnimationFrame(() => {
+        const r = canvas.getBoundingClientRect();
+        close.style.left = `${Math.min(r.right - 22, innerWidth - 48)}px`;
+        close.style.top = `${Math.max(r.top - 22, 6)}px`;
+      });
+    }
+  };
+  canvas.addEventListener("click", (e) => {
+    if (!big) {
+      setBig(true);
+      return;
+    }
+    const r = canvas.getBoundingClientRect();
+    const u = (e.clientX - r.left) / r.width;
+    const v = (e.clientY - r.top) / r.height;
+    pick = { x: x0 + u * span, z: z0 + v * (z1 - z0) };
+    ask.style.left = `${Math.min(e.clientX, innerWidth - 220)}px`;
+    ask.style.top = `${Math.min(e.clientY + 14, innerHeight - 60)}px`;
+    ask.classList.remove("hidden");
+  });
+  close.addEventListener("click", () => setBig(false));
+  ask.addEventListener("click", (e) => {
+    const go = (e.target as HTMLElement).dataset.go;
+    if (!go) return;
+    if (go === "yes" && pick) {
+      // Arrive flying high over the spot, still facing the same way.
+      const [, , heading] = app.map_marker();
+      app.command(`goto ${pick.x.toFixed(0)} ${pick.z.toFixed(0)} 250 ${((heading * 180) / Math.PI).toFixed(0)}`);
+      setBig(false);
+    } else {
+      pick = null;
+      ask.classList.add("hidden");
+    }
   });
 
   return {
@@ -44,6 +95,16 @@ export function setupMinimap(app: App, touch: boolean) {
         ctx.beginPath();
         ctx.arc(px(pins[i]), pz(pins[i + 2]), size / 90, 0, Math.PI * 2);
         ctx.fill();
+      }
+
+      if (pick) {
+        ctx.beginPath();
+        ctx.arc(px(pick.x), pz(pick.z), size / 40, 0, Math.PI * 2);
+        ctx.fillStyle = "#fff8ec";
+        ctx.strokeStyle = "#f2845c";
+        ctx.lineWidth = Math.max(2, size / 100);
+        ctx.fill();
+        ctx.stroke();
       }
 
       // Heading 0 faces +z, which is down on the map.

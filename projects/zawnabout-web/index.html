@@ -12,7 +12,7 @@
     <canvas id="game"></canvas>
 
     <div id="welcome" class="card center hidden">
-      <h1>zawnabout</h1>
+      <h1 id="welcome-title">zawnabout</h1>
       <p class="lead">You're a little dragon with a big sky. Go anywhere!</p>
       <div id="controls"></div>
       <p class="hint" id="start-hint">Press any key or tap to start</p>
@@ -48,6 +48,7 @@
     <div id="touch" class="hidden">
       <div id="stick-zone"><div id="stick-base"><div id="stick-knob"></div></div></div>
       <div id="buttons">
+        <button class="pad small fire" data-action="breath">Fire</button>
         <button class="pad small" data-action="brake">Brake</button>
         <button class="pad small" data-action="tuck">Dive</button>
         <button class="pad big" data-action="flap">Flap</button>

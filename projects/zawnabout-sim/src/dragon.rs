@@ -4,7 +4,7 @@
 //! Frame: +Y up, body forward is local +Z, body right is local -X. Positive bank rolls
 //! the right wing down. Heading 0 faces +Z.
 
-use glam::{Quat, Vec2, Vec3};
+use glam::{Mat3, Quat, Vec2, Vec3};
 
 use crate::swoop::Swoop;
 use crate::world::World;
@@ -43,20 +43,27 @@ crate::params! {
         path_gain: f32 = 1.4, [0.1, 5],
         /// How fast the body reaches the commanded angle of attack (1/s).
         aoa_rate: f32 = 5.0, [0.5, 20],
-        /// Max bank (rad).
-        max_bank: f32 = 1.35, [0.2, 1.5],
-        /// How fast bank follows input (1/s).
-        bank_rate: f32 = 8.0, [0.5, 20],
-        /// Extra lift (in g) pulled into the bank while turning, for sharp turns at speed.
-        turn_pull: f32 = 5.0, [0, 12],
-        /// Extra lift in banks to hold altitude (0 is none, 1 is full).
-        turn_assist: f32 = 0.8, [0, 1],
+        /// Max bank (rad). Bank is for looks: it follows the turn.
+        max_bank: f32 = 1.2, [0.2, 1.5],
+        /// How fast bank follows the turn (1/s).
+        bank_rate: f32 = 5.0, [0.5, 20],
+        /// Turn rate (rad/s) at full stick when slow.
+        turn_rate: f32 = 1.7, [0.2, 5],
+        /// Sideways pull (in g) at full stick, which sets how wide fast turns are.
+        turn_g: f32 = 7.0, [0.5, 15],
+        /// How quickly turns build and settle (1/s). The turn rate follows the stick like a
+        /// spring with no bounce, so turns roll in and out instead of snapping. Lower is
+        /// smoother.
+        turn_ease: f32 = 7.0, [0.5, 30],
+        /// Extra turn rate (rad/s) while braking, for tight turns in tricky spots.
+        brake_turn: f32 = 1.3, [0, 5],
+        /// How much of a little stick turns: 0 is straight in proportion, 1 keeps small
+        /// inputs very gentle while full stick stays sharp.
+        turn_curve: f32 = 0.6, [0, 1],
+        /// Speed lost to turning, per g of sideways pull (m/s^2 per g).
+        turn_drag: f32 = 0.5, [0, 5],
         /// Max load factor (g) lift can pull.
         max_load: f32 = 9.0, [1, 15],
-        /// Speed (m/s) below which turn input yaws directly.
-        slow_turn_speed: f32 = 12.0, [0, 40],
-        /// Direct yaw rate at a standstill in the air (rad/s).
-        slow_turn_rate: f32 = 1.6, [0, 5],
         /// Lift kept with wings tucked.
         tuck_lift: f32 = 0.25, [0, 1],
         /// Wing drag kept with wings tucked.
@@ -110,6 +117,10 @@ crate::params! {
         stand_height: f32 = 1.5, [0.5, 4],
         /// Walk speed (m/s).
         walk_speed: f32 = 9.0, [0, 30],
+        /// Run speed (m/s), reached by holding forward for a moment.
+        run_speed: f32 = 24.0, [0, 60],
+        /// Seconds of holding forward to break into a full run.
+        run_time: f32 = 0.9, [0.1, 5],
         /// Steepest ground you can walk up, as the up part of its normal (0.3 is about 72
         /// degrees).
         walk_slope: f32 = 0.3, [0, 1],
@@ -127,6 +138,13 @@ crate::params! {
         tumble_sink: f32 = 9.0, [1, 40],
         /// Seconds a tumble lasts.
         tumble_time: f32 = 1.0, [0, 4],
+        /// How far fire breath reaches (m).
+        breath_range: f32 = 60.0, [5, 150],
+        /// How far below the flight path fire aims (rad), since what you want to light is
+        /// usually below you.
+        breath_down: f32 = 0.3, [0, 1.2],
+        /// Fire bends toward a beacon within this angle (rad) of where it aims.
+        breath_assist: f32 = 0.7, [0, 1.5],
     }
 }
 
@@ -151,6 +169,8 @@ pub struct DragonInput {
     pub brake: bool,
     /// Asks for a swoop that lands the feet here. Sent once, steering cancels it.
     pub land_at: Option<Vec3>,
+    /// Breathing fire while held.
+    pub breath: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,6 +198,12 @@ pub struct Dragon {
     pub path_pitch: f32,
     pub aoa: f32,
     pub bank: f32,
+    /// Heading change (rad/s) the turn has eased to.
+    pub yaw_rate: f32,
+    /// How fast the turn rate is changing (rad/s^2).
+    pub yaw_accel: f32,
+    /// 0 walking to 1 at a full run.
+    pub run: f32,
     pub mode: Mode,
     pub stroke: Stroke,
     /// 0 open to 1 fully tucked.
@@ -200,6 +226,14 @@ pub struct Dragon {
     pub flapping: f32,
     /// A tap-to-land flight in progress.
     pub swoop: Option<Swoop>,
+    /// Clinging to a wall: which way it faces. Standing, but belly to the wall.
+    pub cling: Option<Vec3>,
+    /// Which way the dragon faces on its wall: 0 nose up, a quarter turn sideways.
+    pub cling_turn: f32,
+    /// 0 to 1, how hard fire is pouring out.
+    pub breath: f32,
+    /// Where fire goes, bent toward something to light. Zero for straight ahead.
+    pub breath_aim: Vec3,
 }
 
 impl Dragon {
@@ -212,6 +246,9 @@ impl Dragon {
             path_pitch: 0.0,
             aoa: 0.0,
             bank: 0.0,
+            yaw_rate: 0.0,
+            yaw_accel: 0.0,
+            run: 0.0,
             mode: Mode::Ground,
             stroke: Stroke::default(),
             tuck: 0.0,
@@ -224,10 +261,21 @@ impl Dragon {
             bonk: f32::MAX,
             flapping: 0.0,
             swoop: None,
+            cling: None,
+            cling_turn: 0.0,
+            breath: 0.0,
+            breath_aim: Vec3::ZERO,
         }
     }
 
     pub fn rotation(&self) -> Quat {
+        // On a wall: belly to it, nose the way it faces across it.
+        if let Some(n) = self.cling {
+            let side = Vec3::Y.cross(n).normalize_or(Vec3::X);
+            let up = n.cross(side).normalize_or(Vec3::Y);
+            let fwd = up * self.cling_turn.cos() + side * self.cling_turn.sin();
+            return Quat::from_mat3(&Mat3::from_cols(n.cross(fwd), n, fwd));
+        }
         Quat::from_rotation_y(self.heading)
             * Quat::from_rotation_x(-self.path_pitch)
             * Quat::from_rotation_z(self.bank)
@@ -236,6 +284,22 @@ impl Dragon {
 
     pub fn speed(&self) -> f32 {
         self.vel.length()
+    }
+
+    /// Where fire comes out and which way it goes: the snout, a little below the flight
+    /// path, or toward what it is bent at.
+    pub fn breath_ray(&self) -> (Vec3, Vec3) {
+        let (mouth, ahead) = self.breath_ahead(0.3);
+        (mouth, self.breath_aim.try_normalize().unwrap_or(ahead))
+    }
+
+    /// The snout and straight ahead of it, `down` radians below the flight path.
+    pub fn breath_ahead(&self, down: f32) -> (Vec3, Vec3) {
+        let dir = Quat::from_rotation_y(self.heading)
+            * Quat::from_rotation_x(-self.path_pitch * 0.8 + down)
+            * Vec3::Z;
+        let snout = Quat::from_rotation_y(self.heading) * Vec3::Z;
+        (self.pos + snout * 2.6 + Vec3::Y * 0.7, dir)
     }
 
     fn forward_flat(&self) -> Vec3 {
@@ -252,7 +316,7 @@ impl Dragon {
         self.bonk += dt;
         self.turn_input = input.turn;
 
-        if let Some(target) = input.land_at
+        if let Some(target) = input.land_at.map(|t| world.perch_spot(t))
             && self.swoop.as_ref().is_none_or(|s| s.target != target)
         {
             self.swoop = Some(Swoop::plan(
@@ -274,7 +338,9 @@ impl Dragon {
             self.swoop = None;
         }
         if self.swoop.is_some() {
-            self.step_swoop(p, dt);
+            self.breath =
+                (self.breath + if input.breath { dt * 8.0 } else { -dt * 8.0 }).clamp(0.0, 1.0);
+            self.step_swoop(p, world, dt);
             return;
         }
         let toward = |v: f32, target: f32, rate: f32| v + (target - v) * (rate * dt).min(1.0);
@@ -288,7 +354,12 @@ impl Dragon {
             p.tuck_rate,
         );
         self.brake = toward(self.brake, if input.brake { 1.0 } else { 0.0 }, p.tuck_rate);
+        self.breath = toward(self.breath, if input.breath { 1.0 } else { 0.0 }, 8.0);
 
+        if let Some(n) = self.cling {
+            self.step_cling(p, world, input, n, dt);
+            return;
+        }
         match self.mode {
             Mode::Ground => self.step_ground(p, world, input, dt),
             Mode::Air => self.step_air(p, world, input, dt),
@@ -296,10 +367,18 @@ impl Dragon {
         self.keep_in_bounds(world, dt);
     }
 
-    fn step_swoop(&mut self, p: &FlightParams, dt: f32) {
+    fn step_swoop(&mut self, p: &FlightParams, world: &World, dt: f32) {
         let toward = |v: f32, target: f32, rate: f32| v + (target - v) * (rate * dt).min(1.0);
         let Some(swoop) = &mut self.swoop else { return };
+        self.yaw_rate = 0.0;
+        self.yaw_accel = 0.0;
         let (pos, vel, arrived) = swoop.step(dt, p.swoop_speed);
+        // Landing on something that moves: follow it.
+        let bend = swoop.bend(world);
+        let (pos, vel) = (pos + bend, vel + (bend - swoop.shift) / dt);
+        swoop.shift = bend;
+
+        let wall = swoop.wall;
         let (progress, target, rushing, landing) = (
             swoop.progress(),
             swoop.target,
@@ -350,12 +429,98 @@ impl Dragon {
         }
 
         if arrived {
-            self.pos = target + Vec3::Y * p.stand_height;
+            self.pos = target + bend + wall.unwrap_or(Vec3::Y) * p.stand_height;
             self.vel = Vec3::ZERO;
             self.swoop = None;
             self.stroke = Stroke::default();
             self.set_mode(Mode::Ground);
+            if let Some(n) = wall {
+                self.cling = Some(n);
+                self.cling_turn = 0.0;
+                self.heading = (-n.x).atan2(-n.z);
+            }
         }
+    }
+
+    /// On a wall: nose up, belly to it. Pitch climbs, turn crawls sideways, flap leaps off
+    /// backward. Climbing over the top steps onto the roof, and down at the foot onto the
+    /// ground.
+    fn step_cling(
+        &mut self,
+        p: &FlightParams,
+        world: &World,
+        input: DragonInput,
+        n: Vec3,
+        dt: f32,
+    ) {
+        let toward = |v: f32, target: f32, rate: f32| v + (target - v) * (rate * dt).min(1.0);
+        self.vel = Vec3::ZERO;
+        self.bank = toward(self.bank, 0.0, 10.0);
+        self.aoa = toward(self.aoa, 0.0, 10.0);
+        self.path_pitch = toward(self.path_pitch, 1.5, 10.0);
+        self.heading = (-n.x).atan2(-n.z);
+        self.yaw_rate = 0.0;
+        self.yaw_accel = 0.0;
+        self.stroke.active = false;
+        self.rush = 0.0;
+
+        let wants_off = input.flap_taps > 0 || (input.flap && self.mode_time > 0.4);
+        if wants_off && self.mode_time > 0.15 {
+            self.cling = None;
+            self.heading = n.x.atan2(n.z);
+            self.path_pitch = 0.3;
+            self.vel = n * 10.0 + Vec3::Y * 6.0;
+            self.pos += n * 0.3;
+            self.aoa = 0.3;
+            self.set_mode(Mode::Air);
+            self.start_stroke();
+            return;
+        }
+
+        // Turn to face across the wall, and walk the way it faces, as on the ground.
+        self.cling_turn = (self.cling_turn - input.turn * p.walk_turn_rate * dt)
+            .rem_euclid(std::f32::consts::TAU);
+        let side = Vec3::Y.cross(n).normalize_or(Vec3::X);
+        let up = n.cross(side).normalize_or(Vec3::Y);
+        let fwd = up * self.cling_turn.cos() + side * self.cling_turn.sin();
+        let step = fwd * input.pitch.max(-0.4) * p.walk_speed * dt;
+        if step.length() < 1e-4 {
+            return;
+        }
+        self.stride += step.length();
+        let feet = self.pos - n * p.stand_height + step;
+        // Faces are rarely flat: feel a little way in for the wall.
+        for reach in [0.0, 0.4, 0.8, 1.2] {
+            let at = feet - n * reach;
+            if let Some(n2) = world.wall_normal(at) {
+                self.pos = at + n2 * p.stand_height;
+                self.cling = Some(n2);
+                return;
+            }
+        }
+        if step.y > 0.0 {
+            // Over the top: onto the roof just behind the edge.
+            let q = feet - n * 1.5;
+            let top = world.support(q.x, q.z, feet.y + 3.0);
+            if (top - feet.y).abs() < 3.0 {
+                self.pos = Vec3::new(q.x, top + p.stand_height, q.z);
+                self.leave_wall();
+            }
+        } else {
+            // Down at the foot: onto the ground.
+            let ground = world.support(feet.x, feet.z, feet.y + 0.5);
+            if feet.y - ground < 1.5 {
+                self.pos = Vec3::new(self.pos.x, ground + p.stand_height, self.pos.z);
+                self.heading = n.x.atan2(n.z);
+                self.leave_wall();
+            }
+        }
+    }
+
+    fn leave_wall(&mut self) {
+        self.cling = None;
+        self.path_pitch = 0.0;
+        self.set_mode(Mode::Ground);
     }
 
     fn start_stroke(&mut self) {
@@ -368,7 +533,35 @@ impl Dragon {
 
     fn step_ground(&mut self, p: &FlightParams, world: &World, input: DragonInput, dt: f32) {
         let toward = |v: f32, target: f32, rate: f32| v + (target - v) * (rate * dt).min(1.0);
+        // Standing on a boat or plane: ride along, turning with it.
+        let feet = self.pos.y - p.stand_height;
+        let ride = match world.carrier(self.pos.x, self.pos.z, feet) {
+            Some(i) => {
+                let (was, now) = (world.traffic.prev[i], world.traffic.poses[i]);
+                self.pos = now.to_world(was.to_local(self.pos));
+                self.heading += now.heading_since(&was);
+                (now.pos - was.pos) / dt
+            }
+            None => Vec3::ZERO,
+        };
+        // A car that runs into you bowls you up and out of its way, head over tail, with
+        // stars. Never harmful, just silly.
+        if ride == Vec3::ZERO
+            && self.bonk > 1.0
+            && let Some((car, moved)) = world.struck_by_car(self.pos, feet, p.body_radius)
+            && moved.length() > 2.0 * dt
+        {
+            let away = Vec2::new(self.pos.x - car.x, self.pos.z - car.z).normalize_or_zero();
+            self.vel = moved / dt * 0.6 + Vec3::new(away.x, 0.0, away.y) * 7.0 + Vec3::Y * 9.0;
+            self.pos.y += 0.3;
+            self.bonk = 0.0;
+            self.tumble = p.tumble_time;
+            self.set_mode(Mode::Air);
+            return;
+        }
         self.bank = toward(self.bank, 0.0, 10.0);
+        self.yaw_rate = 0.0;
+        self.yaw_accel = 0.0;
         self.aoa = toward(self.aoa, 0.0, 10.0);
         self.path_pitch = toward(self.path_pitch, 0.0, 10.0);
         self.stroke.active = false;
@@ -382,12 +575,30 @@ impl Dragon {
             let fwd = Vec2::new(self.heading.sin(), self.heading.cos());
             let along = flat.dot(fwd);
             let side = flat - fwd * along;
-            let target = input.pitch.max(-0.4) * p.walk_speed;
-            // Faster than walking means a run-out from a landing: slide down gently.
-            let accel = if along.abs() > p.walk_speed && target.abs() <= along.abs() {
-                p.ground_friction
-            } else if input.pitch.abs() > 0.05 {
-                p.walk_accel
+            // Holding forward breaks into a run. A run lasts until it has slowed to a walk.
+            self.run = if input.pitch > 0.6 {
+                (self.run + dt / p.run_time).min(1.0)
+            } else if along.abs() <= p.walk_speed {
+                0.0
+            } else {
+                self.run
+            };
+            let running = smoothstep(0.0, 1.0, self.run);
+            let top = p.walk_speed + (p.run_speed - p.walk_speed) * running;
+            let target = input.pitch.max(-0.4) * top;
+            // Faster than walking, and not running, means a run-out from a landing: slide
+            // down gently, but stop short on a roof or a rock.
+            let feet = self.pos.y - p.stand_height;
+            let structure = world.on_structure(self.pos.x, self.pos.z, feet);
+            let sliding = self.run == 0.0 && along.abs() > p.walk_speed;
+            let accel = if sliding && target.abs() <= along.abs() {
+                if structure {
+                    p.ground_friction * 6.0
+                } else {
+                    p.ground_friction
+                }
+            } else if input.pitch.abs() > 0.05 || self.run > 0.0 {
+                p.walk_accel * (1.0 + running)
             } else {
                 p.ground_friction.max(p.walk_accel * 0.5)
             };
@@ -425,7 +636,7 @@ impl Dragon {
 
         let wants_off = input.flap_taps > 0 || (input.flap && self.mode_time > 0.4);
         if wants_off && self.tumble <= 0.0 && self.mode_time > 0.15 {
-            self.vel += Vec3::Y * p.leap_up + self.forward_flat() * p.leap_fwd;
+            self.vel += ride + Vec3::Y * p.leap_up + self.forward_flat() * p.leap_fwd;
             self.pos.y += 0.05;
             self.aoa = 0.3;
             self.set_mode(Mode::Air);
@@ -474,8 +685,23 @@ impl Dragon {
         let settle = smoothstep(2.0, 9.0, speed);
         self.path_pitch = (path * settle).clamp(-1.4, 1.4);
 
+        // The stick asks for a turn rate. A little stick turns gently and full stick
+        // hard, fast flight turns wider, and the rate eases in and out so turns are smooth.
         let turn = input.turn.clamp(-1.0, 1.0);
-        self.bank = toward(self.bank, turn * p.max_bank, p.bank_rate);
+        let curved = turn * (1.0 - p.turn_curve + p.turn_curve * turn.abs());
+        let extra = p.brake_turn * self.brake;
+        let top = p.turn_rate.min(p.turn_g * p.gravity / speed.max(1.0)) + extra;
+        // A critically damped spring: the turn rolls in, holds, and rolls out, never
+        // snapping or overshooting.
+        let w = p.turn_ease;
+        self.yaw_accel += (w * w * (-curved * top - self.yaw_rate) - 2.0 * w * self.yaw_accel) * dt;
+        self.yaw_rate += self.yaw_accel * dt;
+        let yaw = self.yaw_rate * dt;
+        self.heading += yaw;
+        self.vel = Quat::from_rotation_y(yaw) * self.vel;
+        // Lean into the turn as a real flier would for it.
+        let lean = (-self.yaw_rate * speed / p.gravity).atan() + curved * 0.25;
+        self.bank = toward(self.bank, lean.clamp(-p.max_bank, p.max_bank), p.bank_rate);
         // Steady flapping builds a rush. Letting go, braking or diving lets it fade.
         if input.flap && self.brake < 0.1 && self.tuck < 0.1 {
             self.rush = (self.rush + dt / p.rush_time.max(0.1)).min(1.0);
@@ -503,14 +729,11 @@ impl Dragon {
             + self.brake * p.brake_aoa;
         self.aoa = toward(self.aoa, aoa_cmd, p.aoa_rate);
 
-        // Direct yaw when slow, so hovering and slow flight can still turn.
-        if p.slow_turn_speed > 0.0 && speed < p.slow_turn_speed {
-            let yaw = -turn * p.slow_turn_rate * (1.0 - speed / p.slow_turn_speed) * dt;
-            self.heading += yaw;
-            self.vel = Quat::from_rotation_y(yaw) * self.vel;
-        }
-
-        let rot = self.rotation();
+        // Wings work as if level: the turn above already steers, so banking never
+        // costs lift or height.
+        let rot = Quat::from_rotation_y(self.heading)
+            * Quat::from_rotation_x(-self.path_pitch)
+            * Quat::from_rotation_x(-self.aoa);
         let (fwd, up) = (rot * Vec3::Z, rot * Vec3::Y);
         let mut acc = Vec3::NEG_Y * p.gravity;
 
@@ -524,11 +747,9 @@ impl Dragon {
                     * (1.0 - height / p.ground_effect_height.max(0.01)).clamp(0.0, 1.0);
             // Lift fades out above the world's sky ceiling.
             let thin_air = 1.0 - smoothstep(world.sky, world.sky + 300.0, self.pos.y);
-            let assist = 1.0 + (1.0 / self.bank.cos().max(0.35) - 1.0) * p.turn_assist;
             let cl = lift_coefficient(p, aoa);
             let max_lift = p.gravity * p.max_load;
-            let lift =
-                (q * cl * wings * ground_effect * assist * thin_air).clamp(-max_lift, max_lift);
+            let lift = (q * cl * wings * ground_effect * thin_air).clamp(-max_lift, max_lift);
             let lift_dir = (up - dir * up.dot(dir)).normalize_or_zero();
             // Tucking streamlines the whole dragon, so a dive outruns flapping.
             let streamline = 1.0 - self.tuck * (1.0 - p.tuck_drag);
@@ -537,10 +758,8 @@ impl Dragon {
                 + p.brake_cd * self.brake
                 + p.induced_cd * cl * cl * wings;
             acc += lift_dir * lift - dir * q * cd;
-            // Pulling into a turn: a sideways force toward the low wing, so turns stay sharp
-            // at speed. Sideways only, so the flight path hold never cancels it.
-            let side = Vec3::new(lift_dir.x, 0.0, lift_dir.z).normalize_or_zero();
-            acc += side * turn.abs() * p.turn_pull * p.gravity * smoothstep(8.0, 25.0, speed);
+            // Turning bleeds a little speed.
+            acc -= dir * (self.yaw_rate * speed).abs() * p.turn_drag / p.gravity;
             if rush > 0.0 {
                 // A rush slips through the air, so long flights get really fast.
                 acc += dir * q * cd * 0.7 * rush;
@@ -631,6 +850,11 @@ impl Dragon {
             self.vel.y = self.vel.y.max(2.0);
         } else if self.pos.y - p.stand_height <= ground {
             self.pos.y = ground + p.stand_height;
+            // Roofs, rocks and perches are small: settle at once instead of sliding off.
+            if world.on_structure(self.pos.x, self.pos.z, ground) {
+                self.vel.x *= 0.2;
+                self.vel.z *= 0.2;
+            }
             if self.vel.y < -p.tumble_sink {
                 self.tumble = p.tumble_time;
                 self.vel.x *= 0.6;

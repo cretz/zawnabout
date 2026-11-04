@@ -41,6 +41,7 @@ struct Land {
 struct Ridge {
     id: String,
     width: f64,
+    smooth: bool,
     pts: Vec<[f64; 3]>,
 }
 
@@ -88,6 +89,57 @@ struct Lake {
     pts: Vec<[f64; 2]>,
 }
 
+/// A river or branch. Points are x, z and, in caves, the rough water height.
+struct River {
+    id: String,
+    w: f64,
+    under: bool,
+    /// The river this branch joins, and whether it leaves it (delta) rather than ends in it.
+    parent: Option<usize>,
+    from_parent: bool,
+    pts: Vec<[f64; 3]>,
+}
+
+struct Town {
+    id: String,
+    style: &'static str,
+    tech: &'static str,
+    village: bool,
+    under: bool,
+    /// Floor height, for towns in caverns.
+    y: f64,
+    tiers: Vec<f64>,
+    pts: Vec<[f64; 2]>,
+}
+
+struct Shelf {
+    id: String,
+    y: f64,
+    depth: f64,
+    w: f64,
+    pts: Vec<[f64; 2]>,
+}
+
+/// A road or runway. Points are x, z and a forced height, or `NO_Y` to follow the ground.
+struct Road {
+    id: String,
+    runway: bool,
+    rail: bool,
+    w: f64,
+    pts: Vec<[f64; 3]>,
+}
+
+/// A path a vehicle follows. Points are x, z and a height or NO_Y for sea level.
+struct Route {
+    id: String,
+    kind: &'static str,
+    /// Ends where it starts, so it goes round and round instead of back and forth.
+    looped: bool,
+    pts: Vec<[f64; 3]>,
+}
+
+const NO_Y: f64 = -1.0e4;
+
 struct Cover {
     id: String,
     kind: &'static str,
@@ -108,6 +160,10 @@ struct Void {
     b: [f64; 3],
     r: f64,
     glow: f64,
+    /// What grows or stands in a cavern: bare, mixed, crystal, shroom, ember or ruins.
+    decor: &'static str,
+    /// A mouth that lets daylight stream in.
+    light: bool,
 }
 
 /// Rock left standing inside a cavern.
@@ -138,6 +194,8 @@ struct Ctx<'a> {
     under: bool,
     /// Floor and roof of the cavern this node sits in, for pillars.
     cavern: Option<(f64, f64)>,
+    /// The river a branch sits in.
+    river: Option<usize>,
 }
 
 #[derive(Default)]
@@ -161,6 +219,12 @@ struct Compiler {
     spires: Vec<Spire>,
     carves: Vec<Carve>,
     lakes: Vec<Lake>,
+    pools: Vec<Lake>,
+    rivers: Vec<River>,
+    towns: Vec<Town>,
+    shelves: Vec<Shelf>,
+    roads: Vec<Road>,
+    routes: Vec<Route>,
     covers: Vec<Cover>,
     marks: Vec<Mark>,
     voids: Vec<Void>,
@@ -221,6 +285,7 @@ impl Compiler {
             off: [0.0, 0.0],
             under: false,
             cavern: None,
+            river: None,
         };
         let mut found = false;
         for node in doc.nodes() {
@@ -245,6 +310,7 @@ impl Compiler {
                             off,
                             under: false,
                             cavern: None,
+                            river: None,
                         };
                         self.nodes(&ictx, idoc.nodes());
                     }
@@ -583,6 +649,7 @@ impl Compiler {
                 self.ridges.push(Ridge {
                     id,
                     width: self.num(node, "width"),
+                    smooth: self.flag(node, "smooth"),
                     pts: smooth(&src, false, STEP).0,
                 });
             }
@@ -661,22 +728,7 @@ impl Compiler {
                 });
                 self.kids(ctx, node);
             }
-            "river" | "branch" => {
-                let pts = self.points(ctx, node, Pts::Any(&["sharp"]));
-                // Cave rivers have heights and wait for the cave stage.
-                if !ctx.under && pts.iter().all(|p| p.y.is_none()) && pts.len() >= 2 {
-                    let src: Vec<([f64; 3], bool)> =
-                        pts.iter().map(|p| ([p.x, p.z, 3.0], p.sharp)).collect();
-                    self.carves.push(Carve {
-                        id,
-                        kind: "river",
-                        w: self.num(node, "w"),
-                        level: 0.0,
-                        pts: smooth(&src, false, STEP).0,
-                    });
-                }
-                self.kids(ctx, node);
-            }
+            "river" | "branch" => self.river(ctx, node, id),
             "lake" => {
                 let level = self.num(node, "level");
                 let mut pts = self.outline_or_none(ctx, node, seed);
@@ -702,9 +754,32 @@ impl Compiler {
                 }
                 if !ctx.under {
                     self.lakes.push(Lake { id, level, pts });
+                    return;
                 }
+                // A cave lake sits in a basin carved into the cavern floor, fit to its outline.
+                let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+                for p in &pts {
+                    lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                    hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+                }
+                let (rx, rz) = ((hi[0] - lo[0]) * 0.5, (hi[1] - lo[1]) * 0.5);
+                let depth = (rx.min(rz) * 0.25).clamp(6.0, 25.0);
+                self.voids.push(Void {
+                    id: format!("{id}#basin"),
+                    shape: "basin",
+                    center: [(lo[0] + hi[0]) * 0.5, level, (lo[1] + hi[1]) * 0.5],
+                    half: [rx, depth, rz],
+                    rot: 0.0,
+                    a: [0.0; 3],
+                    b: [0.0; 3],
+                    r: 0.0,
+                    glow: 0.35,
+                    decor: "bare",
+                    light: false,
+                });
+                self.pools.push(Lake { id, level, pts });
             }
-            "forest" | "meadow" | "city" | "village" => {
+            "forest" | "meadow" | "snowfield" | "city" | "village" => {
                 let (kind, density, trees) = match name {
                     "forest" => (
                         "forest",
@@ -718,18 +793,52 @@ impl Compiler {
                         ),
                     ),
                     "meadow" => ("meadow", "open", "round"),
+                    "snowfield" => ("snow", "open", "pine"),
                     _ => ("town", "open", "round"),
                 };
-                if name != "forest" {
-                    self.word(
+                let pts = self.outline(ctx, node, 0.0, seed);
+                if name == "city" || name == "village" {
+                    let tech = self.word(
                         ctx,
                         node,
                         "tech",
                         &["simple", "old", "mid", "modern"],
                         "mid",
                     );
+                    let style = self.word(
+                        ctx,
+                        node,
+                        "style",
+                        &[
+                            "plain",
+                            "canal",
+                            "hill",
+                            "cliff",
+                            "stone",
+                            "seafaring",
+                            "modern",
+                            "cavern",
+                            "stilts",
+                        ],
+                        "plain",
+                    );
+                    let mut tiers: Vec<f64> = node
+                        .iter_children()
+                        .filter(|k| k.name().value() == "tier")
+                        .map(|k| self.num(k, "y"))
+                        .collect();
+                    tiers.sort_by(f64::total_cmp);
+                    self.towns.push(Town {
+                        id: id.clone(),
+                        style,
+                        tech,
+                        village: name == "village",
+                        under: ctx.under,
+                        y: self.opt(node, "y").unwrap_or(NO_Y),
+                        tiers,
+                        pts: pts.clone(),
+                    });
                 }
-                let pts = self.outline(ctx, node, 0.0, seed);
                 if !ctx.under {
                     self.covers.push(Cover {
                         id,
@@ -741,13 +850,79 @@ impl Compiler {
                 }
                 self.kids(ctx, node);
             }
-            "beacon" | "perch" => self.mark(ctx, node, id, name.into()),
+            "beacon" | "perch" | "station" => self.mark(ctx, node, id, name.into()),
             "site" => {
                 let kind = self.str(node, "kind").unwrap_or_default();
                 self.mark(ctx, node, id, format!("site:{kind}"));
                 self.kids(ctx, node);
             }
             "bowl" => self.mark(ctx, node, id, name.into()),
+            "landmark" => {
+                let kind = self.word(
+                    ctx,
+                    node,
+                    "kind",
+                    &[
+                        "stones",
+                        "turbine",
+                        "campsite",
+                        "picnic",
+                        "phonebox",
+                        "umbrellas",
+                        "scarecrow",
+                        "telescope",
+                        "drivein",
+                        "sign",
+                        "ferris",
+                        "swing",
+                        "maze",
+                        "sandcastle",
+                        "snowman",
+                        "bench",
+                        "gnomes",
+                        "beehives",
+                        "pumpkins",
+                        "busstop",
+                        "watertower",
+                        "hotspring",
+                        "chess",
+                        "cairns",
+                        "treehouse",
+                        "well",
+                        "lemonade",
+                        "igloo",
+                        "laundry",
+                        "sundial",
+                        "circus",
+                        "fountain",
+                        "postbox",
+                        "bandstand",
+                        "stadium",
+                        "waterpark",
+                        "themepark",
+                        "zoo",
+                        "statue",
+                        "mall",
+                        "grocery",
+                        "park",
+                        "station",
+                    ],
+                    "stones",
+                );
+                let rot = self.opt(node, "rot").unwrap_or(0.0);
+                let text = self.str(node, "text").unwrap_or_default();
+                self.mark(ctx, node, id, format!("landmark:{kind}:{rot}:{text}"));
+            }
+            "ruin" => {
+                let kind = self.word(
+                    ctx,
+                    node,
+                    "kind",
+                    &["arch", "columns", "wall", "stair", "statue"],
+                    "columns",
+                );
+                self.mark(ctx, node, id, format!("ruin:{kind}"));
+            }
             "dugout" => {
                 self.mark(ctx, node, id.clone(), name.into());
                 let r = self.num(node, "r");
@@ -780,6 +955,8 @@ impl Compiler {
                     b: [0.0; 3],
                     r: 0.0,
                     glow: 0.4,
+                    decor: "bare",
+                    light: false,
                 });
             }
             "pillar" => {
@@ -804,6 +981,13 @@ impl Compiler {
                     &["hall", "dome", "shaft", "carved"],
                     "hall",
                 );
+                let decor = self.word(
+                    ctx,
+                    node,
+                    "decor",
+                    &["bare", "mixed", "crystal", "shroom", "ember", "ruins"],
+                    "mixed",
+                );
                 self.voids.push(Void {
                     id,
                     shape,
@@ -822,6 +1006,8 @@ impl Compiler {
                     b: [0.0; 3],
                     r: 0.0,
                     glow: self.opt(node, "glow").unwrap_or(0.3),
+                    decor,
+                    light: false,
                 });
                 let under = Ctx {
                     under: true,
@@ -856,6 +1042,8 @@ impl Compiler {
                         b: [w[1][0], w[1][2], w[1][1]],
                         r,
                         glow: 0.3,
+                        decor: "bare",
+                        light: name == "mouth" && self.flag(node, "light"),
                     });
                 }
                 let under = Ctx {
@@ -871,12 +1059,184 @@ impl Compiler {
                 };
                 self.kids(&under, node);
             }
-            "arch" | "shelf" | "road" | "runway" | "route" | "roost" => {
+            "shelf" => {
+                let pts = self.points(ctx, node, s.pts);
+                if pts.len() < 2 {
+                    self.err(ctx, node, "path needs at least 2 points");
+                    return;
+                }
+                let src: Vec<([f64; 2], bool)> =
+                    pts.iter().map(|p| ([p.x, p.z], p.sharp)).collect();
+                self.shelves.push(Shelf {
+                    id,
+                    y: self.num(node, "y"),
+                    depth: self.num(node, "depth"),
+                    w: self.num(node, "w"),
+                    pts: smooth(&src, false, STEP * 0.5).0,
+                });
+            }
+            "road" | "runway" | "railway" => {
+                let pts = self.points(ctx, node, s.pts);
+                let graded = pts.iter().filter(|p| p.y.is_some()).count();
+                if graded != 0 && graded != pts.len() {
+                    self.err(ctx, node, "give every point a height or none");
+                    return;
+                }
+                if pts.len() < 2 {
+                    self.err(ctx, node, "path needs at least 2 points");
+                    return;
+                }
+                let src: Vec<([f64; 3], bool)> = pts
+                    .iter()
+                    .map(|p| ([p.x, p.z, p.y.unwrap_or(NO_Y)], p.sharp))
+                    .collect();
+                // Runways are dead straight. A path that ends where it starts is a loop.
+                let (first, last) = (src[0].0, src[src.len() - 1].0);
+                let looped = (first[0] - last[0]).abs() < 1.0 && (first[1] - last[1]).abs() < 1.0;
+                let dense = if name == "runway" {
+                    src.iter().map(|(p, _)| *p).collect()
+                } else if looped {
+                    let mut open = src.clone();
+                    open.pop();
+                    let mut d = smooth(&open, true, STEP * 0.5).0;
+                    d.push(d[0]);
+                    d
+                } else {
+                    smooth(&src, false, STEP * 0.5).0
+                };
+                let rail = name == "railway";
+                self.roads.push(Road {
+                    id: id.clone(),
+                    runway: name == "runway",
+                    rail,
+                    w: if rail { 6.0 } else { self.num(node, "w") },
+                    pts: dense,
+                });
+            }
+            "route" => {
+                let pts = self.points(ctx, node, s.pts);
+                if pts.len() < 2 {
+                    self.err(ctx, node, "path needs at least 2 points");
+                    return;
+                }
+                let kind = self.word(
+                    ctx,
+                    node,
+                    "kind",
+                    &[
+                        "ferry",
+                        "yacht",
+                        "seaplane",
+                        "plane",
+                        "balloon",
+                        "chairlift",
+                        "gondola",
+                    ],
+                    "ferry",
+                );
+                let mut src: Vec<([f64; 3], bool)> = pts
+                    .iter()
+                    .map(|p| ([p.x, p.z, p.y.unwrap_or(NO_Y)], p.sharp))
+                    .collect();
+                let (first, last) = (src[0].0, src[src.len() - 1].0);
+                let looped = (first[0] - last[0]).abs() < 1.0 && (first[1] - last[1]).abs() < 1.0;
+                if looped {
+                    src.pop();
+                }
+                let mut dense = smooth(&src, looped, STEP).0;
+                if looped {
+                    dense.push(dense[0]);
+                }
+                self.routes.push(Route {
+                    id,
+                    kind,
+                    looped,
+                    pts: dense,
+                });
+                self.kids(ctx, node);
+            }
+            "arch" | "roost" => {
                 self.points(ctx, node, s.pts);
                 self.kids(ctx, node);
             }
             "falls" | "tier" => {}
             _ => self.err(ctx, node, "not allowed here"),
+        }
+    }
+
+    /// A river or one of its branches. Falls between two points become marks there. The
+    /// water heights themselves come from the terrain at run time.
+    fn river(&mut self, ctx: &Ctx, node: &KdlNode, id: String) {
+        let pts = self.points(ctx, node, Pts::Any(&["sharp"]));
+        if pts.len() < 2 {
+            self.err(ctx, node, "path needs at least 2 points");
+            return;
+        }
+        let with_y = pts.iter().filter(|p| p.y.is_some()).count();
+        if with_y != 0 && with_y != pts.len() {
+            self.err(ctx, node, "give every point a height or none");
+            return;
+        }
+        let under = with_y > 0;
+        let mut from_parent = false;
+        if let Some(pi) = ctx.river {
+            let near = |p: &Point| {
+                self.rivers[pi]
+                    .pts
+                    .iter()
+                    .any(|q| (q[0] - p.x).abs() < 1.0 && (q[1] - p.z).abs() < 1.0)
+            };
+            from_parent = near(&pts[0]);
+            if !from_parent && !near(&pts[pts.len() - 1]) {
+                self.err(
+                    ctx,
+                    node,
+                    "a branch must start or end on a point of its river",
+                );
+            }
+        }
+        // Falls sit between the points written before and after them.
+        let mut seen = 0usize;
+        for kid in node.iter_children() {
+            match kid.name().value() {
+                "p" => seen += 1,
+                "falls" if seen == 0 || seen >= pts.len() => {
+                    self.err(ctx, kid, "falls must sit between two points");
+                }
+                "falls" => {
+                    let fid = self.id(ctx, kid);
+                    let (a, b) = (&pts[seen - 1], &pts[seen]);
+                    self.marks.push(Mark {
+                        id: fid,
+                        kind: "falls".into(),
+                        pos: [(a.x + b.x) * 0.5, a.y.unwrap_or(0.0), (a.z + b.z) * 0.5],
+                        ground: !under,
+                    });
+                }
+                _ => {}
+            }
+        }
+        let src: Vec<([f64; 3], bool)> = pts
+            .iter()
+            .map(|p| ([p.x, p.z, p.y.unwrap_or(0.0)], p.sharp))
+            .collect();
+        let idx = self.rivers.len();
+        self.rivers.push(River {
+            id,
+            w: self.num(node, "w"),
+            under,
+            parent: ctx.river,
+            from_parent,
+            pts: smooth(&src, false, STEP).0,
+        });
+        let inner = Ctx {
+            river: Some(idx),
+            ..ctx.clone()
+        };
+        for kid in node.iter_children() {
+            if kid.name().value() == "branch" {
+                self.node(&inner, kid);
+            }
         }
     }
 
@@ -943,9 +1303,10 @@ impl Compiler {
         for r in &self.ridges {
             let _ = writeln!(
                 s,
-                "Ridge {{ id: {:?}, width: {}, pts: &[{}] }},",
+                "Ridge {{ id: {:?}, width: {}, smooth: {}, pts: &[{}] }},",
                 r.id,
                 f(r.width),
+                r.smooth,
                 p3(&r.pts)
             );
         }
@@ -1064,12 +1425,21 @@ impl Compiler {
                 "shaft" => "Shaft",
                 "carved" => "Carved",
                 "tube" => "Tube",
+                "basin" => "Basin",
                 _ => "Hall",
+            };
+            let decor = match v.decor {
+                "mixed" => "Mixed",
+                "crystal" => "Crystal",
+                "shroom" => "Shroom",
+                "ember" => "Ember",
+                "ruins" => "Ruins",
+                _ => "Bare",
             };
             let p3 = |p: [f64; 3]| format!("[{},{},{}]", f(p[0]), f(p[1]), f(p[2]));
             let _ = writeln!(
                 s,
-                "Void {{ id: {:?}, shape: VoidShape::{shape}, center: {}, half: {}, cos: {}, sin: {}, a: {}, b: {}, r: {}, glow: {} }},",
+                "Void {{ id: {:?}, shape: VoidShape::{shape}, center: {}, half: {}, cos: {}, sin: {}, a: {}, b: {}, r: {}, glow: {}, decor: Decor::{decor}, light: {} }},",
                 v.id,
                 p3(v.center),
                 p3(v.half),
@@ -1078,7 +1448,8 @@ impl Compiler {
                 p3(v.a),
                 p3(v.b),
                 f(v.r),
-                f(v.glow)
+                f(v.glow),
+                v.light
             );
         }
         let _ = writeln!(s, "],\npillars: &[");
@@ -1092,6 +1463,86 @@ impl Compiler {
                 f(p.r),
                 f(p.y0),
                 f(p.y1)
+            );
+        }
+        let _ = writeln!(s, "],\npools: &[");
+        for l in &self.pools {
+            let _ = writeln!(
+                s,
+                "Lake {{ id: {:?}, level: {}, pts: &[{}] }},",
+                l.id,
+                f(l.level),
+                p2(&l.pts)
+            );
+        }
+        let _ = writeln!(s, "],\nrivers: &[");
+        for r in &self.rivers {
+            let parent = r.parent.map_or(-1, |p| p as i32);
+            let _ = writeln!(
+                s,
+                "River {{ id: {:?}, w: {}, under: {}, parent: {parent}, from_parent: {}, pts: &[{}] }},",
+                r.id,
+                f(r.w),
+                r.under,
+                r.from_parent,
+                p3(&r.pts)
+            );
+        }
+        let _ = writeln!(s, "],\ntowns: &[");
+        for t in &self.towns {
+            let cap = |w: &str| {
+                let mut c = w.chars();
+                c.next()
+                    .map(|f| f.to_ascii_uppercase().to_string() + c.as_str())
+                    .unwrap_or_default()
+            };
+            let tiers: Vec<String> = t.tiers.iter().map(|y| f(*y)).collect();
+            let _ = writeln!(
+                s,
+                "Town {{ id: {:?}, style: Style::{}, tech: Tech::{}, village: {}, under: {}, y: {}, tiers: &[{}], pts: &[{}] }},",
+                t.id,
+                cap(t.style),
+                cap(t.tech),
+                t.village,
+                t.under,
+                f(t.y),
+                tiers.join(","),
+                p2(&t.pts)
+            );
+        }
+        let _ = writeln!(s, "],\nshelves: &[");
+        for sh in &self.shelves {
+            let _ = writeln!(
+                s,
+                "Shelf {{ id: {:?}, y: {}, depth: {}, w: {}, pts: &[{}] }},",
+                sh.id,
+                f(sh.y),
+                f(sh.depth),
+                f(sh.w),
+                p2(&sh.pts)
+            );
+        }
+        let _ = writeln!(s, "],\nroads: &[");
+        for r in &self.roads {
+            let _ = writeln!(
+                s,
+                "Road {{ id: {:?}, runway: {}, rail: {}, w: {}, pts: &[{}] }},",
+                r.id,
+                r.runway,
+                r.rail,
+                f(r.w),
+                p3(&r.pts)
+            );
+        }
+        let _ = writeln!(s, "],\nroutes: &[");
+        for r in &self.routes {
+            let _ = writeln!(
+                s,
+                "Route {{ id: {:?}, kind: {:?}, looped: {}, pts: &[{}] }},",
+                r.id,
+                r.kind,
+                r.looped,
+                p3(&r.pts)
             );
         }
         let _ = writeln!(s, "],\n}};");

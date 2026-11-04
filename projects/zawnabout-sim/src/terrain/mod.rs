@@ -6,14 +6,17 @@
 //! cell, so a query only looks at nearby features.
 
 pub mod def;
+mod water;
 
 use std::sync::Arc;
 
 use glam::{Vec2, Vec3};
 
 pub use def::{
-    CarveKind, Cover, CoverKind, Density, MountShape, Trees, Void, VoidShape, WORLD, WorldDef,
+    CarveKind, Cover, CoverKind, Decor, Density, Mark, MountShape, NO_Y, Road, Route, Style, Tech,
+    Town, Trees, Void, VoidShape, WORLD, WorldDef,
 };
+pub use water::{RoadPoint, RoadSpot};
 
 /// Index cell size (m).
 const CELL: f32 = 128.0;
@@ -30,6 +33,20 @@ enum Kind {
     Cover,
     Ridge,
     Carve,
+    River,
+    Pool,
+    Town,
+    Shelf,
+    Road,
+}
+
+/// Which shaping a height query includes. River and road profiles are measured on the
+/// ground before they cut it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Stage {
+    Base,
+    Roads,
+    Full,
 }
 
 /// One feature's presence in a cell: the outline or path segments near the cell, and for
@@ -58,9 +75,17 @@ pub struct Bounds {
     pub max: Vec3,
 }
 
-/// Bounds of a void, a little loose for its rough walls.
+/// Bounds of a void, loose enough for its rough walls: the noise in [`void_sdf`] pushes
+/// walls out by up to 1.4 times its amplitude.
 pub fn void_bounds(v: &Void) -> Bounds {
-    let pad = 8.0;
+    let he = Vec3::from(v.half);
+    let rough = match v.shape {
+        VoidShape::Hall => 1.4 * (he.y * 0.14 + 1.25),
+        VoidShape::Dome | VoidShape::Shaft => 1.4 * 0.12 * he.min_element().max(he.x.min(he.z)),
+        VoidShape::Tube => 1.4 * v.r * 0.16,
+        VoidShape::Carved | VoidShape::Basin => 0.0,
+    };
+    let pad = 8.0 + rough;
     match v.shape {
         VoidShape::Tube => {
             let (a, b) = (Vec3::from(v.a), Vec3::from(v.b));
@@ -68,6 +93,15 @@ pub fn void_bounds(v: &Void) -> Bounds {
             Bounds {
                 min: a.min(b) - r,
                 max: a.max(b) + r,
+            }
+        }
+        VoidShape::Basin => {
+            let c = Vec3::from(v.center);
+            let (up, wide) = basin_opening(v.half[0].min(v.half[2]));
+            let e = Vec3::new(v.half[0] + pad + wide, 0.0, v.half[2] + pad + wide);
+            Bounds {
+                min: c - e - Vec3::Y * (v.half[1] + pad),
+                max: c + e + Vec3::Y * (up + pad),
             }
         }
         _ => {
@@ -102,6 +136,15 @@ fn noise3(seed: u32, p: Vec3) -> f32 {
     mix(mix(x00, x10, s.y), mix(x01, x11, s.y), s.z) * 2.0 - 1.0
 }
 
+/// How far a cave lake basin opens up above its water, so it always meets the cavern,
+/// and how far it widens on the way up. Bumps in a cavern floor would otherwise leave flat
+/// skins of rock hanging over the lake. Small pools open less, so they stay sealed under
+/// the seabed.
+fn basin_opening(small: f32) -> (f32, f32) {
+    let up = (small * 0.4).clamp(20.0, 60.0);
+    (up, (up * 0.8).min(small * 0.4))
+}
+
 /// Signed distance to one void, negative inside.
 pub fn void_sdf(v: &Void, p: Vec3) -> f32 {
     let rough = |scale: f32, amp: f32| {
@@ -112,16 +155,47 @@ pub fn void_sdf(v: &Void, p: Vec3) -> f32 {
             let (a, b) = (Vec3::from(v.a), Vec3::from(v.b));
             let ab = b - a;
             let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
-            (p - (a + ab * t)).length() - v.r + rough(v.r.max(10.0), v.r * 0.15)
+            // A third, finer layer keeps holes from looking drilled.
+            (p - (a + ab * t)).length() - v.r
+                + rough(v.r.max(10.0), v.r * 0.1)
+                + noise3(41, p / (v.r * 0.2).max(3.0)) * v.r * 0.06
         }
         _ => {
             let d = p - Vec3::from(v.center);
             let q = Vec3::new(d.x * v.cos + d.z * v.sin, d.y, -d.x * v.sin + d.z * v.cos);
             let he = Vec3::from(v.half);
             match v.shape {
+                VoidShape::Basin => {
+                    // Both halves use the same scale, so they meet at the waterline
+                    // without a step that the mesher would read as a thin ledge.
+                    let k = he.y.min(he.x.min(he.z));
+                    let flat = Vec2::new(q.x / he.x, q.z / he.z).length() - 1.0;
+                    if q.y < 0.0 {
+                        ((q / he).length() - 1.0) * k
+                    } else {
+                        {
+                            let (up, wide) = basin_opening(he.x.min(he.z));
+                            (flat * k - (q.y * 0.8).min(wide)).max(q.y - up)
+                        }
+                    }
+                }
                 VoidShape::Carved => {
                     let k = (q.abs() - he).max(Vec3::ZERO).length();
-                    k + (q.abs() - he).max_element().min(0.0)
+                    let block = k + (q.abs() - he).max_element().min(0.0);
+                    // A barrel vault across the short way over straight walls, with a rib
+                    // every 45m that comes down the walls as a pillar.
+                    let (along, across, wide) = if he.x >= he.z {
+                        (q.x, q.z, he.z)
+                    } else {
+                        (q.z, q.x, he.x)
+                    };
+                    let spring = he.y * 0.1;
+                    let rise = he.y - spring;
+                    let rib =
+                        1.0 - smoothstep(3.0, 7.0, ((along / 45.0).round() * 45.0 - along).abs());
+                    let r = 1.0 - 0.07 * rib;
+                    let e = Vec2::new(across / (wide * r), (q.y - spring).max(0.0) / (rise * r));
+                    block.max((e.length() - 1.0) * rise.min(wide))
                 }
                 VoidShape::Dome => {
                     let small = he.min_element();
@@ -158,6 +232,12 @@ struct Index {
 pub struct Terrain {
     pub def: &'static WorldDef,
     index: Arc<Index>,
+    /// Water height at every river point.
+    levels: Arc<Vec<Vec<f32>>>,
+    /// Graded height and bridge flag at every road point.
+    roads: Arc<Vec<Vec<RoadPoint>>>,
+    /// Bounds of every void, in the same order.
+    bounds: Arc<Vec<Bounds>>,
 }
 
 pub fn smoothstep(lo: f32, hi: f32, x: f32) -> f32 {
@@ -277,7 +357,7 @@ impl Terrain {
         }
         for (i, s) in def.spires.iter().enumerate() {
             let at = Vec2::new(s.x, s.z);
-            index.each_cell(at, at, s.r * 1.2, |c| c.spires.push(i as u16));
+            index.each_cell(at, at, s.r * 1.6, |c| c.spires.push(i as u16));
         }
         for (i, v) in def.voids.iter().enumerate() {
             let b = void_bounds(v);
@@ -288,10 +368,35 @@ impl Terrain {
             let at = Vec2::new(p.x, p.z);
             index.each_cell(at, at, p.r * 1.3, |c| c.pillars.push(i as u16));
         }
-        Self {
+        for (i, r) in def.rivers.iter().enumerate() {
+            // Deep cuts widen into gorges, so reach well past the banks.
+            index.add_line(Kind::River, i, r.pts, r.w * 0.5 + 90.0);
+        }
+        for (i, l) in def.pools.iter().enumerate() {
+            index.add_poly(Kind::Pool, i, l.pts, LAKE_RANGE);
+        }
+        for (i, t) in def.towns.iter().enumerate() {
+            if !t.tiers.is_empty() {
+                index.add_poly(Kind::Town, i, t.pts, 0.0);
+            }
+        }
+        for (i, s) in def.shelves.iter().enumerate() {
+            index.add_line2(Kind::Shelf, i, s.pts, s.w * 0.5 + 4.0);
+        }
+        for (i, r) in def.roads.iter().enumerate() {
+            index.add_line(Kind::Road, i, r.pts, r.w * 0.5 + 40.0);
+        }
+        let mut t = Self {
             def,
             index: Arc::new(index),
-        }
+            levels: Arc::new(Vec::new()),
+            roads: Arc::new(Vec::new()),
+            bounds: Arc::new(def.voids.iter().map(void_bounds).collect()),
+        };
+        t.roads = Arc::new(t.road_profiles());
+        t.levels = Arc::new(t.measure_rivers());
+        t.roads = Arc::new(t.mark_bridges());
+        t
     }
 
     pub fn half_size(&self) -> f32 {
@@ -308,6 +413,10 @@ impl Terrain {
 
     /// Height of the terrain surface at `(x, z)`.
     pub fn height(&self, x: f32, z: f32) -> f32 {
+        self.height_at(x, z, Stage::Full)
+    }
+
+    fn height_at(&self, x: f32, z: f32, stage: Stage) -> f32 {
         let p = Vec2::new(x, z);
         let Some((cell, center)) = self.index.cell(p) else {
             return self.sea_floor(p);
@@ -337,18 +446,21 @@ impl Terrain {
         }
         for &i in &cell.spires {
             let s = &def.spires[i as usize];
-            let d = (p - Vec2::new(s.x, s.z)).length();
+            // Lumpy, not round: real stacks are split, slumped and undercut.
+            let lumps = 1.0 + fbm(13, p, s.r * 0.9) * 0.22 + fbm(14, p, s.r * 0.3) * 0.1;
+            let d = (p - Vec2::new(s.x, s.z)).length() / lumps.max(0.5);
             let f = 1.0 - smoothstep(s.r * 0.8, s.r * 1.15, d);
             if f > 0.0 {
                 let top = if s.flat {
                     s.h
                 } else {
                     s.h * (1.0 - 0.45 * d / s.r)
-                } + fbm(11, p, 12.0) * s.r * 0.08;
+                } + fbm(11, p, 12.0) * s.r * 0.08
+                    + fbm(12, p, s.r * 0.5) * s.r * 0.12;
                 best = best.max(mix(best, top, f));
             }
         }
-        best
+        self.finish(cell, center, p, best, stage)
     }
 
     /// Everything that raises land: ranges, mountains, hills and plateaus.
@@ -366,7 +478,8 @@ impl Terrain {
                 if u < 1.0 {
                     let h = mix(a3[2], b3[2], t);
                     let v = h * (1.0 - u) * (1.0 - u) * (1.0 + u);
-                    best = best.max(v + crag * 0.1 * v);
+                    let rough = if r.smooth { 0.0 } else { crag * 0.1 };
+                    best = best.max(v + rough * v);
                 }
             }
             if best > -1.0e5 {
@@ -455,6 +568,40 @@ impl Terrain {
                 h = h.max(l.level + 0.6);
             }
         }
+        for e in cell.entries.iter().filter(|e| e.kind == Kind::Town) {
+            let t = &def.towns[e.idx as usize];
+            let (sd, _, _) = poly_sd(e, t.pts, center, p, 80.0);
+            if sd > 0.0 {
+                h = mix(h, terrace(h, t.tiers), smoothstep(0.0, 80.0, sd));
+            }
+        }
+        h
+    }
+
+    /// Ledges, graded roads and river beds, which shape coasts and cliffs as well as land.
+    fn finish(&self, cell: &Cell, center: Vec2, p: Vec2, mut h: f32, stage: Stage) -> f32 {
+        let _ = center;
+        let def = self.def;
+        for e in cell.entries.iter().filter(|e| e.kind == Kind::Shelf) {
+            let s = &def.shelves[e.idx as usize];
+            let mut d = f32::MAX;
+            for &i in &e.segs {
+                let (a, b) = (v2(s.pts[i as usize]), v2(s.pts[i as usize + 1]));
+                d = d.min(seg_dist(p, a, b).0);
+            }
+            let half = s.w * 0.5;
+            let f = 1.0 - smoothstep(half - 2.0, half + 1.0, d);
+            h = mix(h, s.y, f);
+        }
+        if stage >= Stage::Roads {
+            h = self.grade_roads(cell, p, h);
+        }
+        if stage >= Stage::Full {
+            // River banks are cut back, but never into a road: the road keeps its grade
+            // on an embankment, and only bridges cross the water.
+            h = self.cut_rivers(cell, p, h);
+            h = self.grade_roads(cell, p, h);
+        }
         h
     }
 
@@ -465,27 +612,14 @@ impl Terrain {
         Vec3::new(-dx, 2.0 * e, -dz).normalize()
     }
 
-    /// The water surface over `(x, z)` given the ground height there, if any.
-    pub fn water(&self, x: f32, z: f32, ground: f32) -> Option<f32> {
-        let p = Vec2::new(x, z);
-        if let Some((cell, center)) = self.index.cell(p) {
-            for e in cell.entries.iter().filter(|e| e.kind == Kind::Lake) {
-                let l = &self.def.lakes[e.idx as usize];
-                if poly_sd(e, l.pts, center, p, LAKE_RANGE).0 > -10.0 && ground < l.level {
-                    return Some(l.level);
-                }
-            }
-        }
-        (ground < self.def.sea_level).then_some(self.def.sea_level)
-    }
-
     /// The land cover at `(x, z)`: towns win over forests, forests over meadows.
     pub fn cover(&self, x: f32, z: f32) -> Option<&'static Cover> {
         let p = Vec2::new(x, z);
         let (cell, center) = self.index.cell(p)?;
         let mut best: Option<&'static Cover> = None;
         let rank = |c: &Cover| match c.kind {
-            CoverKind::Town => 3,
+            CoverKind::Town => 4,
+            CoverKind::Snow => 3,
             CoverKind::Forest => 2,
             CoverKind::Meadow => 1,
         };
@@ -527,10 +661,17 @@ impl Terrain {
                             CoverKind::Forest => "forest",
                             CoverKind::Meadow => "meadow",
                             CoverKind::Town => "town",
+                            CoverKind::Snow => "snowfield",
                         };
                         (c.id, what, c.pts)
                     }
-                    Kind::Ridge | Kind::Carve => continue,
+                    Kind::Ridge
+                    | Kind::Carve
+                    | Kind::River
+                    | Kind::Pool
+                    | Kind::Town
+                    | Kind::Shelf
+                    | Kind::Road => continue,
                 };
                 if inside(e, pts, center, p) {
                     out.push(format!("in {id} ({what})"));
@@ -570,7 +711,7 @@ impl Terrain {
     pub fn voids_in(&self, min: Vec3, max: Vec3) -> Vec<u16> {
         (0..self.def.voids.len() as u16)
             .filter(|&i| {
-                let b = void_bounds(&self.def.voids[i as usize]);
+                let b = &self.bounds[i as usize];
                 b.min.cmple(max).all() && b.max.cmpge(min).all()
             })
             .collect()
@@ -578,10 +719,11 @@ impl Terrain {
 
     /// Whether any cave space is within `dist` of `p`.
     pub fn near_voids(&self, p: Vec3, dist: f32) -> bool {
-        self.def.voids.iter().any(|v| {
-            let b = void_bounds(v);
+        // Bounds are loose (the great hall's cover most of home), so check the real
+        // distance to the cave space too.
+        self.bounds.iter().zip(self.def.voids).any(|(b, v)| {
             let gap = (b.min - p).max(p - b.max).max(Vec3::ZERO);
-            gap.length() < dist
+            gap.length() < dist && void_sdf(v, p) < dist
         })
     }
 
@@ -590,13 +732,19 @@ impl Terrain {
         let def = self.def;
         let mut d = f32::MAX;
         for &i in list {
-            let v = &def.voids[i as usize];
-            let b = void_bounds(v);
+            let b = &self.bounds[i as usize];
             if p.y < b.min.y || p.y > b.max.y {
                 continue;
             }
-            d = d.min(void_sdf(v, p));
+            // A void whose loose bounds are farther than the nearest one so far cannot be
+            // nearer, so skip its costly rough surface.
+            let gap = (b.min - p).max(p - b.max).max(Vec3::ZERO).length();
+            if gap > 0.0 && gap >= d {
+                continue;
+            }
+            d = d.min(void_sdf(&def.voids[i as usize], p));
         }
+        d = d.min(self.cave_channels(p));
         if d < 0.0
             && let Some((cell, _)) = self.index.cell(Vec2::new(p.x, p.z))
         {
@@ -634,6 +782,24 @@ impl Terrain {
     pub fn sdf(&self, p: Vec3) -> f32 {
         let ground = self.height(p.x, p.z);
         self.sdf_with(p, ground, self.cell_voids(p.x, p.z))
+    }
+
+    /// How far the ground falls away within `r` of `(x, z)`. Big at cliff edges, where the
+    /// drawn surface rounds off and anything set right on the edge would hang in the air.
+    pub fn rim(&self, x: f32, z: f32, r: f32) -> f32 {
+        const AROUND: [(f32, f32); 6] = [
+            (1.0, 0.0),
+            (0.5, 0.866),
+            (-0.5, 0.866),
+            (-1.0, 0.0),
+            (-0.5, -0.866),
+            (0.5, -0.866),
+        ];
+        let h = self.height(x, z);
+        AROUND
+            .iter()
+            .map(|(dx, dz)| h - self.height(x + dx * r, z + dz * r))
+            .fold(0.0, f32::max)
     }
 
     /// The highest solid surface at `(x, z)` not above `below`: the ground, or a cave
@@ -697,6 +863,18 @@ impl Terrain {
     pub fn daylight(&self, p: Vec3) -> f32 {
         let depth = self.height(p.x, p.z) - p.y;
         1.0 - smoothstep(4.0, 45.0, depth)
+    }
+}
+
+/// Steps a height onto terraces: flat at each tier, with short steep risers between.
+fn terrace(h: f32, tiers: &[f32]) -> f32 {
+    let Some(k) = tiers.iter().rposition(|t| *t <= h) else {
+        return h;
+    };
+    let flat = tiers[k];
+    match tiers.get(k + 1) {
+        Some(&next) => flat + smoothstep(next - 2.5, next, h) * (next - flat),
+        None => flat + (h - flat) * 0.15,
     }
 }
 
@@ -780,6 +958,12 @@ impl Index {
                 segs: vec![s as u32],
             }),
         });
+    }
+
+    fn add_line2(&mut self, kind: Kind, idx: usize, pts: &[[f32; 2]], r: f32) {
+        for s in 0..pts.len().saturating_sub(1) {
+            self.add_seg(kind, idx, s, v2(pts[s]), v2(pts[s + 1]), r);
+        }
     }
 
     fn add_line(&mut self, kind: Kind, idx: usize, pts: &[[f32; 3]], r: f32) {
@@ -870,6 +1054,31 @@ mod tests {
             .unwrap();
         let h = t.height(m.pos[0], m.pos[2]);
         assert!(h > 600.0, "summit height {h}");
+    }
+
+    #[test]
+    fn rivers_run_downhill() {
+        let t = Terrain::default();
+        for (i, r) in WORLD.rivers.iter().enumerate() {
+            let lv = t.river_levels(i);
+            assert_eq!(lv.len(), r.pts.len(), "{}", r.id);
+            for w in lv.windows(2) {
+                assert!(w[1] <= w[0] + 1e-3, "{} climbs", r.id);
+            }
+            let big = lv.windows(2).map(|w| w[0] - w[1]).fold(0.0f32, f32::max);
+            eprintln!(
+                "{} {:.0} to {:.0}, biggest drop {big:.0}",
+                r.id,
+                lv[0],
+                lv[lv.len() - 1]
+            );
+            let q = r.pts[r.pts.len() / 2];
+            let ground = t.height(q[0], q[1]);
+            if !r.under {
+                let mid = lv[r.pts.len() / 2];
+                assert!(ground < mid, "{} bed {ground} above water {mid}", r.id);
+            }
+        }
     }
 
     #[test]
