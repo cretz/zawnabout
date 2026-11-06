@@ -136,6 +136,9 @@ fn noise3(seed: u32, p: Vec3) -> f32 {
     mix(mix(x00, x10, s.y), mix(x01, x11, s.y), s.z) * 2.0 - 1.0
 }
 
+/// How wide a lake's banks slope down to it from higher ground round it (m).
+const LAKE_BANK: f32 = 25.0;
+
 /// How far a cave lake basin opens up above its water, so it always meets the cavern,
 /// and how far it widens on the way up. Bumps in a cavern floor would otherwise leave flat
 /// skins of rock hanging over the lake. Small pools open less, so they stay sealed under
@@ -414,6 +417,7 @@ impl Terrain {
         t.levels = Arc::new(t.measure_rivers());
         t.roads = Arc::new(t.mark_bridges());
         t.roads = Arc::new(t.mark_tunnels());
+        t.roads = Arc::new(t.mark_viaducts());
         t.pads = Arc::new(t.landmark_pads());
         t
     }
@@ -501,6 +505,19 @@ impl Terrain {
     /// Height of the terrain surface at `(x, z)`.
     pub fn height(&self, x: f32, z: f32) -> f32 {
         self.height_at(x, z, Stage::Full)
+    }
+
+    /// A road tunnel's bore for a road `w` wide: its radius, and how far above the road
+    /// its center runs, so the whole width of the road fits with a little floor under it.
+    /// The world compiler bores them the same way.
+    pub fn bore(w: f32) -> (f32, f32) {
+        let r = (w * 0.5 + 5.0).max(10.0);
+        (r, r - 3.0)
+    }
+
+    /// The ground before roads and rivers shape it.
+    pub fn natural_height(&self, x: f32, z: f32) -> f32 {
+        self.height_at(x, z, Stage::Base)
     }
 
     fn height_at(&self, x: f32, z: f32, stage: Stage) -> f32 {
@@ -624,6 +641,16 @@ impl Terrain {
         for e in cell.entries.iter().filter(|e| e.kind == Kind::Carve) {
             let c = &def.carves[e.idx as usize];
             let half = c.w * 0.5;
+            // A gorge ends square at its last point, so it can open out through a cliff
+            // face without digging into the ground at the foot.
+            if c.kind == CarveKind::Gorge
+                && let [.., a3, b3] = c.pts
+            {
+                let (a, b) = (Vec2::new(a3[0], a3[1]), Vec2::new(b3[0], b3[1]));
+                if (p - b).dot(b - a) > 0.0 {
+                    continue;
+                }
+            }
             let mut cut = 0.0f32;
             let mut nearest = f32::MAX;
             for &s in &e.segs {
@@ -639,7 +666,13 @@ impl Terrain {
                 };
                 cut = cut.max(depth * f);
             }
-            h -= cut;
+            // A gorge never cuts down below the sea, so where it opens through a cliff its
+            // cut stops at the foot instead of leaving a pit full of seawater.
+            h = if c.kind == CarveKind::Gorge {
+                (h - cut).max(h.min(def.sea_level + 2.0))
+            } else {
+                h - cut
+            };
             if c.kind == CarveKind::Canal && nearest < half + 4.0 {
                 let floor = c.level - 3.0;
                 h = h.min(mix(floor, h, smoothstep(half, half + 4.0, nearest)));
@@ -650,9 +683,16 @@ impl Terrain {
             let (sd, _, _) = poly_sd(e, l.pts, center, p, LAKE_RANGE);
             if sd > 0.0 {
                 h = h.min(l.level - (1.5 + sd * 0.3).min(16.0));
-            } else if sd > -10.0 {
+            } else {
+                // High ground slopes down to the shore instead of dropping sheer into the
+                // water, which a height grid can only draw as a ragged step.
+                if sd > -LAKE_BANK {
+                    h = h.min(mix(l.level + 0.6, h, smoothstep(0.0, LAKE_BANK, -sd)));
+                }
                 // A lip so the water never spills over its shore.
-                h = h.max(l.level + 0.6);
+                if sd > -10.0 {
+                    h = h.max(l.level + 0.6);
+                }
             }
         }
         for e in cell.entries.iter().filter(|e| e.kind == Kind::Town) {
@@ -722,6 +762,19 @@ impl Terrain {
 
     /// Named places at and around a spot, for design notes: what it is inside or on,
     /// then the nearest marks.
+    /// The climate of the island at `(x, z)`: 0 temperate (and open sea), 1 lush, 2 dry,
+    /// 3 cold.
+    pub fn climate(&self, x: f32, z: f32) -> u8 {
+        let Some((cell, _)) = self.index.cell(Vec2::new(x, z)) else {
+            return 0;
+        };
+        cell.entries
+            .iter()
+            .find(|e| e.kind == Kind::Land)
+            .map(|e| self.def.lands[e.idx as usize].climate)
+            .unwrap_or(0)
+    }
+
     pub fn describe(&self, x: f32, z: f32) -> Vec<String> {
         let p = Vec2::new(x, z);
         let def = self.def;

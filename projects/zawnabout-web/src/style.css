@@ -540,3 +540,223 @@ button {
   text-align: right;
   font-family: ui-monospace, monospace;
 }
+
+/* The atlas: the map over most of the screen, a legend beside it. */
+#minimap.atlas {
+  z-index: 7;
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vh, calc(100vw - 300px));
+  height: min(92vh, calc(100vw - 300px));
+  cursor: crosshair;
+}
+
+#map-grow {
+  z-index: 4;
+  right: auto;
+  width: 40px;
+  height: 40px;
+  font-size: 20px;
+}
+
+body:has(#minimap.atlas) #map-close {
+  z-index: 8;
+}
+
+#map-legend {
+  position: fixed;
+  z-index: 8;
+  left: max(14px, env(safe-area-inset-left));
+  top: 50%;
+  transform: translateY(-50%);
+  width: 270px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 15px;
+}
+
+#map-legend label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+#map-legend input {
+  accent-color: var(--coral);
+  width: 18px;
+  height: 18px;
+}
+
+.legend-icons {
+  min-width: 4.2em;
+  white-space: nowrap;
+}
+
+#map-legend label {
+  white-space: nowrap;
+}
+
+body:has(#minimap.atlas) #keys-card {
+  display: none;
+}
+
+.legend-hint {
+  margin: 6px 0 0;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+#map-tip {
+  position: fixed;
+  z-index: 9;
+  pointer-events: none;
+  padding: 6px 12px;
+  border-radius: 12px;
+  background: var(--ink);
+  color: var(--cream);
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+#travel {
+  align-items: center;
+}
+
+#travel-what {
+  font-weight: 700;
+  padding: 0 4px;
+}
+
+#travel-what:empty {
+  display: none;
+}
+
+body:has(#minimap.atlas) #travel {
+  z-index: 9;
+}
+
+/* Phones and narrow tablets: the legend goes up top over the map. */
+@media (max-width: 820px) {
+  #minimap.atlas {
+    width: min(calc(100vw - 28px), calc(100vh - 200px));
+    height: min(calc(100vw - 28px), calc(100vh - 200px));
+    top: auto;
+    bottom: max(14px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+  }
+
+  #map-legend {
+    top: max(14px, env(safe-area-inset-top));
+    transform: none;
+    width: calc(100vw - 80px);
+    max-height: 170px;
+    overflow-y: auto;
+    font-size: 13px;
+    gap: 2px;
+  }
+}
+
+/* The keys for keyboard players, folded down to its button when not wanted. */
+#keys-card {
+  position: fixed;
+  z-index: 2;
+  top: calc(max(14px, env(safe-area-inset-top)) + 54px);
+  right: max(14px, env(safe-area-inset-right));
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(255, 248, 236, 0.88);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  max-width: 230px;
+}
+
+#keys-card.folded {
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+
+#keys-toggle {
+  display: block;
+  margin-left: auto;
+  border: none;
+  border-radius: 10px;
+  padding: 5px 10px;
+  background: var(--coral);
+  color: var(--cream);
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+#keys-list {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 4px 10px;
+  margin-top: 8px;
+}
+
+#keys-list .keys {
+  text-align: right;
+  font-weight: 700;
+}
+
+#keys-list kbd {
+  font-size: 11px;
+  padding: 0 5px;
+  min-width: 1.4em;
+}
+
+#keys-card.folded #keys-list {
+  display: none;
+}
+
+.setting {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.setting input {
+  accent-color: var(--coral);
+}
+
+#rebind {
+  display: block;
+  text-align: left;
+  margin-top: 10px;
+}
+
+#rebind summary {
+  cursor: pointer;
+}
+
+#rebind-list {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 6px 14px;
+  align-items: center;
+  margin: 10px 0;
+}
+
+#rebind-list button,
+#rebind-reset {
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 10px;
+  border: 1px solid #d8c7b4;
+  border-radius: 8px;
+  background: #fffaf3;
+  cursor: pointer;
+}

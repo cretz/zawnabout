@@ -26,6 +26,17 @@ pub struct RoadPoint {
 
 /// How far under the ground a road point must be to count as in a tunnel (m).
 const UNDER: f32 = 4.0;
+/// Steepest a road climbs, and a railway.
+const ROAD_GRADE: f32 = 0.09;
+const RAIL_GRADE: f32 = 0.03;
+/// Widest a road's banks and cuttings spread beyond its shoulder (m).
+const REACH: f32 = 40.0;
+/// Dips up to twice this wide are bridged rather than followed (m).
+const SPAN: f32 = 45.0;
+/// A line through a cavern this far over its floor runs on a trestle (m).
+const CAVE_TRESTLE: f32 = 3.0;
+/// A road this far over the untouched ground runs on a viaduct (m).
+const VIADUCT: f32 = 10.0;
 
 /// The road nearest a spot, for coloring the ground under it.
 #[derive(Clone, Copy, Debug)]
@@ -207,78 +218,212 @@ impl Terrain {
         best
     }
 
-    /// Smooth road heights from the untouched ground, with bridges over water.
+    /// Road heights from the untouched ground: smoothed, never steeper than a real road
+    /// or railway climbs, with bridges over water. Wider roads are laid first, and every
+    /// road that joins one meets it at its height.
     pub(super) fn road_profiles(&self) -> Vec<Vec<RoadPoint>> {
         let def = self.def;
-        let mut out = Vec::with_capacity(def.roads.len());
-        for r in def.roads {
-            let ground: Vec<f32> = r
+        let rank = |i: usize| {
+            let r = &def.roads[i];
+            (r.runway as u8, r.rail as u8, (r.w * 10.0) as u32)
+        };
+        let mut order: Vec<usize> = (0..def.roads.len()).collect();
+        order.sort_by(|&a, &b| rank(b).cmp(&rank(a)).then(a.cmp(&b)));
+        let mut out: Vec<Vec<RoadPoint>> = vec![Vec::new(); def.roads.len()];
+        for (k, &ri) in order.iter().enumerate() {
+            let r = &def.roads[ri];
+            // Where it runs over a road already laid, it takes that road's height.
+            let meets: Vec<Option<f32>> = r
                 .pts
                 .iter()
-                .map(|q| self.height_at(q[0], q[1], Stage::Base))
-                .collect();
-            // A point set well below the ground runs in a tunnel: water overhead is no
-            // reason for a bridge.
-            let wet: Vec<bool> = r
-                .pts
-                .iter()
-                .zip(&ground)
-                .map(|(q, g)| {
-                    let under = q[2] > NO_Y + 1.0 && q[2] < g - UNDER;
-                    !under && self.still_water(q[0], q[1], *g - 0.5).is_some()
+                .map(|q| {
+                    let p = Vec2::new(q[0], q[1]);
+                    order[..k].iter().find_map(|&oi| {
+                        let o = &def.roads[oi];
+                        let (d, s, t) = nearest_all(o.pts, p);
+                        let op = &out[oi];
+                        let y = mix(op[s].y, op[s + 1].y, t);
+                        // Not where one passes over the other: through a tunnel under
+                        // it, or on a bridge over it.
+                        let level = (y - self.height_at(q[0], q[1], Stage::Base)).abs() < 20.0;
+                        let plain = !op[s].bridge
+                            && !op[s + 1].bridge
+                            && !op[s].tunnel
+                            && !op[s + 1].tunnel
+                            && !o.subway;
+                        // Its own width and a shoulder too, so the two lie flush where
+                        // they overlap.
+                        let reach = (o.w + r.w) * 0.5 + 6.0;
+                        (d < reach && level && plain && !r.subway).then_some(y)
+                    })
                 })
                 .collect();
-            let n = r.pts.len();
-            let held = |q: &[f32; 3]| q[2] > NO_Y + 1.0;
-            let ys: Vec<f32> = if r.pts.iter().all(held) {
-                r.pts.iter().map(|q| q[2]).collect()
-            } else if r.runway {
-                // Dead flat, at the mean of the ground along it.
-                let a = r.pts[0];
-                let b = r.pts[n - 1];
-                let mean = (0..=8)
-                    .map(|k| {
-                        let t = k as f32 / 8.0;
-                        self.height_at(mix(a[0], b[0], t), mix(a[1], b[1], t), Stage::Base)
-                    })
-                    .sum::<f32>()
-                    / 9.0;
-                vec![mean.max(2.0); n]
-            } else {
-                // A moving average over dry points, so the road rolls gently, except where
-                // a point holds its own height.
-                (0..n)
-                    .map(|i| {
-                        if held(&r.pts[i]) {
-                            return r.pts[i][2];
-                        }
-                        let (lo, hi) = (i.saturating_sub(3), (i + 3).min(n - 1));
-                        let (mut sum, mut count) = (0.0, 0.0);
-                        for k in lo..=hi {
-                            if !wet[k] {
-                                sum += ground[k];
-                                count += 1.0;
+            out[ri] = self.road_profile(r, &meets);
+        }
+        out
+    }
+
+    /// One road's profile, `meets` holding the heights it must take where it joins roads
+    /// already laid.
+    fn road_profile(&self, r: &super::def::Road, meets: &[Option<f32>]) -> Vec<RoadPoint> {
+        let n = r.pts.len();
+        let ground: Vec<f32> = r
+            .pts
+            .iter()
+            .map(|q| self.height_at(q[0], q[1], Stage::Base))
+            .collect();
+        // A point set well below the ground runs in a tunnel: water overhead is no reason
+        // for a bridge.
+        let wet: Vec<bool> = r
+            .pts
+            .iter()
+            .zip(&ground)
+            .map(|(q, g)| {
+                let under = q[2] > NO_Y + 1.0 && q[2] < g - UNDER;
+                !under && self.still_water(q[0], q[1], *g - 0.5).is_some()
+            })
+            .collect();
+        let held = |i: usize| (r.pts[i][2] > NO_Y + 1.0).then_some(r.pts[i][2]);
+        let mut along = vec![0.0f32; n];
+        for i in 1..n {
+            let (a, b) = (r.pts[i - 1], r.pts[i]);
+            along[i] = along[i - 1] + Vec2::new(b[0] - a[0], b[1] - a[1]).length();
+        }
+        let ys: Vec<f32> = if (0..n).all(|i| held(i).is_some()) {
+            (0..n).map(|i| r.pts[i][2]).collect()
+        } else if r.runway {
+            // Dead flat, at the mean of the ground along it.
+            let (a, b) = (r.pts[0], r.pts[n - 1]);
+            let mean = (0..=8)
+                .map(|k| {
+                    let t = k as f32 / 8.0;
+                    self.height_at(mix(a[0], b[0], t), mix(a[1], b[1], t), Stage::Base)
+                })
+                .sum::<f32>()
+                / 9.0;
+            vec![mean.max(2.0); n]
+        } else {
+            let mut fixed: Vec<Option<f32>> = (0..n).map(|i| held(i).or(meets[i])).collect();
+            // The ground averaged over a stretch either side, skipping water.
+            let window = |ys: &[f32], i: usize, reach: f32, skip_wet: bool| {
+                let (mut sum, mut count) = (0.0, 0.0);
+                let mut j = i;
+                while j > 0 && along[i] - along[j - 1] <= reach {
+                    j -= 1;
+                }
+                while j < n && along[j] - along[i] <= reach {
+                    if !(skip_wet && wet[j]) {
+                        sum += ys[j];
+                        count += 1.0;
+                    }
+                    j += 1;
+                }
+                (count > 0.0).then(|| sum / count)
+            };
+            let smooth: Vec<f32> = (0..n)
+                .map(|i| window(&ground, i, 25.0, true).unwrap_or(ground[i]).max(1.5))
+                .collect();
+            // Gullies and gorges narrower than a long bridge are spanned, not followed:
+            // the highest ground within reach, then the lowest of those.
+            let reach = |ys: &[f32], i: usize, pick: fn(f32, f32) -> f32| {
+                let mut v = ys[i];
+                for j in (0..i).rev().take_while(|&j| along[i] - along[j] <= SPAN) {
+                    v = pick(v, ys[j]);
+                }
+                for j in (i + 1..n).take_while(|&j| along[j] - along[i] <= SPAN) {
+                    v = pick(v, ys[j]);
+                }
+                v
+            };
+            let lay = |fixed: &[Option<f32>]| {
+                let high: Vec<f32> = (0..n).map(|i| reach(&smooth, i, f32::max)).collect();
+                let mut y: Vec<f32> = (0..n)
+                    .map(|i| fixed[i].unwrap_or_else(|| reach(&high, i, f32::min)))
+                    .collect();
+                // No steeper than the grade a car or a train can take, both ways along.
+                let grade = if r.rail { RAIL_GRADE } else { ROAD_GRADE };
+                let limit = |y: &mut Vec<f32>| {
+                    for _ in 0..2 {
+                        for i in 1..n {
+                            if fixed[i].is_none() {
+                                let d = (along[i] - along[i - 1]) * grade;
+                                y[i] = y[i].clamp(y[i - 1] - d, y[i - 1] + d);
                             }
                         }
-                        if count > 0.0 {
-                            (sum / count).max(1.5)
-                        } else {
-                            ground[i].max(1.5)
+                        for i in (0..n - 1).rev() {
+                            if fixed[i].is_none() {
+                                let d = (along[i + 1] - along[i]) * grade;
+                                y[i] = y[i].clamp(y[i + 1] - d, y[i + 1] + d);
+                            }
                         }
-                    })
-                    .collect()
+                    }
+                };
+                limit(&mut y);
+                // Round off every change of grade into a gentle curve, then hold the grade
+                // again where uneven spacing let the average steepen it.
+                for _ in 0..2 {
+                    let prev = y.clone();
+                    for i in 0..n {
+                        if fixed[i].is_none() {
+                            y[i] = window(&prev, i, 15.0, false).unwrap_or(prev[i]);
+                        }
+                    }
+                }
+                limit(&mut y);
+                y
             };
-            let mut pts: Vec<RoadPoint> = ys
+            let mut y = lay(&fixed);
+            // A loop meets itself level: both ends take the height midway between them.
+            let (first, last) = (r.pts[0], r.pts[n - 1]);
+            if (first[0] - last[0]).abs() < 1.0 && (first[1] - last[1]).abs() < 1.0 {
+                let mid = (y[0] + y[n - 1]) * 0.5;
+                fixed[0] = fixed[0].or(Some(mid));
+                fixed[n - 1] = fixed[n - 1].or(Some(mid));
+                y = lay(&fixed);
+            }
+            y
+        };
+        let mut pts: Vec<RoadPoint> = ys
+            .iter()
+            .zip(&wet)
+            .map(|(y, w)| RoadPoint {
+                y: *y,
+                bridge: *w && !r.runway,
+                tunnel: false,
+            })
+            .collect();
+        arch_bridges(&mut pts, r.pts, 30.0);
+        pts
+    }
+
+    /// Where a road runs high over the untouched ground, it crosses on a viaduct rather
+    /// than a towering bank of earth.
+    pub(super) fn mark_viaducts(&self) -> Vec<Vec<RoadPoint>> {
+        let mut out = (*self.roads).clone();
+        for (r, pts) in self.def.roads.iter().zip(out.iter_mut()) {
+            if r.runway || r.subway {
+                continue;
+            }
+            let high: Vec<bool> = r
+                .pts
                 .iter()
-                .zip(&wet)
-                .map(|(y, w)| RoadPoint {
-                    y: *y,
-                    bridge: *w && !r.runway,
-                    tunnel: false,
-                })
+                .zip(pts.iter())
+                .map(|(q, p)| p.y - self.height_at(q[0], q[1], Stage::Base) > VIADUCT)
                 .collect();
-            arch_bridges(&mut pts, 30.0);
-            out.push(pts);
+            let n = pts.len();
+            for i in 0..n {
+                // Each span starts one point early and ends one late, on its abutments.
+                let near = high[i] || (i > 0 && high[i - 1]) || (i + 1 < n && high[i + 1]);
+                if near && !pts[i].tunnel {
+                    pts[i].bridge = true;
+                }
+            }
+            // Through a cavern, a line high over the floor runs on a trestle.
+            for (q, p) in r.pts.iter().zip(pts.iter_mut()) {
+                if p.tunnel && p.y - self.support(q[0], q[1], p.y + 0.5) > CAVE_TRESTLE {
+                    p.bridge = true;
+                }
+            }
         }
         out
     }
@@ -289,10 +434,34 @@ impl Terrain {
         for (r, pts) in self.def.roads.iter().zip(out.iter_mut()) {
             for (q, rp) in r.pts.iter().zip(pts.iter_mut()) {
                 let p = Vec2::new(q[0], q[1]);
-                rp.tunnel = self.index.cell(p).is_some_and(|(cell, _)| {
-                    !cell.voids.is_empty()
-                        && self.voids_sdf(glam::Vec3::new(p.x, rp.y + 2.0, p.y), &cell.voids) < 0.0
-                });
+                // Only where the hill closes over it: short of that, a cutting leads in.
+                let covered = self.height_at(p.x, p.y, Stage::Base) > rp.y + 6.0;
+                rp.tunnel = covered
+                    && self.index.cell(p).is_some_and(|(cell, _)| {
+                        !cell.voids.is_empty()
+                            && self.voids_sdf(glam::Vec3::new(p.x, rp.y + 2.0, p.y), &cell.voids)
+                                < 0.0
+                    });
+            }
+            // A point between two in the tunnel is in it too, round a loop's seam as well.
+            let n = pts.len();
+            let looped = r
+                .pts
+                .first()
+                .zip(r.pts.last())
+                .is_some_and(|(a, b)| (a[0] - b[0]).abs() < 1.0 && (a[1] - b[1]).abs() < 1.0);
+            let was: Vec<bool> = pts.iter().map(|p| p.tunnel).collect();
+            for i in 0..n {
+                let (prev, next) = match (i, looped) {
+                    (0, true) => (was[n - 2], was[1]),
+                    (i, true) if i == n - 1 => (was[n - 2], was[1]),
+                    (0, false) => (false, false),
+                    (i, false) if i == n - 1 => (false, false),
+                    _ => (was[i - 1], was[i + 1]),
+                };
+                if prev && next {
+                    pts[i].tunnel = true;
+                }
             }
         }
         out
@@ -328,17 +497,8 @@ impl Terrain {
                 }
             }
             if changed {
-                // Each span starts and ends level with the road on the ground beside it.
-                let n = out[ri].len();
-                for i in 0..n {
-                    let near =
-                        (i > 0 && out[ri][i - 1].bridge) || (i + 1 < n && out[ri][i + 1].bridge);
-                    if !out[ri][i].bridge && near {
-                        let q = r.pts[i];
-                        out[ri][i].y = self.height_at(q[0], q[1], Stage::Full) + 0.25;
-                    }
-                }
-                arch_bridges(&mut out[ri], 6.0);
+                // The profile already spans the dip, so the deck only gets a gentle hump.
+                arch_bridges(&mut out[ri], r.pts, 4.0);
             }
         }
         out
@@ -437,24 +597,49 @@ impl Terrain {
             .map(|(_, l)| l.level)
     }
 
-    /// Pulls the ground to each road's grade, except under bridges.
+    /// Pulls the ground to each road's grade, except under bridges. Where roads meet, the
+    /// one a spot is most inside is laid last, so its surface is the one the ground keeps.
     pub(super) fn grade_roads(&self, cell: &Cell, p: Vec2, mut h: f32) -> f32 {
         if self.roads.is_empty() {
             return h;
         }
+        let mut near: [(f32, f32, f32); 6] = [(0.0, 0.0, 0.0); 6];
+        let mut count = 0;
         for e in cell.entries.iter().filter(|e| e.kind == Kind::Road) {
             let r = &self.def.roads[e.idx as usize];
             let rp = &self.roads[e.idx as usize];
             let (d, s, t) = nearest(r.pts, &e.segs, p);
-            // Under bridges and over tunnels the ground stays as it is.
-            if rp[s].bridge || rp[s + 1].bridge || rp[s].tunnel || rp[s + 1].tunnel {
+            let half = r.w * 0.5;
+            // Over tunnels the ground stays as it is, and under bridges too, except that
+            // a bank never rises through the deck.
+            // At a portal the cutting leads in, but it never digs a deep shaft down to a
+            // road that runs on in the hill.
+            if (rp[s].tunnel && rp[s + 1].tunnel)
+                || ((rp[s].tunnel || rp[s + 1].tunnel) && h - mix(rp[s].y, rp[s + 1].y, t) > 12.0)
+            {
                 continue;
             }
-            let y = mix(rp[s].y, rp[s + 1].y, t);
+            if rp[s].bridge || rp[s + 1].bridge {
+                let under = mix(rp[s].y, rp[s + 1].y, t) - 2.0;
+                if d < half + 3.0 && h > under {
+                    h = mix(h, under, 1.0 - smoothstep(half + 1.0, half + 3.0, d));
+                }
+                continue;
+            }
+            if d > half + 4.0 + REACH || count == near.len() {
+                continue;
+            }
+            near[count] = (d - half, mix(rp[s].y, rp[s + 1].y, t), half);
+            count += 1;
+        }
+        let near = &mut near[..count];
+        near.sort_by(|a, b| b.0.total_cmp(&a.0));
+        for &(out, y, _) in near.iter() {
             // A flat shoulder wider than a terrain cell, so the ground never pokes through.
-            let half = r.w * 0.5 + 4.0;
-            let reach = 4.0 + (h - y).abs() * 0.9;
-            let f = 1.0 - smoothstep(half, half + reach, d);
+            // Banks and cuttings slope back like real earthworks, but never carve away a
+            // whole hillside.
+            let reach = (4.0 + (h - y).abs() * 0.9).min(REACH);
+            let f = 1.0 - smoothstep(4.0, 4.0 + reach, out);
             h = mix(h, y, f);
         }
         h
@@ -529,10 +714,13 @@ fn plunge(levels: &mut [f32], pts: &[[f32; 3]]) {
     }
 }
 
-/// Spans of bridge points get a gentle arch between their ends, at least `rise` meters
-/// at the middle for long spans. One extra point at each end becomes the abutment.
-fn arch_bridges(pts: &mut [RoadPoint], rise: f32) {
+/// Spans of bridge points get a gentle arch between their ends, adding at most half a
+/// road's steepest grade at the ends, and at most `rise` meters at the middle. One extra point at
+/// each end becomes the abutment.
+fn arch_bridges(pts: &mut [RoadPoint], line: &[[f32; 3]], rise: f32) {
     let n = pts.len();
+    let flat =
+        |a: usize, b: usize| Vec2::new(line[b][0] - line[a][0], line[b][1] - line[a][1]).length();
     let mut i = 0;
     while i < n {
         if !pts[i].bridge {
@@ -545,12 +733,16 @@ fn arch_bridges(pts: &mut [RoadPoint], rise: f32) {
             end += 1;
         }
         let end = (end + 1).min(n - 1);
-        let (a, b) = (pts[start].y, pts[end].y);
-        let span = (end - start) as f32;
-        let top = rise.min(span * 1.5);
+        let mut along = vec![0.0f32; end - start + 1];
+        for k in 1..along.len() {
+            along[k] = along[k - 1] + flat(start + k - 1, start + k);
+        }
+        let len = along[along.len() - 1].max(1.0);
+        let top = rise.min(len * ROAD_GRADE * 0.125);
+        let base: Vec<f32> = pts[start..=end].iter().map(|p| p.y).collect();
         for (k, p) in pts[start..=end].iter_mut().enumerate() {
-            let u = k as f32 / span.max(1.0);
-            p.y = mix(a, b, u) + top * 4.0 * u * (1.0 - u);
+            let u = along[k] / len;
+            p.y = base[k] + top * 4.0 * u * (1.0 - u);
             p.bridge = true;
         }
         i = end + 1;

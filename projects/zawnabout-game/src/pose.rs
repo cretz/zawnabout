@@ -133,6 +133,10 @@ impl DragonVisual {
         self.prev_pos = self.pos;
         self.prev_rot = self.rot;
         self.pos = d.pos;
+        // Afloat, bobbing gently on the water.
+        if d.swimming {
+            self.pos.y += (self.time * 2.2).sin() * 0.07;
+        }
         self.rot = d.rotation();
         let ease = |rate: f32| 1.0 - (-rate * dt).exp();
         let mut turn_rate = (d.heading - self.prev_heading + PI).rem_euclid(TAU) - PI;

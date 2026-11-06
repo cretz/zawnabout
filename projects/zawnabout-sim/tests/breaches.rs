@@ -206,7 +206,10 @@ fn spots() {
             .unwrap_or_default();
         let road = t.road_spot(x, z, 30.0).map(|r| r.d as i32);
         let water = t.water(x, z, h).is_some();
-        println!("{x} {z}: h {h:.0} up {n:.2} {cover} road {road:?} water {water}");
+        let nat = t.natural_height(x, z);
+        println!(
+            "{x} {z}: h {h:.0} natural {nat:.0} up {n:.2} {cover} road {road:?} water {water}"
+        );
     }
 }
 
@@ -447,5 +450,263 @@ fn buildings_of() {
         .take(6)
     {
         println!("{:?} pos {} axis {} size {}", b.kind, b.pos, b.axis, b.size);
+    }
+}
+
+/// One road's profile point by point: `ROAD=fang-road cargo test --release --test
+/// breaches road_profile -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn road_profile() {
+    let t = Terrain::new(&WORLD);
+    let want = std::env::var("ROAD").unwrap_or_default();
+    for (i, r) in t.def.roads.iter().enumerate() {
+        if !r.id.contains(&want) {
+            continue;
+        }
+        for (q, p) in r.pts.iter().zip(t.road_points(i)) {
+            println!(
+                "{} ({:.0},{:.0}) held {:.1} y {:.1} ground {:.1} bridge {} tunnel {}",
+                r.id,
+                q[0],
+                q[1],
+                q[2],
+                p.y,
+                t.height(q[0], q[1]),
+                p.bridge,
+                p.tunnel
+            );
+        }
+    }
+}
+
+/// Heights over a grid and every road's profile, for drawing road maps:
+/// `GRID="x0 z0 x1 z1 step" OUT=file cargo test --release --test breaches height_grid --
+/// --ignored --nocapture`. Lines are `h x z y` for ground, `r id x z y bridge tunnel`.
+#[test]
+#[ignore]
+fn height_grid() {
+    use std::fmt::Write;
+    let t = Terrain::new(&WORLD);
+    let g: Vec<f32> = std::env::var("GRID")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|w| w.parse().ok())
+        .collect();
+    let mut out = String::new();
+    let (mut z, step) = (g[1], g[4]);
+    while z <= g[3] {
+        let mut x = g[0];
+        while x <= g[2] {
+            // With NATURAL set, the ground before roads and rivers shape it.
+            let h = if std::env::var("NATURAL").is_ok() {
+                t.natural_height(x, z)
+            } else {
+                t.height(x, z)
+            };
+            let wet = t.water(x, z, h).is_some() as u8;
+            writeln!(out, "h {x} {z} {h:.1} {wet}").unwrap();
+            x += step;
+        }
+        z += step;
+    }
+    for (i, r) in t.def.roads.iter().enumerate() {
+        for (q, p) in r.pts.iter().zip(t.road_points(i)) {
+            writeln!(
+                out,
+                "r {} {:.1} {:.1} {:.1} {} {}",
+                r.id, q[0], q[1], p.y, p.bridge as u8, p.tunnel as u8
+            )
+            .unwrap();
+        }
+    }
+    // Landmarks and big buildings as boxes: `b kind x z axis_x axis_z width depth`.
+    let w = zawnabout_sim::World::generate(1);
+    for b in w.buildings.iter().filter(|b| b.size.x * b.size.z > 300.0) {
+        writeln!(
+            out,
+            "b {:?} {:.1} {:.1} {:.3} {:.3} {:.1} {:.1}",
+            b.kind, b.pos.x, b.pos.z, b.axis.x, b.axis.y, b.size.x, b.size.z
+        )
+        .unwrap();
+    }
+    std::fs::write(std::env::var("OUT").unwrap(), out).unwrap();
+}
+
+/// Cave floor heights over a grid, for laying paths through caverns:
+/// `FLOOR="x0 z0 x1 z1 step ytop" OUT=file cargo test --release --test breaches
+/// cave_floor -- --ignored`. Lines are `h x z y wet` as for `height_grid`, with `y` the
+/// first floor below `ytop` (or -9999 where `ytop` is in rock).
+#[test]
+#[ignore]
+fn cave_floor() {
+    use std::fmt::Write;
+    let t = Terrain::new(&WORLD);
+    let g: Vec<f32> = std::env::var("FLOOR")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|w| w.parse().ok())
+        .collect();
+    let mut out = String::new();
+    let (mut z, step, top) = (g[1], g[4], g[5]);
+    while z <= g[3] {
+        let mut x = g[0];
+        while x <= g[2] {
+            let p = glam::Vec3::new(x, top, z);
+            let (y, wet) = if t.sdf(p) > 0.0 {
+                let y = t.support(x, z, top);
+                (y, t.cave_water(x, z, y).is_some() as u8)
+            } else {
+                (-9999.0, 0)
+            };
+            writeln!(out, "h {x} {z} {y:.1} {wet}").unwrap();
+            x += step;
+        }
+        z += step;
+    }
+    std::fs::write(std::env::var("OUT").unwrap(), out).unwrap();
+}
+
+/// The floor and any water under spots in caves, for laying boat routes:
+/// `WATER="x z ytop;x z ytop" cargo test --release --test breaches cave_water -- --ignored
+/// --nocapture`.
+#[test]
+#[ignore]
+fn cave_water() {
+    let t = Terrain::new(&WORLD);
+    for s in std::env::var("WATER").unwrap_or_default().split(';') {
+        let v: Vec<f32> = s
+            .split_whitespace()
+            .filter_map(|w| w.parse().ok())
+            .collect();
+        if v.len() < 3 {
+            continue;
+        }
+        let floor = t.support(v[0], v[1], v[2]);
+        let water = t.cave_water(v[0], v[1], floor);
+        println!("{} {}: floor {floor:.1} water {water:?}", v[0], v[1]);
+    }
+}
+
+/// The solid shapes of the landmark nearest `NEAR="x z"`, with the support over each:
+/// `cargo test --release --test breaches landmark_shapes -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn landmark_shapes() {
+    let w = zawnabout_sim::World::generate(1);
+    let v: Vec<f32> = std::env::var("NEAR")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let p = glam::Vec2::new(v[0], v[1]);
+    let b = w
+        .buildings
+        .iter()
+        .min_by(|a, b| {
+            let d =
+                |x: &zawnabout_sim::town::Building| glam::Vec2::new(x.pos.x, x.pos.z).distance(p);
+            d(a).total_cmp(&d(b))
+        })
+        .unwrap();
+    println!("{:?} pos {} axis {}", b.kind, b.pos, b.axis);
+    for s in b.shapes() {
+        println!("  {s:?}");
+    }
+}
+
+/// Where every landmark of a kind stands: `KIND=Racetrack cargo test --release --test
+/// breaches landmarks_of -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn landmarks_of() {
+    let w = zawnabout_sim::World::generate(1);
+    let want = std::env::var("KIND").unwrap_or_default();
+    for b in &w.buildings {
+        if format!("{:?}", b.kind) == want {
+            println!("{:?} {:?} pos {} size {}", b.kind, b.site, b.pos, b.size);
+        }
+    }
+}
+
+/// Landmarks inside a box, `BOX="x0 z0 x1 z1"`, with their footprints:
+/// `cargo test --release --test breaches landmarks_in -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn landmarks_in() {
+    let w = zawnabout_sim::World::generate(1);
+    let v: Vec<f32> = std::env::var("BOX")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    for b in &w.buildings {
+        let named = b.site.is_some()
+            && zawnabout_sim::landmark::KINDS
+                .iter()
+                .any(|(_, k)| *k == b.kind);
+        if named && b.pos.x > v[0] && b.pos.x < v[2] && b.pos.z > v[1] && b.pos.z < v[3] {
+            println!(
+                "{:?} {:?} {:.0} {:.0} y {:.0} size {:.0} {:.0}",
+                b.kind,
+                b.site.unwrap_or(""),
+                b.pos.x,
+                b.pos.z,
+                b.pos.y,
+                b.size.x,
+                b.size.z
+            );
+        }
+    }
+}
+
+/// Probe: open spots for a new landmark in `AREA="x0 z0 x1 z1"`: no road within `R`
+/// meters (default 50), no building, flat to `FLAT` meters, dry and under no rock.
+#[test]
+#[ignore]
+fn open_spots() {
+    let w = zawnabout_sim::World::generate(1);
+    let t = &w.terrain;
+    let env = |k: &str| std::env::var(k).ok();
+    let area: Vec<f32> = env("AREA")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let r: f32 = env("R").and_then(|s| s.parse().ok()).unwrap_or(50.0);
+    let flat: f32 = env("FLAT").and_then(|s| s.parse().ok()).unwrap_or(4.0);
+    let step = r * 0.5;
+    let mut z = area[1];
+    while z < area[3] {
+        let mut x = area[0];
+        while x < area[2] {
+            let hs: Vec<f32> = [
+                (0.0, 0.0),
+                (r, 0.0),
+                (-r, 0.0),
+                (0.0, r),
+                (0.0, -r),
+                (r, r),
+                (-r, -r),
+                (r, -r),
+                (-r, r),
+            ]
+            .iter()
+            .map(|(dx, dz)| t.height(x + dx * 0.8, z + dz * 0.8))
+            .collect();
+            let (lo, hi) = hs
+                .iter()
+                .fold((f32::MAX, f32::MIN), |a, h| (a.0.min(*h), a.1.max(*h)));
+            let clear = t.road_spot(x, z, r).is_none()
+                && w.buildings.iter().all(|b| {
+                    glam::Vec2::new(b.pos.x - x, b.pos.z - z).length()
+                        > r + b.size.x.max(b.size.z) * 0.5
+                });
+            if clear && hi - lo < flat && lo > 3.0 {
+                println!("{x:.0} {z:.0}: h {lo:.0}..{hi:.0}");
+            }
+            x += step;
+        }
+        z += step;
     }
 }

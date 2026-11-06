@@ -1,17 +1,20 @@
 //! The client: input, camera, procedural visuals and rendering on top of the sim.
 //! Platform hosts (native window, headless, browser) drive it.
 
+pub mod audio;
 pub mod camera;
 pub mod cave_life;
 pub mod feedback;
 pub mod fx;
 pub mod game;
 pub mod gfx;
+pub mod hud;
 pub mod input;
 pub mod life;
 pub mod map;
 pub mod mesh;
 pub mod models;
+pub mod notes;
 pub mod park_life;
 pub mod pose;
 pub mod prof;
@@ -21,6 +24,7 @@ pub mod sea_life;
 pub mod terrain_mesh;
 pub mod town_mesh;
 pub mod water;
+pub mod weather;
 pub mod wildlife;
 
 pub use game::Game;

@@ -9,7 +9,9 @@ use zawnabout_sim::{DT, Dragon, EntityId, Mode, ParamDef, Params, Sim};
 use crate::camera::{Camera, CameraParams, Target};
 use crate::feedback::{Feedback, FreeCam, Pin, json_str};
 use crate::fx::Fx;
+use crate::hud::{HudKey, NotesKey};
 use crate::input::{Action, Bindings, ControlParams, InputState};
+use crate::notes::Note;
 use crate::pose::DragonVisual;
 
 zawnabout_sim::params! {
@@ -78,6 +80,10 @@ pub struct Game {
     pub player: EntityId,
     pub input: InputState,
     pub bindings: Bindings,
+    /// The game's own heads-up display, off where the host draws its own.
+    pub hud: crate::hud::Hud,
+    /// Sound turned off with U.
+    pub muted: bool,
     pub controls: ControlParams,
     pub cam: CameraParams,
     pub look: LookParams,
@@ -87,6 +93,8 @@ pub struct Game {
     pub land_request: Option<Vec3>,
     /// Seconds left before a dragged look eases back.
     look_hold: f32,
+    /// Look keys held: I up, K down, J left, L right.
+    look_keys: [bool; 4],
     /// Notes mode: frozen world, free camera, pins.
     pub feedback: Feedback,
     pub paused: bool,
@@ -123,6 +131,8 @@ impl Game {
             player,
             input: InputState::default(),
             bindings: Bindings::default(),
+            hud: crate::hud::Hud::default(),
+            muted: false,
             controls: ControlParams::default(),
             cam: CameraParams::default(),
             look: LookParams::default(),
@@ -130,6 +140,7 @@ impl Game {
             visuals,
             land_request: None,
             look_hold: 0.0,
+            look_keys: [false; 4],
             feedback: Feedback::default(),
             paused: false,
             time: 0.0,
@@ -197,7 +208,57 @@ impl Game {
         self.acc / DT
     }
 
+    /// Lets go of every key, as when the window loses focus.
+    pub fn release_keys(&mut self) {
+        self.input.clear();
+        self.look_keys = [false; 4];
+    }
+
+    /// Offers a key press, and the text it types, to the HUD first: its panels, changing
+    /// keys, and notes mode (N) with its list and the note being written.
+    pub fn hud_key(&mut self, code: &str, text: Option<&str>) -> HudKey {
+        if !self.hud.on {
+            return HudKey::Pass;
+        }
+        if self.feedback.active {
+            let used = match self.hud.notes_key(code, text) {
+                NotesKey::Leave => {
+                    self.set_feedback(false);
+                    HudKey::Used
+                }
+                NotesKey::Go(v) => {
+                    self.feedback_view(Vec3::new(v[0], v[1], v[2]), v[3], v[4]);
+                    HudKey::Used
+                }
+                NotesKey::Used => HudKey::Used,
+                NotesKey::Pass => HudKey::Pass,
+            };
+            self.sync_pins();
+            return used;
+        }
+        if code == "KeyN" && !self.hud.open() {
+            self.set_feedback(true);
+            return HudKey::Used;
+        }
+        self.hud.key(code, &mut self.bindings)
+    }
+
     pub fn key(&mut self, code: &str, down: bool, repeat: bool) {
+        // U turns the sound off and on.
+        if code == "KeyU" {
+            if down && !repeat {
+                self.muted = !self.muted;
+            }
+            return;
+        }
+        // I, J, K and L look round while held, as dragging does.
+        if let Some(k) = ["KeyI", "KeyK", "KeyJ", "KeyL"]
+            .iter()
+            .position(|c| *c == code)
+        {
+            self.look_keys[k] = down;
+            return;
+        }
         self.input
             .key(code, down, repeat, &self.bindings, &self.controls);
     }
@@ -285,6 +346,12 @@ impl Game {
     }
 
     fn update_camera(&mut self, dt: f32) {
+        let [up, down, left, right] = self.look_keys;
+        if up || down || left || right {
+            let axis = |a: bool, b: bool| (a as i8 - b as i8) as f32;
+            // About a quarter turn a second, as a steady drag would.
+            self.look_drag(axis(left, right) * 260.0 * dt, axis(down, up) * 260.0 * dt);
+        }
         if self.look_hold > 0.0 {
             self.look_hold -= dt;
         } else {
@@ -347,10 +414,16 @@ impl Game {
                         }
                         // Ground is landed on where it was hit, so a tap through a cave
                         // mouth lands inside. A building or prop is landed on top of.
+                        // Its top is found below any rock overhead, so in a cave it is
+                        // not the ground far above the roof.
                         let reach = if world.terrain.sdf(q) < 0.0 {
                             2.0
                         } else {
-                            500.0
+                            let mut up = 1.0;
+                            while up < 500.0 && world.terrain.sdf(q + Vec3::Y * up) > 0.0 {
+                                up += 2.0;
+                            }
+                            up
                         };
                         let top = world.support(q.x, q.z, q.y + reach);
                         return Some(Vec3::new(q.x, top, q.z));
@@ -396,10 +469,13 @@ impl Game {
             zawnabout_sim::town::Kind::Cruise => (-0.1, 0.25),
             // Beside the mast, clear of the sails along the middle.
             zawnabout_sim::town::Kind::Sailboat => (-0.2, 0.3),
+            // Out on the seats, clear of the tower up the middle.
+            zawnabout_sim::town::Kind::DropRing => (0.0, 0.45),
             zawnabout_sim::town::Kind::Car
             | zawnabout_sim::town::Kind::Train
             | zawnabout_sim::town::Kind::LiftChair
-            | zawnabout_sim::town::Kind::LiftCabin => (0.0, 0.0),
+            | zawnabout_sim::town::Kind::LiftCabin
+            | zawnabout_sim::town::Kind::FerrisCar => (0.0, 0.0),
             _ => (0.1, 0.0),
         };
         let p = pose.pos
@@ -408,8 +484,12 @@ impl Game {
         // Chairs and cabins hang below the cable: look down from just above them. Cars
         // and trains may be in a tunnel, so look down from just over their roofs.
         let above = match v.kind {
-            zawnabout_sim::town::Kind::LiftChair | zawnabout_sim::town::Kind::LiftCabin => 0.5,
+            zawnabout_sim::town::Kind::LiftChair
+            | zawnabout_sim::town::Kind::LiftCabin
+            | zawnabout_sim::town::Kind::FerrisCar => 0.5,
             zawnabout_sim::town::Kind::Car | zawnabout_sim::town::Kind::Train => v.size.y + 2.0,
+            // Afloat in caves, under a low roof.
+            zawnabout_sim::town::Kind::Punt => 4.0,
             _ => 50.0,
         };
         let top = self.sim.world.support(p.x, p.z, p.y + above);
@@ -438,7 +518,22 @@ impl Game {
                 (t > 0.0 && t < ground_t + 5.0 && miss < reach).then_some((t, i))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((_, i)) = vehicle {
+        if let Some((t, i)) = vehicle {
+            // Where the ray first comes down onto the vehicle's top, so a tap on a big
+            // ship's sky deck lands there, not on its usual spot. A near miss of
+            // something small or quick still lands on its usual spot.
+            let reach = traffic.vehicles[i].size.x.max(4.0);
+            let mut s = (t - reach).max(0.0);
+            while s < t + reach {
+                let p = near + dir * s;
+                if let Some(top) = world.deck_of(i, p.x, p.z)
+                    && p.y <= top + 0.05
+                    && p.y > top - 1.5
+                {
+                    return Some((Vec3::new(p.x, top, p.z), 3.0));
+                }
+                s += 0.25;
+            }
             return self.deck(i).map(|p| (p, 3.0));
         }
         let perch = world
@@ -509,30 +604,60 @@ impl Game {
     /// Picks the surface under the cursor in notes mode and describes it as JSON:
     /// `spot`, `view` (x, y, z, yaw, pitch) and `near` (named places around it).
     pub fn feedback_pick(&mut self, nx: f32, ny: f32, aspect: f32) -> Option<String> {
-        let (near, dir) = self.ray(nx, ny, aspect);
-        let spot = self.surface_hit(near, dir)?;
-        self.feedback.draft = Some(spot);
-        let cam = self.feedback.cam;
-        let near: Vec<String> = self
-            .sim
-            .world
-            .terrain
-            .describe(spot.x, spot.z)
-            .iter()
-            .map(|s| json_str(s))
-            .collect();
+        let n = self.spot_note(nx, ny, aspect)?;
+        self.feedback.draft = Some(n.spot);
+        let near: Vec<String> = n.near.iter().map(|s| json_str(s)).collect();
+        let [x, y, z, yaw, pitch] = n.view;
         Some(format!(
-            r#"{{"spot":[{:.1},{:.1},{:.1}],"view":[{:.1},{:.1},{:.1},{:.4},{:.4}],"near":[{}]}}"#,
-            spot.x,
-            spot.y,
-            spot.z,
-            cam.pos.x,
-            cam.pos.y,
-            cam.pos.z,
-            cam.yaw,
-            cam.pitch,
+            r#"{{"spot":[{:.1},{:.1},{:.1}],"view":[{x:.1},{y:.1},{z:.1},{yaw:.4},{pitch:.4}],"near":[{}]}}"#,
+            n.spot.x,
+            n.spot.y,
+            n.spot.z,
             near.join(",")
         ))
+    }
+
+    /// An empty note on the surface under the cursor, seen from the free camera.
+    fn spot_note(&self, nx: f32, ny: f32, aspect: f32) -> Option<Note> {
+        let (near, dir) = self.ray(nx, ny, aspect);
+        let spot = self.surface_hit(near, dir)?;
+        let cam = self.feedback.cam;
+        Some(Note {
+            spot,
+            view: [cam.pos.x, cam.pos.y, cam.pos.z, cam.yaw, cam.pitch],
+            near: self.sim.world.terrain.describe(spot.x, spot.z),
+            ..Default::default()
+        })
+    }
+
+    /// Starts writing a note at the spot under the cursor, in the HUD's notes mode.
+    pub fn notes_pick(&mut self, nx: f32, ny: f32, aspect: f32) -> bool {
+        if !self.feedback.active || self.hud.writing.is_some() {
+            return false;
+        }
+        self.hud.writing = self.spot_note(nx, ny, aspect);
+        self.sync_pins();
+        self.hud.writing.is_some()
+    }
+
+    /// The notes the HUD lists, from the host's files.
+    pub fn set_notes(&mut self, notes: Vec<Note>) {
+        self.hud.set_notes(notes);
+        self.sync_pins();
+    }
+
+    /// Pins and the draft pin follow the HUD's notes.
+    fn sync_pins(&mut self) {
+        self.feedback.pins = self
+            .hud
+            .notes
+            .iter()
+            .map(|n| Pin {
+                pos: n.spot,
+                done: n.done,
+            })
+            .collect();
+        self.feedback.draft = self.hud.writing.as_ref().map(|n| n.spot);
     }
 
     /// Replaces the drawn pins: positions as x, y, z triples and one done flag each.
@@ -626,6 +751,16 @@ impl Game {
                 // A train's engine, or a subway train's lead car.
                 "train" => v.kind == zawnabout_sim::town::Kind::Train && v.variant == 0,
                 "metro" => v.kind == zawnabout_sim::town::Kind::Train && v.variant == METRO_CAB,
+                // A mine train's engine.
+                "mine" => {
+                    v.kind == zawnabout_sim::town::Kind::Train
+                        && v.variant == zawnabout_sim::traffic::MINE_ENGINE
+                }
+                // A cave tour train's engine.
+                "tour" => {
+                    v.kind == zawnabout_sim::town::Kind::Train
+                        && v.variant == zawnabout_sim::traffic::TOUR_ENGINE
+                }
                 _ => format!("{:?}", v.kind).eq_ignore_ascii_case(kind),
             })
             .nth(n)
@@ -667,10 +802,15 @@ impl Game {
             ["lit", id] => self.sim.beacon(id).ok_or("no such beacon")?.1,
             ["riding", which] => {
                 d.mode == Mode::Ground
-                    && self.sim.world.carrier(d.pos.x, d.pos.z, feet.y)
+                    && self
+                        .sim
+                        .world
+                        .carrier_keeping(d.riding, d.pos.x, d.pos.z, feet.y)
                         == Some(self.vehicle(which)?)
             }
             ["speed-below", _] => d.speed() < num(1)?,
+            // feet-above y: the feet are higher than y, such as up on a ship's top deck.
+            ["feet-above", _] => feet.y > num(1)?,
             ["height-above", _] => {
                 feet.y - self.sim.world.support(feet.x, feet.z, feet.y) > num(1)?
             }
@@ -1015,6 +1155,32 @@ impl Game {
             ["pause"] => {
                 self.paused = true;
                 Ok(String::new())
+            }
+            ["sound", on] => {
+                self.muted = *on == "off";
+                Ok(String::new())
+            }
+            ["hud", on] => {
+                self.hud.on = *on == "on";
+                Ok(String::new())
+            }
+            ["hud-key", code] => {
+                self.hud_key(code, None);
+                Ok(String::new())
+            }
+            // hud-type words: types into the note being written.
+            ["hud-type", ..] => {
+                let text = line.split_once(' ').map(|(_, t)| t).unwrap_or("");
+                self.hud_key("", Some(text));
+                Ok(String::new())
+            }
+            // note-pick nx ny: starts a note at a spot on a 16:9 screen, in notes mode.
+            ["note-pick", ..] => {
+                if self.notes_pick(num(1)?, num(2)?, 16.0 / 9.0) {
+                    Ok(String::new())
+                } else {
+                    Err("no surface there".into())
+                }
             }
             ["resume"] => {
                 self.paused = false;

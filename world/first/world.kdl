@@ -16,19 +16,19 @@ world first {
 island home file=home.kdl x=-1800 z=800 {
     note "Biggest island, about 4.2km by 3.4km. Every kind of place in one spot."
 }
-island crescent file=crescent.kdl x=2600 z=-2000 {
+island crescent file=crescent.kdl x=2600 z=-2000 climate=dry {
     note "Second biggest. A ring around a sea lagoon. The most modern city and the airport."
 }
-island twins file=twins.kdl x=-1200 z=-4300 {
+island twins file=twins.kdl x=-1200 z=-4300 climate=cold {
     note "Old stone island and seafaring island joined by a natural land bridge."
 }
-island fang file=fang.kdl x=3600 z=3300 {
+island fang file=fang.kdl x=3600 z=3300 climate=lush {
     note "Tallest peak, an old crater with a lake, rainforest, simpler folk."
 }
 island needles file=needles.kdl x=-4300 z=3600 {
     note "Cluster of sea spires. Perches, ledges, birds."
 }
-island atoll file=atoll.kdl x=-4300 z=-2700 {
+island atoll file=atoll.kdl x=-4300 z=-2700 climate=lush {
     note "Low lopsided palm ring. A sea cave hides a grotto under the rocky islet."
 }
 
@@ -42,6 +42,35 @@ spire lone-rock x=5200 z=900 h=26 r=24 top=flat {
 
 spire turtle-back x=-1500 z=4600 h=4 r=60 {
     note "Long reef rock barely above the water. Good for skimming low."
+}
+landmark fang-seals kind=seals x=2405 y=0 z=2905 rot=40 {
+    note "Seals lying about on the rocks below the fang picnic spot. Land on a rock and join them."
+}
+landmark meadow-seals kind=seals x=-600 y=0 z=2360 rot=10 {
+    note "A seal colony on the rocks off the south shore."
+}
+landmark atoll-seals kind=seals x=-4300 y=0 z=-2825 rot=-30 {
+    note "Seals on the rocks off the atoll."
+}
+
+landmark highland-dam kind=dam x=-2680 y=125 z=870 rot=90 {
+    note "A great concrete dam across the highland gorge, its reservoir behind. Walk the crest, or fly down the spillway."
+}
+landmark meadow-churchyard kind=cemetery x=-2250 z=420 rot=10 {
+    note "A quiet churchyard on the meadows, yews and a little white chapel."
+}
+landmark moon-toyworks kind=factory x=2320 z=-3400 rot=8 {
+    note "The toy works on the crescent's north arm, its chimney letting off steam."
+}
+landmark moon-power kind=powerstation x=2870 z=-3335 rot=8 {
+    note "The power station on the north arm: two cooling towers breathing clouds."
+}
+landmark south-rig kind=oilrig x=-1600 y=0 z=3100 rot=0 {
+    note "An oil rig far out south of Kettle bay. The helicopter from Kettle Harbor calls at its pad."
+}
+
+landmark turtle-camp kind=castaway x=-1500 z=4605 rot=20 {
+    note "A cheerful castaway's camp on the reef: lean-to, umbrella, fire, chest, and SOS in pebbles."
 }
 
 spire lighthouse-rock x=1500 z=-3800 h=30 r=40 top=flat {
@@ -176,6 +205,30 @@ route balloon-meadows kind=balloon {
     p -1800 280 300
     p -2400 260 900
 }
+route balloon-fair-south kind=balloon {
+    note "Up from the meadow balloon field, out over the golf course and the bay, and home again."
+    p -380 40 1670
+    p -470 120 1700
+    p -800 260 2000
+    p -1100 300 2350
+    p -700 300 2600
+    p -350 260 2200
+    p -300 120 1760
+    p -380 40 1670
+}
+
+route balloon-fair-north kind=balloon {
+    note "Up from the meadow balloon field, over Terrace Hill and the zoo, and home again."
+    p -338 40 1682
+    p -260 120 1600
+    p -150 260 1200
+    p -400 320 700
+    p -800 320 900
+    p -700 260 1400
+    p -420 120 1720
+    p -338 40 1682
+}
+
 route balloon-crescent kind=balloon {
     note "Over moonharbor and the crescent lagoon."
     p 2000 320 -2600
@@ -185,11 +238,14 @@ route balloon-crescent kind=balloon {
     p 2000 320 -2600
 }
 route balloon-twins kind=balloon {
-    note "Between the twin islands, over the land bridge."
-    p -700 300 -4300
+    note "Up from the twins balloon field, between the twin islands over the land bridge, and home again."
+    p -20 15 -5060
+    p -80 110 -4930
     p 400 340 -4800
     p 700 320 -3800
     p -700 300 -4300
+    p -190 110 -4930
+    p -20 15 -5060
 }
 route yacht-lane kind=yacht {
     p 3750 -1000
@@ -198,6 +254,23 @@ route yacht-lane kind=yacht {
     p 2300 1000
     p 3850 -300
     p 3750 -1000
+}
+// Fishing boats out of the harbors to the fishing grounds and back, gulls behind them.
+route kettle-trawler kind=trawler {
+    note "Out of Kettle Harbor to the grounds south of home, and back."
+    p -1450 1950
+    p -1300 2250
+    p -1000 2700
+    p -600 3300
+    p 0 3800
+}
+route tidewater-trawler kind=trawler {
+    note "Out of Tidewater to the grounds north of the twins, and back."
+    p 150 -4450
+    p 250 -4600
+    p 400 -4900
+    p 800 -5400
+    p 1400 -5700
 }
 route yacht-south kind=yacht {
     note "A long reach south of home, out toward fang and back past the needles."
@@ -230,7 +303,7 @@ landmark old-ring kind=stones x=-3100 z=1700 rot=20 {
     note "A ring of standing stones in the south-west meadows. Nobody remembers who raised it."
 }
 landmark south-wind-1 kind=turbine x=-1150 z=1840 rot=200
-landmark south-wind-2 kind=turbine x=-950 z=1940 rot=200
+landmark south-wind-2 kind=turbine x=-1015 z=1990 rot=200
 landmark south-wind-3 kind=turbine x=-760 z=2010 rot=200 {
     note "The wind farm on the south coast plain. Perch on a turbine's nacelle and watch the blades go round."
 }
@@ -241,6 +314,15 @@ landmark sky-ear kind=telescope x=-2450 z=-20 {
     note "A radio telescope dish beside the tarn camp, listening to the sky. Land in the bowl."
 }
 landmark meadow-picnic kind=picnic x=-2230 z=1260 rot=35
+landmark woods-picnic kind=picnic x=-1120 z=1170 rot=10 {
+    note "Picnic tables in a clearing in the tall woods."
+}
+landmark south-picnic kind=picnic x=-600 z=1700 rot=60 {
+    note "Picnic tables on the grass above the south shore, a fine spot for kites."
+}
+landmark fang-picnic kind=picnic x=2510 z=2810 rot=-20 {
+    note "Picnic tables by the shore below the stilt village."
+}
 landmark meadow-phone kind=phonebox x=-2205 z=1236 rot=35 {
     note "A red phone box beside the picnic tables, in the middle of a meadow. Lit at night."
 }
@@ -252,8 +334,11 @@ landmark north-beach-umbrellas kind=umbrellas x=3100 z=-3480 rot=10
 landmark moon-sign kind=sign x=1450 z=-1880 rot=15 text="MOONHARBOR" {
     note "Big white letters on the hill above the city."
 }
-landmark meadow-fair kind=ferris x=-360 z=1680 rot=110 {
-    note "A little fair by the east meadows. The wheel turns all day."
+landmark twins-balloons kind=balloonfield x=0 z=-5050 rot=0 {
+    note "A balloon field on the south twin's downs. The twins balloons come down here between trips."
+}
+landmark meadow-balloons kind=balloonfield x=-360 z=1680 rot=0 {
+    note "A balloon field on the east meadows. Balloons come down here, wait a while and lift off again. Hop in a basket for a ride."
 }
 landmark old-swing kind=swing x=-2600 z=1900 rot=30
 landmark twin-maze kind=maze x=-2100 z=-4150 rot=8 {
@@ -276,8 +361,11 @@ landmark farm-tower kind=watertower x=1720 z=-3180
 landmark crater-spring kind=hotspring x=3450 z=3150 {
     note "A steaming pool up by the crater lake."
 }
-landmark flats-chess kind=chess x=2640 z=-720 rot=15 {
-    note "A giant game of chess on the crescent flats, left half played. White to move."
+landmark moon-chess kind=chess x=1478 z=-1438 rot=10 {
+    note "A giant chess set by Moonharbor's park, left half played. White to move."
+}
+landmark moon-skate kind=skatepark x=1410 z=-1640 rot=10 {
+    note "Moonharbor's skate park: boxes, rails and a ledge, busy after school."
 }
 landmark ridge-cairns kind=cairns x=-1500 z=-700
 landmark wood-treehouse kind=treehouse x=-3300 z=500 rot=150 {
@@ -291,9 +379,12 @@ landmark crater-igloo kind=igloo x=3900 z=3264 rot=90 {
     note "An igloo on the crater rim, lamp lit inside."
 }
 landmark meadow-washing kind=laundry x=-2340 z=1440 rot=60
-landmark fang-sundial kind=sundial x=3120 z=2400
+landmark fang-sundial kind=sundial x=3120 z=2425
 landmark crescent-circus kind=circus x=2200 z=-3000 rot=200 {
     note "The circus came to the crescent and never left."
+}
+landmark meadow-carnival kind=carnival x=-220 z=1800 rot=-15 {
+    note "A travelling carnival beside the balloon field: chair swing, bumper cars and a helter skelter. Bulbs light up at night."
 }
 landmark fair-fountain kind=fountain x=-300 z=1620
 landmark stop-postbox kind=postbox x=-2512 z=1488 rot=75
@@ -302,29 +393,65 @@ landmark atoll-bandstand kind=bandstand x=-4260 z=-2736 {
 }
 
 // The big places towns have.
-landmark moon-stadium kind=stadium x=1400 z=-1640 rot=10 {
+landmark moon-cinema kind=cinema x=1550 z=-1480 rot=-44 {
+    note "Moonharbor's picture house. Its sign and marquee light up at night, and a queue forms."
+}
+landmark hill-museum kind=museum x=-450 z=925 rot=0 {
+    note "The museum on Terrace Hill's middle terrace, up a wide stair."
+}
+landmark stonehold-library kind=library x=-1400 z=-4250 rot=0 {
+    note "Stonehold's old library, a dome over its reading room."
+}
+landmark moon-police kind=police x=1700 z=-1350 rot=-44 {
+    note "Moonharbor's police station, patrol cars out front."
+}
+landmark harbor-police kind=police x=-1650 z=1660 rot=10 {
+    note "Kettle Harbor's police station by the canal."
+}
+landmark south-gas kind=gasstation x=3100 z=-675 rot=0 {
+    note "A gas station on the ring road out along the crescent."
+}
+landmark meadow-golf kind=golf x=-750 z=1950 rot=0 {
+    note "A golf course on the south meadow above the shore."
+}
+landmark meadow-solar kind=solarfarm x=-1050 z=1800 rot=0 {
+    note "A solar farm on the meadow, panels turned to the south."
+}
+landmark hill-theater kind=amphitheater x=-625 z=925 rot=180 {
+    note "An open air theater on Terrace Hill's lowest terrace. Shows run into the evening."
+}
+landmark moon-aquarium kind=aquarium x=2250 z=-680 rot=0 {
+    note "Moonharbor's aquarium on the seafront, a bronze whale's tail out front."
+}
+landmark moon-university kind=university x=1230 z=-1290 rot=10 {
+    note "Moonharbor University: a clock tower over a lawned quad."
+}
+landmark moon-stadium kind=stadium x=1175 z=-1660 rot=10 {
     note "Moonharbor's football ground. Floodlights at night."
 }
-landmark moon-mall kind=mall x=1820 z=-980 rot=200 {
-    note "The big mall on the edge of Moonharbor, its car park full."
+landmark moon-mall kind=mall x=2560 z=-790 rot=0 {
+    note "The big mall out on the crescent flats by the ring road, its car park full."
 }
 landmark hill-waterpark kind=waterpark x=-680 z=1420 rot=0 {
     note "Slides, a wave pool and a lazy river at the foot of the hill city."
 }
-landmark hill-themepark kind=themepark x=-1100 z=1150 rot=15 {
+landmark hill-themepark kind=themepark x=-1080 z=950 rot=15 {
     note "A roller coaster round a castle, a carousel and a drop tower."
+}
+landmark themepark-wheel kind=ferris x=-1035.5 z=884.3 rot=15 {
+    note "The theme park's big wheel, at the back of the park. It turns all day."
 }
 landmark hill-zoo kind=zoo x=-320 z=580 rot=0 {
     note "Elephants, giraffes, zebras, lions and penguins."
 }
 landmark bay-statue kind=statue x=-900 y=0 z=2500 rot=200 {
-    note "A great copper figure on its rock in Kettle bay, lamp held high for ships."
+    note "The harbor dragon: a great copper sea dragon coiled up its rock in Kettle bay, a lamp in its jaws for ships."
 }
 // Civic places.
-landmark moon-hospital kind=hospital x=1744 z=-1128 rot=0 {
+landmark moon-hospital kind=hospital x=1772 z=-1142 rot=0 {
     note "Moonharbor's hospital. The helipad on its roof is a fine place to land."
 }
-landmark kettle-fire kind=firestation x=-1312 z=1493 rot=0
+landmark kettle-fire kind=firestation x=-1560 z=1540 rot=0
 landmark hill-school kind=school x=-671 z=1019 rot=0 {
     note "The school on Terrace Hill, its playground and playing field."
 }
@@ -333,6 +460,12 @@ landmark stonehold-hall kind=townhall x=-1902 z=-4058 rot=0 {
 }
 landmark meadow-farm kind=farm x=-2520 z=1750 rot=10 {
     note "A farm on the meadows: barn, silos, fields of wheat and greens."
+}
+landmark west-farm kind=farm x=-2980 z=1480 rot=-15 {
+    note "A neighbor farm further west on the meadows, bridle path round it."
+}
+landmark brook-farm kind=farm x=-2900 z=2080 rot=25 {
+    note "A farm down toward the south shore."
 }
 landmark tidewater-port kind=port x=235 z=-4150 rot=90 {
     note "Tidewater's container port. Its cranes reach out over the water."
@@ -356,4 +489,172 @@ landmark hill-grocery kind=grocery x=-300 z=1300 rot=10
 landmark moon-grocery kind=grocery x=1640 z=-1340 rot=100
 landmark harbor-park kind=park x=-1300 z=1900 rot=20
 landmark hill-park kind=park x=-200 z=1100 rot=0
-landmark moon-park kind=park x=1160 z=-1640 rot=10
+landmark moon-park kind=park x=1480 z=-1482 rot=10
+
+landmark summit-restaurant kind=restaurant x=-1432 y=627 z=-212 rot=34 {
+    note "Lunch with a view at the top of the summit gondola, the deck out over the drop toward the hill city."
+}
+
+landmark strait-bridge kind=drawbridge x=-1092 y=0 z=-4220 rot=0 text="200" {
+    note "A footbridge across the twins' strait between Stonehold and Tidewater, under the old land bridge. Its middle lifts whenever a boat comes through."
+}
+route strait-sail kind=yacht {
+    note "Sailing up and down the strait between the twins, through the drawbridge."
+    p -1150 -3700
+    p -1100 -3950
+    p -1092 -4100
+    p -1092 -4220
+    p -1095 -4350
+    p -1095 -4450
+    p -1080 -4600
+    p -1060 -4750
+}
+
+landmark kettle-helipad kind=helipad x=-1250 z=1980 rot=0 {
+    note "Kettle Harbor's helipad on the south shore."
+}
+landmark tidewater-helipad kind=helipad x=-260 z=-4250 rot=0 {
+    note "Tidewater's helipad."
+}
+landmark cove-helipad kind=helipad x=4470 z=2540 rot=0 {
+    note "A helipad in the fang cove, by the gondola."
+}
+route heli-north kind=heli {
+    note "A helicopter round the hospital roof in Moonharbor, the pad at Tidewater and the one at Kettle Harbor."
+    p 1772 41.1 -1142
+    p 1758 71.1 -1163
+    p 1684 400.0 -1276
+    p -172 400.0 -4116
+    p -260 16.2 -4250
+    p -281 46.2 -4236
+    p -393 240.0 -4161
+    p -4400 240.0 -1500
+    p -4300 240.0 1700
+    p -1409 240.0 1965
+    p -1250 1.2 1980
+    p -1233 31.2 1962
+    p -1139 330.0 1865
+    p 1661 330.0 -1027
+    p 1755 71.1 -1124
+}
+route heli-south kind=heli {
+    note "A second helicopter round Kettle Harbor, the fang cove and Moonharbor."
+    p -1250 1.2 1980
+    p -1229 31.2 1994
+    p -1119 260.0 2072
+    p 500 260.0 3200
+    p 3600 260.0 4700
+    p 5200 260.0 3400
+    p 4574 260.0 2662
+    p 4470 37.2 2540
+    p 4480 67.2 2517
+    p 4531 400.0 2392
+    p 4900 400.0 1500
+    p 1894 400.0 -1039
+    p 1772 41.1 -1142
+    p 1755 71.1 -1124
+    p 1661 280.0 -1027
+    p -1139 280.0 1865
+    p -1233 31.2 1962
+}
+
+// Clock towers in the big towns, keeping the game's time on every face.
+landmark kettle-clock kind=clocktower x=-1740 z=1500 rot=20 {
+    note "Kettle Harbor's clock tower, by the canals."
+}
+landmark terrace-clock kind=clocktower x=-275 z=1150 rot=0 {
+    note "The clock tower on Terrace Hill's top terrace, seen from all over the island."
+}
+landmark moon-clock kind=clocktower x=1665 z=-1235 rot=10 {
+    note "Moonharbor's clock tower square, by the hospital."
+}
+landmark tidewater-clock kind=clocktower x=-362 z=-3979 rot=0 {
+    note "Tidewater's clock over the harbor town."
+}
+
+// Speedboats zipping round the bays, most towing a water skier or a parasail.
+route kettle-speedboats kind=speedboat {
+    note "Laps of the open water off Kettle Harbor."
+    p -2300 2900
+    p -1000 2900
+    p -500 3400
+    p -1800 3500
+    p -2300 2900
+}
+route lagoon-speedboats kind=speedboat {
+    note "Round the crescent lagoon, clear of its little island."
+    p 2300 -2300
+    p 3200 -2600
+    p 3300 -1700
+    p 2500 -1600
+    p 2300 -2300
+}
+route east-speedboats kind=speedboat {
+    note "The open water east of home, toward fang."
+    p 700 1500
+    p 1600 1700
+    p 1700 2500
+    p 800 2400
+    p 700 1500
+}
+route fang-speedboats kind=speedboat {
+    note "Off fang's west shore."
+    p 1400 2900
+    p 2100 2900
+    p 2000 3900
+    p 1300 3800
+    p 1400 2900
+}
+// Motor yachts cruising slowly up the coasts and back.
+route home-motoryacht kind=motoryacht {
+    note "Up home's east coast and back."
+    p 0 2600
+    p 600 1500
+    p 900 300
+    p 500 -600
+}
+route crescent-motoryacht kind=motoryacht {
+    note "Down the crescent's outer shore and back."
+    p 4700 -2700
+    p 4800 -1000
+    p 4200 600
+}
+
+route heli-rig kind=heli {
+    note "A helicopter between Kettle Harbor and the oil rig out at sea."
+    p -1250 1.2 1980
+    p -1236 31.2 2004
+    p -1360 200.0 2560
+    p -1570 51.7 3092
+    p -1584 21.7 3116
+    p -1598 51.7 3140
+    p -1470 200.0 2560
+    p -1264 31.2 1956
+    p -1250 1.2 1980
+}
+route rig-supply kind=supply {
+    note "A supply ship from Kettle Harbor out to the oil rig, alongside it a while to unload, and home."
+    p -1400 2000
+    p -1430 2300
+    p -1520 2800
+    p -1568 3020
+    p -1568 3160
+    p -1520 3280
+    p -1440 3240
+    p -1380 2800
+    p -1370 2300
+    p -1400 2000
+}
+// Carved in stone, out where few people go.
+landmark elder-faces kind=faces x=-1900 y=0 z=-5045 rot=180 {
+    note "Four great faces carved into the elder isle's north cliff, looking out to sea: a dragon, an owl, a bear and an elder."
+}
+landmark needle-warden-oar kind=warden x=-4608 y=0 z=3420 rot=-90 text="oar" {
+    note "A stone mariner with a great oar, carved out of the west face of the second needle, one of the two wardens at the needles' west gate."
+}
+landmark needle-warden-lamp kind=warden x=-4648 y=0 z=3850 rot=-90 text="lamp" {
+    note "A stone lamplighter carved out of a needle's west face, the other warden at the west gate. The lantern burns at night."
+}
+landmark spine-spiral kind=faces x=-960 y=0 z=-767 rot=180 text="spiral" {
+    note "A great stepped spiral cut high in the spine's south sea cliff, with three round bosses beneath. Nobody knows who made it."
+}

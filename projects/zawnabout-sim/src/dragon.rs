@@ -9,6 +9,11 @@ use glam::{Mat3, Quat, Vec2, Vec3};
 use crate::swoop::Swoop;
 use crate::world::World;
 
+/// How deep a swimming dragon sits in the water (m), and how fast it paddles next to its
+/// walk.
+pub const SWIM_SINK: f32 = 0.85;
+const SWIM_PACE: f32 = 1.3;
+
 crate::params! {
     /// Flight and ground movement tunables.
     pub struct FlightParams in "flight" {
@@ -212,6 +217,8 @@ pub struct Dragon {
     pub brake: f32,
     /// Seconds of tumble left.
     pub tumble: f32,
+    /// Afloat: sat low in the water, paddling instead of walking.
+    pub swimming: bool,
     /// Seconds in the current mode.
     pub mode_time: f32,
     /// Builds from 0 to 1 with steady flapping: more thrust, less drag, higher top speed.
@@ -226,6 +233,9 @@ pub struct Dragon {
     pub flapping: f32,
     /// A tap-to-land flight in progress.
     pub swoop: Option<Swoop>,
+    /// The vehicle stood on last tick, kept while it still holds the dragon up, so
+    /// passing another one never swaps the ride.
+    pub riding: Option<usize>,
     /// Clinging to a wall: which way it faces. Standing, but belly to the wall.
     pub cling: Option<Vec3>,
     /// Which way the dragon faces on its wall: 0 nose up, a quarter turn sideways.
@@ -254,6 +264,7 @@ impl Dragon {
             tuck: 0.0,
             brake: 0.0,
             tumble: 0.0,
+            swimming: false,
             mode_time: 0.0,
             rush: 0.0,
             stride: 0.0,
@@ -261,6 +272,7 @@ impl Dragon {
             bonk: f32::MAX,
             flapping: 0.0,
             swoop: None,
+            riding: None,
             cling: None,
             cling_turn: 0.0,
             breath: 0.0,
@@ -307,6 +319,11 @@ impl Dragon {
     }
 
     fn set_mode(&mut self, mode: Mode) {
+        // Only the ground step finds water underfoot, so anything else leaves it.
+        if mode != Mode::Ground {
+            self.swimming = false;
+            self.riding = None;
+        }
         self.mode = mode;
         self.mode_time = 0.0;
     }
@@ -478,7 +495,7 @@ impl Dragon {
         }
 
         // Turn to face across the wall, and walk the way it faces, as on the ground.
-        self.cling_turn = (self.cling_turn - input.turn * p.walk_turn_rate * dt)
+        self.cling_turn = (self.cling_turn + input.turn * p.walk_turn_rate * dt)
             .rem_euclid(std::f32::consts::TAU);
         let side = Vec3::Y.cross(n).normalize_or(Vec3::X);
         let up = n.cross(side).normalize_or(Vec3::Y);
@@ -535,7 +552,8 @@ impl Dragon {
         let toward = |v: f32, target: f32, rate: f32| v + (target - v) * (rate * dt).min(1.0);
         // Standing on a boat or plane: ride along, turning with it.
         let feet = self.pos.y - p.stand_height;
-        let carrier = world.carrier(self.pos.x, self.pos.z, feet);
+        let carrier = world.carrier_keeping(self.riding, self.pos.x, self.pos.z, feet);
+        self.riding = carrier;
         let ride = match carrier {
             Some(i) => {
                 let (was, now) = (world.traffic.prev[i], world.traffic.poses[i]);
@@ -547,7 +565,8 @@ impl Dragon {
         };
         // A car that runs into you bowls you up and out of its way, head over tail, with
         // stars. Never harmful, just silly.
-        if ride == Vec3::ZERO
+        // Not while riding: a car waiting at a stop is still a seat, not the road.
+        if carrier.is_none()
             && self.bonk > 1.0
             && let Some((car, moved)) = world.struck_by_car(self.pos, feet, p.body_radius)
             && moved.length() > 2.0 * dt
@@ -584,8 +603,13 @@ impl Dragon {
             } else {
                 self.run
             };
+            // No running in the water, only a steady paddle.
+            if self.swimming {
+                self.run = 0.0;
+            }
             let running = smoothstep(0.0, 1.0, self.run);
-            let top = p.walk_speed + (p.run_speed - p.walk_speed) * running;
+            let top = (p.walk_speed + (p.run_speed - p.walk_speed) * running)
+                * if self.swimming { SWIM_PACE } else { 1.0 };
             let target = input.pitch.max(-0.4) * top;
             // Faster than walking, and not running, means a run-out from a landing: slide
             // down gently, but stop short on a roof or a rock.
@@ -638,13 +662,19 @@ impl Dragon {
         let deck = carrier
             .and_then(|i| world.deck_of(i, self.pos.x, self.pos.z))
             .filter(|top| (top - feet).abs() < 1.0);
-        let support = deck.unwrap_or_else(|| world.support(self.pos.x, self.pos.z, feet + 0.6));
-        if support < feet - 0.6 {
+        // Afloat, the feet hang below the water, so look for it a little higher.
+        let sunk = if self.swimming { SWIM_SINK } else { 0.0 };
+        let support =
+            deck.unwrap_or_else(|| world.support(self.pos.x, self.pos.z, feet + 0.6 + sunk));
+        if support < feet + sunk - 0.6 {
             // Walked off a ledge.
+            self.swimming = false;
             self.set_mode(Mode::Air);
             return;
         }
-        self.pos.y = support + p.stand_height;
+        self.swimming = deck.is_none() && world.afloat(self.pos.x, self.pos.z, support);
+        let sunk = if self.swimming { SWIM_SINK } else { 0.0 };
+        self.pos.y = support + p.stand_height - sunk;
 
         let wants_off = input.flap_taps > 0 || (input.flap && self.mode_time > 0.4);
         if wants_off && self.tumble <= 0.0 && self.mode_time > 0.15 {

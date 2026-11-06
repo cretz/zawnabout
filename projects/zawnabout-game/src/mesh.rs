@@ -21,6 +21,9 @@ pub const METAL: i8 = 70;
 /// Vertex flag for boats afloat, which rock on the swell. Small, as it also counts as
 /// thinness when lit from behind.
 pub const BOB: i8 = 20;
+/// Vertex flag for roads and their bridges, drawn a touch nearer the camera than they
+/// are so the coarse far terrain never shows through them.
+pub const ROAD: i8 = 30;
 
 /// An sRGB color from a hex literal such as `0xF08A5D`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

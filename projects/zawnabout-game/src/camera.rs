@@ -116,17 +116,27 @@ impl Camera {
         let want_pos = t.pos - back * dist + Vec3::Y * (p.height + slow * p.hover_height);
         self.pos = self.pos.lerp(want_pos, ease(p.catch_up));
         // Stay out of spires and rocks, and above whatever is underneath.
-        self.pos = world.push_out(self.pos, 1.0).0;
-        let floor = world.support(self.pos.x, self.pos.z, self.pos.y) + 1.2;
+        // Only what stands still: vehicles move tick by tick, and the view would shake.
+        self.pos = world.push_out_still(self.pos, 1.0).0;
+        let floor = world.support_still(self.pos.x, self.pos.z, self.pos.y) + 1.2;
         self.pos.y = self.pos.y.max(floor);
-        // Keep the view of the dragon clear: if ground rises between them, move in.
+        // Keep the view of the dragon clear: if ground rises between them, or a cave wall
+        // or pillar stands in the way, move in. Rock is drawn in facets that jut a little
+        // inside its true surface, so keep a good margin off it.
         let from = t.pos + Vec3::Y * 1.0;
         let steps = 24;
+        let margin = 1.6;
         for i in 1..=steps {
             let q = from.lerp(self.pos, i as f32 / steps as f32);
-            if world.support(q.x, q.z, q.y + 0.5) > q.y - 0.8 {
+            if world.support_still(q.x, q.z, q.y + 0.5) > q.y - 0.8 || world.terrain.sdf(q) < margin
+            {
                 let back = from.lerp(self.pos, (i - 1) as f32 / steps as f32);
-                self.pos = back + Vec3::Y * 0.5;
+                let up = back + Vec3::Y * 0.5;
+                self.pos = if world.terrain.sdf(up) >= margin {
+                    up
+                } else {
+                    back
+                };
                 break;
             }
         }

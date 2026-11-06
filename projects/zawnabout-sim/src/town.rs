@@ -68,6 +68,14 @@ pub enum Kind {
     /// A chairlift's chair and a gondola's cabin, hanging from the cable.
     LiftChair,
     LiftCabin,
+    /// A fairground wheel's car, hanging level from its pin as the wheel turns.
+    FerrisCar,
+    /// A flat tour boat on a cave lake or river, poled along by a boatman, a lantern at
+    /// its bow and sightseers aboard.
+    Punt,
+    /// A fishing boat out of a harbor: a wheelhouse, outrigger booms and nets, with gulls
+    /// following it.
+    Trawler,
     /// A lift's pylon, `size.z` the width between its two cables, and the station at
     /// each end where the cable turns round.
     LiftTower,
@@ -122,8 +130,69 @@ pub enum Kind {
     Metro,
     /// A subway entrance in the street: a railed opening over the stair shaft.
     MetroGate,
+    /// A wide flight of stairs down a tunnel to a subway hall.
+    MetroStairs,
+    /// A restaurant up a mountain by a lift's top station, its deck out over the drop.
+    Restaurant,
+    /// A footbridge over a strait whose middle lifts to let boats through.
+    Drawbridge,
+    /// A wooden gallery round the walls of a carved hall, with stairs up to it.
+    Gallery,
+    /// A skate park: a concrete pad with ramps and rails.
+    SkatePark,
     /// A market square: stalls under striped awnings, piled with produce.
     Market,
+    /// A mushroom farm on a cavern floor: raised beds in rows, lanterns and a hut.
+    ShroomFarm,
+    /// A crystal mine: a timber-framed adit in a rock outcrop, rails out to the tip.
+    Mine,
+    /// A lantern-lit cafe: a kiosk, tables and stools under strings of lights.
+    Cafe,
+    /// A town library: a stone hall with a columned porch, a dome and reading benches.
+    Library,
+    /// A grand museum: a wide stair up to a columned front, banners and a sculpture.
+    Museum,
+    /// A picture house: a tall lit sign, a marquee of bulbs and posters by the doors.
+    Cinema,
+    /// A low concrete weir across a lake's outlet, with sluice gates and a gatehouse.
+    Weir,
+    /// Two steel pipes running down a slope from a weir to a power house.
+    Penstock,
+    /// A hydro power house: a turbine hall, the tailrace out to the river, and a
+    /// transformer yard.
+    Hydro,
+    /// A motor racing circuit: an oval of track with kerbs, a grandstand and pits.
+    Racetrack,
+    /// A racing car lapping a racetrack.
+    RaceCar,
+    /// A roller coaster car, in trains round a theme park's track.
+    CoasterCar,
+    /// A drop tower's ring of seats, riding up its tower and dropping.
+    DropRing,
+    /// A swimming pool in a back garden.
+    YardPool,
+    /// A helipad on the ground.
+    Helipad,
+    /// A town clock tower on a little square.
+    ClockTower,
+    /// A helicopter hopping between helipads.
+    Helicopter,
+    /// A steel pylon carrying a power line, its arms across the line.
+    Pylon,
+    /// A seaside aquarium: a glass hall with tanks of fish, a whale's tail out front.
+    Aquarium,
+    /// A university: a main hall with a clock tower round a lawned quad.
+    University,
+    /// A police station: a brick block with a blue lamp over the door and cars out front.
+    Police,
+    /// A gas station: a canopy over the pumps, a little shop and a price sign.
+    GasStation,
+    /// An open air theater: a half bowl of stone seats round a stage with a shell.
+    Amphitheater,
+    /// A solar farm: rows of tilted panels on posts, fenced, with an inverter hut.
+    SolarFarm,
+    /// A golf course: fairways, greens with flags, bunkers and a clubhouse.
+    Golf,
     Observatory,
     /// A fire lookout tower in the woods.
     Lookout,
@@ -143,6 +212,37 @@ pub enum Kind {
     /// One tower of a suspension bridge: two legs either side of the deck, x across it,
     /// joined by beams.
     BridgeTower,
+    /// A castaway's camp on a tiny island.
+    Castaway,
+    /// A speedboat zipping about the bays, some towing a water skier or a parasail.
+    Speedboat,
+    /// A motor yacht cruising slowly along the coast, a sun deck up top.
+    MotorYacht,
+    /// Four great faces carved into a sea cliff: a dragon, an owl, a bear and an elder.
+    Faces,
+    /// A giant stone guardian standing in the sea, with an oar or a lantern staff.
+    Warden,
+    /// A supply ship running out to the oil rig: a tall bridge forward and containers
+    /// on its long low deck.
+    Supply,
+    /// A balloon field, where balloons land and lift off.
+    BalloonField,
+    /// Rocks off the shore where seals lie about.
+    Seals,
+    /// A travelling carnival: chair swing, bumper cars and a helter skelter.
+    Carnival,
+    /// A churchyard with a chapel.
+    Cemetery,
+    /// A factory with a steaming chimney.
+    Factory,
+    /// A power station with cooling towers.
+    PowerStation,
+    /// An oil rig at sea, with a helipad.
+    OilRig,
+    /// A roadside billboard.
+    Billboard,
+    /// A concrete dam holding back a reservoir.
+    Dam,
 }
 
 /// A bridge tower leg's width across the deck and depth along it.
@@ -176,6 +276,63 @@ pub struct Building {
 }
 
 impl Building {
+    /// A landmark piece as a shape in the world.
+    pub fn piece_shape(&self, p: &crate::landmark::Piece) -> Shape {
+        match p.form {
+            crate::landmark::Form::Box {
+                at,
+                half,
+                yaw,
+                roof,
+            } => Shape::Block(Block {
+                base: self.at(at.x, at.y, at.z),
+                half,
+                axis: self.turned(yaw),
+                roof,
+            }),
+            crate::landmark::Form::Round { at, h, r0, r1 } => {
+                Shape::Frustum(crate::shape::Frustum {
+                    base: self.at(at.x, at.y, at.z),
+                    height: h,
+                    r0,
+                    r1,
+                    spin: 0.0,
+                })
+            }
+            crate::landmark::Form::Ball { at, r } => Shape::Sphere {
+                center: self.at(at.x, at.y, at.z),
+                radius: r,
+            },
+            // Letters are painted on and never solid, but have a place all the same.
+            crate::landmark::Form::Letter { at, cell, .. } => Shape::Sphere {
+                center: self.at(at.x, at.y + cell.abs() * 2.5, at.z),
+                radius: cell.abs() * 1.5,
+            },
+        }
+    }
+
+    /// The pools of water in a landmark, such as a water park's or a fountain's, as shapes
+    /// whose tops are the water.
+    pub fn pools(&self) -> Vec<Shape> {
+        if self.kind == Kind::YardPool {
+            return vec![self.block(
+                self.pos - Vec3::Y * 1.2,
+                self.size.x - 1.0,
+                1.15,
+                self.size.z - 1.0,
+                0.0,
+            )];
+        }
+        if !crate::landmark::KINDS.iter().any(|(_, k)| *k == self.kind) {
+            return Vec::new();
+        }
+        crate::landmark::pieces(self.kind, self.seed, self.text)
+            .iter()
+            .filter(|p| p.mat == crate::landmark::Mat::Water)
+            .map(|p| self.piece_shape(p))
+            .collect()
+    }
+
     /// World direction of local z, where the front faces.
     pub fn front(&self) -> Vec2 {
         Vec2::new(-self.axis.y, self.axis.x)
@@ -245,31 +402,12 @@ impl Building {
                 self.block(self.pos, s.x, s.y, s.z, self.roof),
                 round(self.at(s.x * 0.5 + 3.0, 0.0, 0.0), s.y * 2.6, 3.4, 0.3),
             ],
-            Kind::Lantern | Kind::Canoe => Vec::new(),
+            Kind::Lantern | Kind::Canoe | Kind::YardPool => Vec::new(),
             k if crate::landmark::KINDS.iter().any(|(_, l)| *l == k) => {
                 crate::landmark::pieces(k, self.seed, self.text)
                     .into_iter()
                     .filter(|p| p.solid)
-                    .map(|p| match p.form {
-                        crate::landmark::Form::Box {
-                            at,
-                            half,
-                            yaw,
-                            roof,
-                        } => Shape::Block(Block {
-                            base: self.at(at.x, at.y, at.z),
-                            half,
-                            axis: self.turned(yaw),
-                            roof,
-                        }),
-                        crate::landmark::Form::Round { at, h, r0, r1 } => {
-                            round(self.at(at.x, at.y, at.z), h, r0, r1)
-                        }
-                        crate::landmark::Form::Ball { at, r } => Shape::Sphere {
-                            center: self.at(at.x, at.y, at.z),
-                            radius: r,
-                        },
-                    })
+                    .map(|p| self.piece_shape(&p))
                     .collect()
             }
             Kind::Crane => vec![round(self.pos, s.y, 1.2, 1.2)],
@@ -497,10 +635,27 @@ impl<'a> Planner<'a> {
                 .water(p.x, p.y, g)
                 .filter(|w| !under || *w - g < 15.0)
         };
+        // Underground, a road overhead is no matter, only a line through the cave at the
+        // building's own height, such as a tour railway on its trestles.
+        let cave_line = |p: Vec2, g: f32| {
+            let def = self.terrain.def;
+            def.roads.iter().enumerate().any(|(i, r)| {
+                let prof = self.terrain.road_points(i);
+                r.pts.windows(2).zip(prof.windows(2)).any(|(w, y)| {
+                    let (a, b) = (Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]));
+                    let ab = b - a;
+                    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+                    (a + ab * t).distance(p) < r.w * 0.5 + 4.0 && (y[0].y - g).abs() < 15.0
+                })
+            })
+        };
         for p in corners.iter().chain([&c]) {
             let g = self.ground(*p);
             lo = lo.min(g);
             hi = hi.max(g);
+            if under && cave_line(*p, g) {
+                return false;
+            }
             if let Some(w) = wet_at(*p, g) {
                 water = water.max(w);
             }
@@ -1207,6 +1362,56 @@ impl<'a> Planner<'a> {
 
     /// Lamps along the lanes: lanterns in cave towns and simple villages, street lamps
     /// everywhere else.
+    /// Swimming pools behind some of the houses in modern towns, where the garden is
+    /// level and dry.
+    fn yard_pools(&mut self) {
+        if self.town.under
+            || self.town.tech < Tech::Mid
+            || matches!(self.town.style, Style::Cavern | Style::Stilts)
+        {
+            return;
+        }
+        let homes: Vec<(Vec2, Vec2, Vec2, f32)> = self
+            .out
+            .iter()
+            .filter(|b| b.kind == Kind::House)
+            .map(|b| (Vec2::new(b.pos.x, b.pos.z), b.axis, b.front(), b.size.z))
+            .collect();
+        for (i, (c, axis, front, depth)) in homes.into_iter().enumerate() {
+            if crate::shape::hash(i as u32 * 7919 + 101) > 0.16 {
+                continue;
+            }
+            let size = Vec3::new(7.0, 0.3, 4.5);
+            let at = c - front * (depth * 0.5 + size.z * 0.5 + 2.5);
+            let foot = Foot {
+                c: at,
+                axis,
+                half: Vec2::new(size.x, size.z) * 0.5,
+            };
+            if !self.free(&foot, 0.6) || self.terrain.road_spot(at.x, at.y, 3.0).is_some() {
+                continue;
+            }
+            let corners = [
+                at + axis * 3.5 + front * 2.25,
+                at - axis * 3.5 + front * 2.25,
+                at + axis * 3.5 - front * 2.25,
+                at - axis * 3.5 - front * 2.25,
+            ];
+            let gs: Vec<f32> = corners.iter().map(|p| self.ground(*p)).collect();
+            let (lo, hi) = gs
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(a, b), g| (a.min(*g), b.max(*g)));
+            let dry = corners
+                .iter()
+                .zip(&gs)
+                .all(|(p, g)| self.terrain.water(p.x, p.y, *g).is_none());
+            if hi - lo > 0.8 || !dry {
+                continue;
+            }
+            self.push(Kind::YardPool, Vec3::new(at.x, hi, at.y), axis, size, 0.0);
+        }
+    }
+
     fn lanterns(&mut self) {
         let lantern = matches!(self.town.style, Style::Cavern | Style::Stilts);
         let (every, lamp) = if lantern {
@@ -1467,7 +1672,8 @@ fn sites(terrain: &Terrain, rng: &mut Rng, out: &mut Vec<Building>) {
 
 type Push<'a> = dyn FnMut(&mut Vec<Building>, Kind, Vec3, Vec2, Vec3, f32, f32, &mut Rng) + 'a;
 
-/// Terminal, tower, hangars and a parked airliner beside the runway nearest the site.
+/// Terminal, tower, hangars and a parked airliner beside the runway nearest the site,
+/// kept close enough to it to leave room for the road and railway behind.
 fn airport(terrain: &Terrain, m: &Mark, push: &mut Push, out: &mut Vec<Building>, rng: &mut Rng) {
     let at = Vec2::new(m.pos[0], m.pos[2]);
     let Some((ri, r)) = terrain
@@ -1496,7 +1702,7 @@ fn airport(terrain: &Terrain, m: &Mark, push: &mut Push, out: &mut Vec<Building>
     let off = r.w * 0.5;
     let place = |along: f32, out_by: f32| mid + dir * along + side * (off + out_by);
     let g = |p: Vec2| terrain.height(p.x, p.y).min(y + 2.0) - 0.4;
-    let t = place(-60.0, 70.0);
+    let t = place(-60.0, 58.0);
     push(
         out,
         Kind::Terminal,
@@ -1507,7 +1713,7 @@ fn airport(terrain: &Terrain, m: &Mark, push: &mut Push, out: &mut Vec<Building>
         0.0,
         rng,
     );
-    let c = place(90.0, 60.0);
+    let c = place(90.0, 55.0);
     push(
         out,
         Kind::ControlTower,
@@ -1519,7 +1725,7 @@ fn airport(terrain: &Terrain, m: &Mark, push: &mut Push, out: &mut Vec<Building>
         rng,
     );
     for k in 0..2 {
-        let h = place(170.0 + k as f32 * 55.0, 60.0);
+        let h = place(170.0 + k as f32 * 55.0, 52.0);
         push(
             out,
             Kind::Hangar,
@@ -1531,7 +1737,7 @@ fn airport(terrain: &Terrain, m: &Mark, push: &mut Push, out: &mut Vec<Building>
             rng,
         );
     }
-    let p = place(-60.0, 28.0);
+    let p = place(-60.0, 20.0);
     push(
         out,
         Kind::Airliner,
@@ -1569,6 +1775,7 @@ pub fn place(terrain: &Terrain, seed: u64) -> Vec<Building> {
             p.fronts(&lines);
             p.fill();
             p.lanterns();
+            p.yard_pools();
             if p.out.len() < p.plan.max || spread > 2.5 {
                 break p.out;
             }

@@ -8,20 +8,114 @@ use std::f32::consts::TAU;
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
 use zawnabout_sim::bridge::Suspension;
 use zawnabout_sim::shape::hash;
-use zawnabout_sim::terrain::{CoverKind, Style, Tech, Terrain};
+use zawnabout_sim::terrain::{Style, Tech, Terrain};
 use zawnabout_sim::town::{Building, Kind};
 
-use crate::mesh::{MeshBuilder, Rgb};
+use crate::mesh::{MeshBuilder, Rgb, Vertex};
 
 /// Town tiles are this big, for culling and detail.
 pub const TILE: f32 = 512.0;
 
-/// A tile's meshes: near and far, and whether it is under ground.
+/// A tile's meshes: near and far, and whether it is under ground. Heavy buildings keep
+/// their own near and far meshes, so their detail shows only close to them.
+#[derive(Default)]
 pub struct Tile {
     pub near: MeshBuilder,
     pub far: MeshBuilder,
     pub cave: bool,
+    pub heavy: Vec<(MeshBuilder, MeshBuilder)>,
+    /// Painted letters on its signs.
+    pub letters: MeshBuilder,
+    /// What shows from far across the world: the far meshes of everything but small
+    /// things like lanterns and pools, and the roads.
+    pub distant: MeshBuilder,
 }
+
+/// Buildings whose far mesh reaches less than this from its middle (m) leave the
+/// distant mesh.
+const SMALL: f32 = 4.5;
+/// Buildings up to this reach (m) merge into blocks of this size in the distant mesh,
+/// bigger ones keep their own shape.
+const BIG: f32 = 16.0;
+const BLOCK: f32 = 30.0;
+
+/// Buildings merged for the distant mesh: the box round them, and their walls' and roofs'
+/// colors summed.
+struct Block {
+    lo: Vec3,
+    hi: Vec3,
+    wall: [u32; 4],
+    roof: [u32; 4],
+    n: u32,
+}
+
+impl Block {
+    fn new() -> Self {
+        Block {
+            lo: Vec3::splat(f32::MAX),
+            hi: Vec3::splat(f32::MIN),
+            wall: [0; 4],
+            roof: [0; 4],
+            n: 0,
+        }
+    }
+
+    /// Adds a building by its far mesh and that mesh's box: its lowest vertex's color
+    /// for the walls, its highest's for the roof.
+    fn add(&mut self, verts: &[Vertex], lo: Vec3, hi: Vec3) {
+        self.lo = self.lo.min(lo);
+        self.hi = self.hi.max(hi);
+        let low = verts.iter().min_by(|a, b| a.pos[1].total_cmp(&b.pos[1]));
+        let high = verts.iter().max_by(|a, b| a.pos[1].total_cmp(&b.pos[1]));
+        if let (Some(low), Some(high)) = (low, high) {
+            for k in 0..4 {
+                self.wall[k] += low.color[k] as u32;
+                self.roof[k] += high.color[k] as u32;
+            }
+            self.n += 1;
+        }
+    }
+
+    /// One box: walls round, a roof on top, no floor.
+    fn mesh(&self, out: &mut MeshBuilder) {
+        let avg = |c: [u32; 4]| c.map(|v| (v / self.n.max(1)) as u8);
+        let (wall, roof) = (avg(self.wall), avg(self.roof));
+        let rgb = |c: [u8; 4]| Rgb(((c[0] as u32) << 16) | ((c[1] as u32) << 8) | c[2] as u32);
+        let from = out.verts.len();
+        let (lo, hi) = (self.lo, self.hi);
+        let v = Vec3::new;
+        let c = [
+            v(lo.x, 0.0, lo.z),
+            v(hi.x, 0.0, lo.z),
+            v(hi.x, 0.0, hi.z),
+            v(lo.x, 0.0, hi.z),
+        ];
+        for i in 0..4 {
+            let (a, b) = (c[i], c[(i + 1) % 4]);
+            out.quad(
+                a + Vec3::Y * hi.y,
+                b + Vec3::Y * hi.y,
+                b + Vec3::Y * lo.y,
+                a + Vec3::Y * lo.y,
+                rgb(wall),
+            );
+        }
+        let top = from + 4 * 6;
+        out.quad(
+            c[3] + Vec3::Y * hi.y,
+            c[2] + Vec3::Y * hi.y,
+            c[1] + Vec3::Y * hi.y,
+            c[0] + Vec3::Y * hi.y,
+            rgb(roof),
+        );
+        for (k, vert) in out.verts[from..].iter_mut().enumerate() {
+            vert.color[3] = if k < top - from { wall[3] } else { roof[3] };
+        }
+    }
+}
+
+/// Buildings with more triangles than this up close draw on their own.
+const HEAVY: usize = 1800;
 
 /// Palette picks for one building.
 struct Colors {
@@ -180,6 +274,8 @@ struct Parts {
     glow: Vec<usize>,
     /// Indices of triangles that light up at night.
     night: Vec<usize>,
+    /// Painted letters, for the letters pipeline (see `fs_letter`).
+    letters: Vec<Vertex>,
 }
 
 impl Parts {
@@ -188,6 +284,7 @@ impl Parts {
             m: MeshBuilder::new(),
             glow: Vec::new(),
             night: Vec::new(),
+            letters: Vec::new(),
         }
     }
 
@@ -491,7 +588,6 @@ impl Parts {
     }
 }
 
-/// Builds one building into `near` and `far`, in world space.
 /// The top of a house's chimney in its own frame, if it has one.
 pub fn chimney(b: &Building) -> Option<Vec3> {
     let v = b.seed >> 5;
@@ -500,7 +596,14 @@ pub fn chimney(b: &Building) -> Option<Vec3> {
         .then(|| Vec3::new(b.size.x * 0.28, b.size.y + b.roof * 1.25, -b.size.z * 0.18))
 }
 
-fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut MeshBuilder) {
+/// Builds one building into `near` and `far`, in world space.
+fn building(
+    b: &Building,
+    terrain: &Terrain,
+    near: &mut MeshBuilder,
+    far: &mut MeshBuilder,
+    letters: &mut MeshBuilder,
+) {
     let c = colors(b);
     let (w, h, d) = (b.size.x, b.size.y, b.size.z);
     let mut n = Parts::new();
@@ -844,6 +947,208 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
                 );
             }
         }
+        Kind::Train if b.seed >= zawnabout_sim::traffic::MINE_ENGINE as u32 => {
+            // A mine train on the rails at the origin, x along the track: a squat engine
+            // in yellow and black with a headlamp, or an iron ore cart with a pair of riders
+            // in hard hats.
+            let (iron, rust, dark) = (Rgb(0x5A5E66), Rgb(0x8A5A3C), Rgb(0x2A2A2E));
+            n.cube(
+                Vec3::new(0.0, h * 0.12, 0.0),
+                Vec3::new(w * 0.44, h * 0.1, d * 0.38),
+                dark,
+            );
+            if b.seed == zawnabout_sim::traffic::MINE_ENGINE as u32 {
+                let yellow = Rgb(0xF2C14E);
+                for p in [&mut n, &mut f] {
+                    p.cube(
+                        Vec3::new(w * 0.1, h * 0.4, 0.0),
+                        Vec3::new(w * 0.34, h * 0.2, d * 0.4),
+                        yellow,
+                    );
+                    p.cube(
+                        Vec3::new(-w * 0.28, h * 0.6, 0.0),
+                        Vec3::new(w * 0.16, h * 0.4, d * 0.44),
+                        yellow,
+                    );
+                }
+                n.cube(
+                    Vec3::new(-w * 0.28, h * 1.02, 0.0),
+                    Vec3::new(w * 0.2, h * 0.04, d * 0.48),
+                    dark,
+                );
+                for k in 0..4 {
+                    n.cube(
+                        Vec3::new(w * (0.42 - k as f32 * 0.08), h * 0.4, 0.0),
+                        Vec3::new(w * 0.02, h * 0.21, d * 0.41),
+                        dark,
+                    );
+                }
+                let from = n.m.verts.len();
+                n.cube(
+                    Vec3::new(w * 0.45, h * 0.55, 0.0),
+                    Vec3::new(0.05, 0.18, 0.18),
+                    Rgb(0xFFF2C0),
+                );
+                n.m.glow_from(from);
+            } else {
+                // The tub: sloped iron sides, rust streaked, open at the top.
+                for p in [&mut n, &mut f] {
+                    p.cube(
+                        Vec3::new(0.0, h * 0.3, 0.0),
+                        Vec3::new(w * 0.42, h * 0.08, d * 0.36),
+                        iron,
+                    );
+                }
+                for z in [-1.0f32, 1.0] {
+                    n.cube(
+                        Vec3::new(0.0, h * 0.5, z * d * 0.4),
+                        Vec3::new(w * 0.46, h * 0.2, 0.06),
+                        iron,
+                    );
+                    n.cube(
+                        Vec3::new(0.0, h * 0.62, z * d * 0.41),
+                        Vec3::new(w * 0.46, h * 0.03, 0.07),
+                        rust,
+                    );
+                }
+                for x in [-1.0f32, 1.0] {
+                    n.cube(
+                        Vec3::new(x * w * 0.44, h * 0.5, 0.0),
+                        Vec3::new(0.06, h * 0.2, d * 0.4),
+                        iron,
+                    );
+                }
+                let shirts = [Rgb(0x4A90C8), Rgb(0xE0564A), Rgb(0x6BBF7A), Rgb(0xF2F2F2)];
+                for (j, x) in [-0.22f32, 0.22].into_iter().enumerate() {
+                    let s = b.seed * 7 + j as u32;
+                    let at = Vec3::new(x * w, h * 0.38, 0.0);
+                    n.cube(
+                        at + Vec3::Y * 0.35,
+                        Vec3::new(0.2, 0.32, 0.22),
+                        shirts[s as usize % 4],
+                    );
+                    n.cube(
+                        at + Vec3::Y * 0.85,
+                        Vec3::new(0.14, 0.15, 0.14),
+                        Rgb(0xE8B890),
+                    );
+                    n.cube(
+                        at + Vec3::Y * 1.04,
+                        Vec3::new(0.18, 0.06, 0.18),
+                        Rgb(0xF2C14E),
+                    );
+                }
+            }
+        }
+        Kind::Train if b.seed >= zawnabout_sim::traffic::TOUR_ENGINE as u32 => {
+            // A cave tour train on the rails at the origin, x along the track: a little
+            // green engine with a cab and a lamp, or an open carriage with benches under a
+            // striped canopy, full of sightseers.
+            let dark = Rgb(0x3A3A40);
+            let green = Rgb(0x2F7A4A);
+            n.cube(
+                Vec3::new(0.0, h * 0.12, 0.0),
+                Vec3::new(w * 0.46, h * 0.1, d * 0.42),
+                dark,
+            );
+            if b.seed == zawnabout_sim::traffic::TOUR_ENGINE as u32 {
+                for p in [&mut n, &mut f] {
+                    p.cube(
+                        Vec3::new(w * 0.12, h * 0.42, 0.0),
+                        Vec3::new(w * 0.36, h * 0.2, d * 0.42),
+                        green,
+                    );
+                    p.cube(
+                        Vec3::new(-w * 0.3, h * 0.42, 0.0),
+                        Vec3::new(w * 0.18, h * 0.42, d * 0.48),
+                        green,
+                    );
+                }
+                n.cube(
+                    Vec3::new(-w * 0.3, h * 0.86, 0.0),
+                    Vec3::new(w * 0.22, h * 0.04, d * 0.52),
+                    Rgb(0xC8C4BC),
+                );
+                let from = n.m.verts.len();
+                n.cube(
+                    Vec3::new(-w * 0.3, h * 0.66, 0.0),
+                    Vec3::new(w * 0.15, h * 0.1, d * 0.49),
+                    DARK_GLASS,
+                );
+                n.night_from(from);
+                n.post(Vec3::new(w * 0.3, h * 0.86, 0.0), h * 0.24, 0.18, dark);
+                let from = n.m.verts.len();
+                n.cube(
+                    Vec3::new(w * 0.49, h * 0.45, 0.0),
+                    Vec3::new(0.05, 0.16, 0.16),
+                    Rgb(0xFFF2C0),
+                );
+                n.m.glow_from(from);
+            } else {
+                // White, for each carriage's own color as a tint.
+                let paint = WHITE;
+                for p in [&mut n, &mut f] {
+                    p.cube(
+                        Vec3::new(0.0, h * 0.27, 0.0),
+                        Vec3::new(w * 0.5, h * 0.05, d * 0.5),
+                        Rgb(0x8B5E3C),
+                    );
+                    p.cube(
+                        Vec3::new(0.0, h * 0.95, 0.0),
+                        Vec3::new(w * 0.52, h * 0.04, d * 0.54),
+                        paint,
+                    );
+                }
+                for z in [-1.0f32, 1.0] {
+                    n.cube(
+                        Vec3::new(0.0, h * 0.38, z * d * 0.48),
+                        Vec3::new(w * 0.5, h * 0.08, 0.04),
+                        paint,
+                    );
+                    for x in [-1.0f32, 1.0] {
+                        n.cube(
+                            Vec3::new(x * w * 0.47, h * 0.62, z * d * 0.47),
+                            Vec3::new(0.06, h * 0.32, 0.06),
+                            STEEL,
+                        );
+                    }
+                }
+                // Three benches across, two sightseers on most.
+                let shirts = [
+                    Rgb(0xE0564A),
+                    Rgb(0x4A90C8),
+                    Rgb(0xF2C14E),
+                    Rgb(0x6BBF7A),
+                    Rgb(0xE88AB0),
+                    Rgb(0xF2F2F2),
+                ];
+                for k in 0..3u32 {
+                    let x = (k as f32 - 1.0) * w * 0.3;
+                    n.cube(
+                        Vec3::new(x - 0.25, h * 0.4, 0.0),
+                        Vec3::new(0.25, 0.08, d * 0.42),
+                        Rgb(0x6E4A33),
+                    );
+                    for (j, z) in [-0.5f32, 0.5].into_iter().enumerate() {
+                        let s = b.seed * 13 + k * 5 + j as u32;
+                        if s % 7 == 3 {
+                            continue;
+                        }
+                        let at = Vec3::new(x - 0.2, h * 0.4 + 0.1, z * d * 0.5);
+                        n.cube(
+                            at + Vec3::Y * 0.35,
+                            Vec3::new(0.2, 0.32, 0.22),
+                            shirts[s as usize % 6],
+                        );
+                        n.cube(
+                            at + Vec3::Y * 0.85,
+                            Vec3::new(0.14, 0.15, 0.14),
+                            Rgb(0xE8B890),
+                        );
+                    }
+                }
+            }
+        }
         Kind::Train if b.seed >= zawnabout_sim::traffic::METRO_CAB as u32 => {
             // A metro car on the rails at the origin, x along the track: brushed steel with
             // a blue band, wide windows lit inside, doors down both sides, and a sloped cab
@@ -1035,6 +1340,416 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
                 );
             }
         }
+        Kind::Pylon => {
+            // A tapered steel pole with two cross arms and insulators hanging off their
+            // ends, across the line (local z).
+            use zawnabout_sim::landmark::{PYLON_ARMS, PYLON_TALL};
+            let steel = Rgb(0x9AA0A8);
+            for p in [&mut n, &mut f] {
+                p.ring(6, 0.0, 0.7, PYLON_TALL, 0.3, steel);
+            }
+            for (y, out) in PYLON_ARMS {
+                n.cube(
+                    Vec3::new(0.0, y + 0.3, 0.0),
+                    Vec3::new(0.25, 0.25, out + 0.3),
+                    steel,
+                );
+                for s in [-1.0f32, 1.0] {
+                    n.post(Vec3::new(0.0, y + 0.2, s * out), 0.9, 0.12, Rgb(0xE8E4DC));
+                }
+            }
+        }
+        Kind::Helicopter => {
+            // A helicopter on its skids at the origin, nose toward +x: a rounded cabin in
+            // red with a white band and big windows, a tail boom with a fin and a little
+            // tail rotor, and the rotor mast. Its blades turn, drawn by the client.
+            let (red, white, dark) = (Rgb(0xD8473A), Rgb(0xF2F2F2), Rgb(0x2A2A30));
+            for p in [&mut n, &mut f] {
+                p.cube(Vec3::new(0.4, 1.4, 0.0), Vec3::new(2.4, 0.9, 1.1), red);
+                p.cube(Vec3::new(-3.6, 1.6, 0.0), Vec3::new(2.4, 0.25, 0.22), red);
+            }
+            n.cube(
+                Vec3::new(0.2, 1.25, 0.0),
+                Vec3::new(2.45, 0.18, 1.12),
+                white,
+            );
+            n.cube(
+                Vec3::new(2.2, 1.75, 0.0),
+                Vec3::new(0.7, 0.5, 1.0),
+                Rgb(0x9FC7DE),
+            );
+            n.cube(
+                Vec3::new(0.6, 1.8, 1.12),
+                Vec3::new(0.9, 0.35, 0.02),
+                Rgb(0x9FC7DE),
+            );
+            n.cube(
+                Vec3::new(0.6, 1.8, -1.12),
+                Vec3::new(0.9, 0.35, 0.02),
+                Rgb(0x9FC7DE),
+            );
+            n.cube(Vec3::new(-5.8, 2.3, 0.0), Vec3::new(0.5, 0.8, 0.06), red);
+            n.cube(Vec3::new(-5.9, 2.4, 0.3), Vec3::new(0.06, 0.7, 0.05), dark);
+            n.post(Vec3::new(0.3, 2.3, 0.0), 0.7, 0.12, dark);
+            for z in [-0.9f32, 0.9] {
+                n.cube(Vec3::new(0.3, 0.15, z), Vec3::new(2.2, 0.06, 0.06), dark);
+                for x in [-1.0f32, 1.4] {
+                    n.cube(
+                        Vec3::new(x, 0.35, z * 0.9),
+                        Vec3::new(0.05, 0.25, 0.05),
+                        dark,
+                    );
+                }
+            }
+        }
+        Kind::YardPool => {
+            // A back garden pool: a paved rim round blue water, steps at one end and a
+            // lounger beside it.
+            let rim = Rgb(0xD9D2C4);
+            let (hx, hz) = (w * 0.5, d * 0.5);
+            for p in [&mut n, &mut f] {
+                p.cube(
+                    Vec3::new(0.0, 0.15, hz - 0.25),
+                    Vec3::new(hx, 0.15, 0.25),
+                    rim,
+                );
+                p.cube(
+                    Vec3::new(0.0, 0.15, -hz + 0.25),
+                    Vec3::new(hx, 0.15, 0.25),
+                    rim,
+                );
+                p.cube(
+                    Vec3::new(hx - 0.25, 0.15, 0.0),
+                    Vec3::new(0.25, 0.15, hz - 0.5),
+                    rim,
+                );
+                p.cube(
+                    Vec3::new(-hx + 0.25, 0.15, 0.0),
+                    Vec3::new(0.25, 0.15, hz - 0.5),
+                    rim,
+                );
+                p.cube(
+                    Vec3::new(0.0, -0.05, 0.0),
+                    Vec3::new(hx - 0.5, 0.02, hz - 0.5),
+                    Rgb(0x5FC4E0),
+                );
+            }
+            n.cube(
+                Vec3::new(hx - 1.0, 0.05, 0.0),
+                Vec3::new(0.4, 0.04, 1.2),
+                Rgb(0xF2F2F2),
+            );
+            n.cube(
+                Vec3::new(0.0, 0.35, -hz - 1.0),
+                Vec3::new(0.9, 0.05, 0.35),
+                Rgb(0xF29E4C),
+            );
+            n.cube(
+                Vec3::new(0.7, 0.55, -hz - 1.0),
+                Vec3::new(0.25, 0.25, 0.35),
+                Rgb(0xF29E4C),
+            );
+        }
+        Kind::DropRing => {
+            // A drop tower's ring of seats, its top at the origin's 0.6 m up.
+            let ring = crate::models::drop_ring();
+            n.m.append(&ring, Mat4::from_translation(Vec3::Y * 0.6));
+        }
+        Kind::CoasterCar => {
+            // A coaster car on its rails at the origin, nose toward +x, white for a tint.
+            let car = crate::models::coaster_car();
+            n.m.append(&car, Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2));
+        }
+        Kind::RaceCar => {
+            // A single seater on the track at the origin, nose toward +x: a low white
+            // body (tinted per car), a wing at each end, four fat wheels and a driver.
+            let dark = Rgb(0x2A2A30);
+            for p in [&mut n, &mut f] {
+                p.cube(
+                    Vec3::new(0.0, 0.45, 0.0),
+                    Vec3::new(w * 0.32, 0.25, d * 0.18),
+                    WHITE,
+                );
+                p.cube(
+                    Vec3::new(w * 0.32, 0.38, 0.0),
+                    Vec3::new(w * 0.18, 0.15, d * 0.1),
+                    WHITE,
+                );
+            }
+            n.cube(
+                Vec3::new(w * 0.48, 0.2, 0.0),
+                Vec3::new(0.25, 0.05, d * 0.45),
+                WHITE,
+            );
+            n.cube(
+                Vec3::new(-w * 0.46, 0.95, 0.0),
+                Vec3::new(0.25, 0.06, d * 0.42),
+                WHITE,
+            );
+            for z in [-1.0f32, 1.0] {
+                n.cube(
+                    Vec3::new(-w * 0.46, 0.65, z * d * 0.35),
+                    Vec3::new(0.2, 0.3, 0.04),
+                    dark,
+                );
+                for x in [-w * 0.3, w * 0.28] {
+                    n.cube(
+                        Vec3::new(x, 0.36, z * d * 0.42),
+                        Vec3::new(0.36, 0.36, 0.18),
+                        dark,
+                    );
+                }
+            }
+            n.cube(
+                Vec3::new(-w * 0.05, 0.85, 0.0),
+                Vec3::new(0.2, 0.2, 0.2),
+                Rgb(0xF2C14E),
+            );
+        }
+        Kind::Supply => {
+            // An offshore supply ship, bow toward +x, the waterline at the origin: an
+            // orange hull, a tall white bridge forward with windows all round, a long low
+            // deck aft stacked with containers, and a mast with a light.
+            let (hx, hz) = (w * 0.5, d * 0.5);
+            let deck = Rgb(0x8C8A84);
+            for p in [&mut n, &mut f] {
+                p.hull(w, d, h, Rgb(0xE07A2E), deck);
+                p.cube(
+                    Vec3::new(hx * 0.55, h + 2.4, 0.0),
+                    Vec3::new(3.2, 2.4, hz * 0.85),
+                    WHITE,
+                );
+                p.cube(
+                    Vec3::new(hx * 0.55 + 0.4, h + 5.6, 0.0),
+                    Vec3::new(2.6, 0.8, hz * 0.9),
+                    WHITE,
+                );
+            }
+            let from = n.m.verts.len();
+            for s in [-1.0f32, 1.0] {
+                n.cube(
+                    Vec3::new(hx * 0.55 + 0.4, h + 5.7, s * hz * 0.9),
+                    Vec3::new(2.4, 0.4, 0.04),
+                    DARK_GLASS,
+                );
+            }
+            n.cube(
+                Vec3::new(hx * 0.55 + 3.02, h + 5.7, 0.0),
+                Vec3::new(0.04, 0.4, hz * 0.85),
+                DARK_GLASS,
+            );
+            n.night_from(from);
+            n.post(Vec3::new(hx * 0.55, h + 10.5, 0.0), 4.0, 0.1, STEEL);
+            let from = n.m.verts.len();
+            n.cube(
+                Vec3::new(hx * 0.55, h + 10.6, 0.0),
+                Vec3::splat(0.18),
+                Rgb(0xFFF2C0),
+            );
+            n.m.glow_from(from);
+            // Containers in two rows down the open deck, a crash rail round its stern.
+            let boxes = [
+                Rgb(0x2E6EB0),
+                Rgb(0x3E9A4E),
+                Rgb(0xD8473A),
+                Rgb(0xF2C14E),
+                Rgb(0x8C949C),
+            ];
+            for k in 0..4 {
+                for (j, s) in [-1.0f32, 1.0].into_iter().enumerate() {
+                    let c = boxes[(k * 2 + j + b.seed as usize) % boxes.len()];
+                    let at = Vec3::new(-hx * 0.75 + k as f32 * 6.4, h + 1.3, s * 1.35);
+                    for p in [&mut n, &mut f] {
+                        p.cube(at, Vec3::new(3.0, 1.3, 1.25), c);
+                    }
+                }
+            }
+            for s in [-1.0f32, 1.0] {
+                n.cube(
+                    Vec3::new(-hx * 0.15, h + 0.6, s * (hz - 0.15)),
+                    Vec3::new(hx * 0.8, 0.6, 0.1),
+                    deck,
+                );
+            }
+        }
+        Kind::Trawler => {
+            // A fishing boat, bow toward +x, the waterline at the origin: a blue hull, a
+            // white wheelhouse forward, a mast with two outrigger booms spread, a net drum
+            // and orange floats at the stern, and someone mending nets.
+            let (hx, hz) = (w * 0.5, d * 0.5);
+            for p in [&mut n, &mut f] {
+                p.hull(w, d, h, Rgb(0x2E5E8C), Rgb(0xC9B79A));
+                p.cube(
+                    Vec3::new(hx * 0.35, h + 1.4, 0.0),
+                    Vec3::new(1.6, 1.4, hz * 0.7),
+                    WHITE,
+                );
+            }
+            let from = n.m.verts.len();
+            n.cube(
+                Vec3::new(hx * 0.35 + 1.62, h + 1.9, 0.0),
+                Vec3::new(0.04, 0.5, hz * 0.6),
+                DARK_GLASS,
+            );
+            n.night_from(from);
+            n.cube(
+                Vec3::new(hx * 0.35, h + 2.86, 0.0),
+                Vec3::new(1.7, 0.06, hz * 0.75),
+                RED,
+            );
+            n.post(Vec3::new(-hx * 0.1, h + 8.0, 0.0), 8.0, 0.12, STEEL);
+            for s in [-1.0f32, 1.0] {
+                // A boom out to each side, angled up, a net hanging off its tip.
+                let foot = Vec3::new(-hx * 0.1, h + 1.0, 0.0);
+                let tip = foot + Vec3::new(0.0, 4.0, s * 6.0);
+                let side = Vec3::X * 0.08;
+                n.quad(foot - side, foot + side, tip + side, tip - side, STEEL);
+                n.quad(tip - side, tip + side, foot + side, foot - side, STEEL);
+                n.post(tip, 4.5, 0.03, Rgb(0x3A3A40));
+            }
+            n.cube(
+                Vec3::new(-hx * 0.6, h + 0.6, 0.0),
+                Vec3::new(0.7, 0.6, hz * 0.6),
+                Rgb(0x3A7A4A),
+            );
+            for k in 0..4 {
+                n.cube(
+                    Vec3::new(-hx * 0.85 + k as f32 * 0.6, h + 0.25, hz * 0.7),
+                    Vec3::splat(0.22),
+                    Rgb(0xF2A03A),
+                );
+            }
+            let at = Vec3::new(-hx * 0.4, h, -hz * 0.4);
+            n.cube(
+                at + Vec3::Y * 0.5,
+                Vec3::new(0.15, 0.45, 0.18),
+                Rgb(0x3A5A8C),
+            );
+            n.cube(
+                at + Vec3::Y * 1.25,
+                Vec3::new(0.24, 0.35, 0.26),
+                Rgb(0xF2C14E),
+            );
+            n.cube(
+                at + Vec3::Y * 1.8,
+                Vec3::new(0.14, 0.15, 0.14),
+                Rgb(0xE8B890),
+            );
+        }
+        Kind::Punt => {
+            // A flat wooden boat on the water at the origin, bow toward +x: low sides, a
+            // lantern on a post at the bow, a boatman standing at the stern with a pole,
+            // and sightseers on three benches.
+            let (wood, dark) = (Rgb(0x8B5E3C), Rgb(0x5C3B24));
+            let (hx, hz) = (w * 0.5, d * 0.5);
+            for p in [&mut n, &mut f] {
+                p.cube(Vec3::new(0.0, -0.3, 0.0), Vec3::new(hx, 0.3, hz), wood);
+            }
+            for z in [-1.0f32, 1.0] {
+                n.cube(
+                    Vec3::new(0.0, 0.25, z * (hz - 0.06)),
+                    Vec3::new(hx, 0.25, 0.06),
+                    dark,
+                );
+            }
+            for x in [-1.0f32, 1.0] {
+                n.cube(
+                    Vec3::new(x * (hx - 0.06), 0.25, 0.0),
+                    Vec3::new(0.06, 0.25, hz),
+                    dark,
+                );
+            }
+            n.post(Vec3::new(hx - 0.3, 2.2, 0.0), 2.2, 0.05, dark);
+            let from = n.m.verts.len();
+            n.cube(
+                Vec3::new(hx - 0.3, 2.0, 0.0),
+                Vec3::new(0.16, 0.22, 0.16),
+                Rgb(0xFFD58A),
+            );
+            n.m.glow_from(from);
+            let shirts = [
+                Rgb(0xE0564A),
+                Rgb(0x4A90C8),
+                Rgb(0xF2C14E),
+                Rgb(0x6BBF7A),
+                Rgb(0xE88AB0),
+                Rgb(0xF2F2F2),
+            ];
+            let skin = Rgb(0xE8B890);
+            for k in 0..3u32 {
+                let x = (k as f32 - 0.8) * w * 0.22;
+                n.cube(
+                    Vec3::new(x - 0.2, 0.3, 0.0),
+                    Vec3::new(0.2, 0.06, hz - 0.1),
+                    wood,
+                );
+                for (j, z) in [-0.5f32, 0.5].into_iter().enumerate() {
+                    let s = b.seed * 11 + k * 3 + j as u32;
+                    if s % 5 == 2 {
+                        continue;
+                    }
+                    let at = Vec3::new(x - 0.15, 0.4, z * hz);
+                    n.cube(
+                        at + Vec3::Y * 0.32,
+                        Vec3::new(0.2, 0.3, 0.2),
+                        shirts[s as usize % 6],
+                    );
+                    n.cube(at + Vec3::Y * 0.8, Vec3::new(0.13, 0.14, 0.13), skin);
+                }
+            }
+            // The boatman, and the pole down into the water.
+            let stern = Vec3::new(-hx + 0.6, 0.0, 0.0);
+            n.cube(
+                stern + Vec3::Y * 0.5,
+                Vec3::new(0.12, 0.45, 0.16),
+                Rgb(0x3A5A8C),
+            );
+            n.cube(
+                stern + Vec3::Y * 1.3,
+                Vec3::new(0.22, 0.38, 0.24),
+                Rgb(0xF2F2F2),
+            );
+            n.cube(stern + Vec3::Y * 1.85, Vec3::new(0.14, 0.15, 0.14), skin);
+            n.cube(
+                stern + Vec3::Y * 2.05,
+                Vec3::new(0.22, 0.04, 0.22),
+                Rgb(0x2E2E2E),
+            );
+            n.post(stern + Vec3::new(-0.3, 3.2, 0.25), 4.6, 0.04, wood);
+        }
+        Kind::FerrisCar => {
+            // A little cabin hanging from its pin: a hanger, a domed roof, windows all
+            // round and a floor, in one of the fair's bright colors.
+            use zawnabout_sim::landmark::{FERRIS_CAR as SIZE, FERRIS_DROP as DROP};
+            // White, for each car's own color as a tint.
+            let paint = WHITE;
+            let (hx, hz) = (SIZE.x * 0.5, SIZE.z * 0.5);
+            n.post(Vec3::ZERO, DROP - SIZE.y, 0.08, STEEL);
+            for p in [&mut n, &mut f] {
+                p.cube(
+                    Vec3::new(0.0, -DROP + 0.35, 0.0),
+                    Vec3::new(hx, 0.35, hz),
+                    paint,
+                );
+                p.cube(
+                    Vec3::new(0.0, -DROP + SIZE.y - 0.2, 0.0),
+                    Vec3::new(hx + 0.1, 0.2, hz + 0.1),
+                    paint,
+                );
+            }
+            n.cube(
+                Vec3::new(0.0, -DROP + 1.2, 0.0),
+                Vec3::new(hx - 0.05, 0.5, hz - 0.05),
+                Rgb(0xBFE3F0),
+            );
+            for (x, z) in [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                n.cube(
+                    Vec3::new(x * (hx - 0.08), -DROP + 1.2, z * (hz - 0.08)),
+                    Vec3::new(0.08, 0.5, 0.08),
+                    paint,
+                );
+            }
+        }
         Kind::LiftCabin => {
             use zawnabout_sim::traffic::CABIN_DROP as DROP;
             let paint = [RED, Rgb(0x4A90C8), Rgb(0xF2C14E), WHITE][(b.seed % 4) as usize];
@@ -1155,6 +1870,52 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
                 n.cube(
                     Vec3::new(x * w * 0.34, 0.4, z * d * 0.46),
                     Vec3::new(0.42, 0.42, 0.14),
+                    Rgb(0x3A3A40),
+                );
+            }
+        }
+        Kind::Car if b.seed == u32::from(zawnabout_sim::traffic::VAN) => {
+            // A parcel van: a tall white box with a sloped nose, a brown stripe and a
+            // parcel on its side, and a sliding door.
+            let brown = Rgb(0x8B5E3C);
+            for p in [&mut n, &mut f] {
+                p.cube(
+                    Vec3::new(-w * 0.08, h * 0.55, 0.0),
+                    Vec3::new(w * 0.42, h * 0.4, d * 0.5),
+                    WHITE,
+                );
+                p.cube(
+                    Vec3::new(w * 0.4, h * 0.38, 0.0),
+                    Vec3::new(w * 0.1, h * 0.24, d * 0.48),
+                    WHITE,
+                );
+            }
+            n.cube(
+                Vec3::new(-w * 0.08, h * 0.32, 0.0),
+                Vec3::new(w * 0.42 + 0.02, h * 0.06, d * 0.5 + 0.02),
+                brown,
+            );
+            for z in [1.0f32, -1.0] {
+                n.cube(
+                    Vec3::new(-w * 0.12, h * 0.66, z * (d * 0.5 + 0.02)),
+                    Vec3::new(0.35, 0.3, 0.02),
+                    Rgb(0xC9935A),
+                );
+                n.cube(
+                    Vec3::new(w * 0.22, h * 0.68, z * (d * 0.5 + 0.02)),
+                    Vec3::new(0.3, h * 0.14, 0.02),
+                    DARK_GLASS,
+                );
+            }
+            n.cube(
+                Vec3::new(w * 0.34, h * 0.72, 0.0),
+                Vec3::new(0.03, h * 0.14, d * 0.42),
+                DARK_GLASS,
+            );
+            for (x, z) in [(0.32, 1.0), (0.32, -1.0), (-0.3, 1.0), (-0.3, -1.0)] {
+                n.cube(
+                    Vec3::new(x * w, 0.34, z * d * 0.46),
+                    Vec3::new(0.34, 0.34, 0.14),
                     Rgb(0x3A3A40),
                 );
             }
@@ -1291,6 +2052,88 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
                 Vec3::new(w * 0.1, mast * 0.5, 0.0),
                 Vec3::new(0.2, mast * 0.5, 0.2),
                 SAIL,
+            );
+        }
+        Kind::Speedboat => {
+            // A low runabout, bow toward +x: a bright hull, a cream deck, a windscreen
+            // and a driver, an outboard on the stern.
+            let col = pick(
+                &[RED, Rgb(0x2E6FB8), Rgb(0xF2C14E), WHITE, Rgb(0x2EA88C)],
+                b.seed,
+                9,
+            );
+            for p in [&mut n, &mut f] {
+                p.hull(w, d, h, col, Rgb(0xEDE3CF));
+            }
+            let v = Vec3::new;
+            n.quad(
+                v(w * 0.12, h, d * 0.42),
+                v(w * 0.12, h, -d * 0.42),
+                v(w * 0.02, h + 0.55, -d * 0.36),
+                v(w * 0.02, h + 0.55, d * 0.36),
+                DARK_GLASS,
+            );
+            n.quad(
+                v(w * 0.02, h + 0.55, d * 0.36),
+                v(w * 0.02, h + 0.55, -d * 0.36),
+                v(w * 0.12, h, -d * 0.42),
+                v(w * 0.12, h, d * 0.42),
+                DARK_GLASS,
+            );
+            n.cube(
+                v(-w * 0.12, h + 0.25, 0.0),
+                v(0.35, 0.25, d * 0.3),
+                Rgb(0xE8DCC4),
+            );
+            n.cube(v(-w * 0.03, h + 0.55, -d * 0.18), v(0.2, 0.32, 0.18), RED);
+            n.cube(
+                v(-w * 0.03, h + 0.98, -d * 0.18),
+                v(0.13, 0.13, 0.13),
+                Rgb(0xF2C8A8),
+            );
+            n.cube(
+                v(-w * 0.5 - 0.15, h * 0.4, 0.0),
+                v(0.2, 0.5, 0.25),
+                Rgb(0x3A3A40),
+            );
+        }
+        Kind::MotorYacht => {
+            // A white motor yacht, bow toward +x: a navy stripe, a saloon with dark
+            // windows all round, and a flybridge sun deck with a rail and a radar arch.
+            for p in [&mut n, &mut f] {
+                p.hull(w, d, 2.0, WHITE, Rgb(0xC9A27A));
+                p.walls(w * 0.6, d * 0.8, 2.0, 4.2, WHITE);
+                p.lid(w * 0.6, d * 0.8, 4.2, Rgb(0xC9A27A));
+                p.walls(w * 0.32, d * 0.68, 4.2, 6.0, WHITE);
+                p.lid(w * 0.32, d * 0.68, 6.0, Rgb(0xC9A27A));
+            }
+            n.cube(
+                Vec3::new(-w * 0.05, 1.5, 0.0),
+                Vec3::new(w * 0.42, 0.18, d * 0.47),
+                Rgb(0x23365C),
+            );
+            n.windows(
+                &[0, 1, 2, 3],
+                w * 0.6,
+                d * 0.8,
+                2.6,
+                3.9,
+                2.0,
+                DARK_GLASS,
+                false,
+            );
+            for z in [-1.0f32, 1.0] {
+                n.post(Vec3::new(-w * 0.08, 7.4, z * d * 0.3), 1.4, 0.1, WHITE);
+            }
+            n.cube(
+                Vec3::new(-w * 0.08, 7.4, 0.0),
+                Vec3::new(0.15, 0.1, d * 0.32),
+                WHITE,
+            );
+            n.cube(
+                Vec3::new(-w * 0.08, 7.6, 0.0),
+                Vec3::new(0.4, 0.12, 0.4),
+                Rgb(0x3A3A40),
             );
         }
         Kind::Houseboat => {
@@ -1575,11 +2418,47 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
         | Kind::Station
         | Kind::Metro
         | Kind::MetroGate
+        | Kind::MetroStairs
+        | Kind::Restaurant
+        | Kind::Drawbridge
+        | Kind::Gallery
+        | Kind::SkatePark
+        | Kind::Helipad
+        | Kind::ClockTower
         | Kind::SpanTower
         | Kind::Market
+        | Kind::ShroomFarm
+        | Kind::Mine
+        | Kind::Cafe
+        | Kind::Library
+        | Kind::Museum
+        | Kind::Cinema
+        | Kind::Weir
+        | Kind::Penstock
+        | Kind::Hydro
+        | Kind::Racetrack
+        | Kind::Aquarium
+        | Kind::University
+        | Kind::Police
+        | Kind::GasStation
+        | Kind::Amphitheater
+        | Kind::SolarFarm
+        | Kind::Golf
         | Kind::Observatory
         | Kind::Lookout
         | Kind::SurfShack
+        | Kind::Castaway
+        | Kind::BalloonField
+        | Kind::Seals
+        | Kind::Carnival
+        | Kind::Cemetery
+        | Kind::Factory
+        | Kind::PowerStation
+        | Kind::OilRig
+        | Kind::Billboard
+        | Kind::Dam
+        | Kind::Faces
+        | Kind::Warden
         | Kind::RopeBridge
         | Kind::Hospital
         | Kind::FireStation
@@ -1624,7 +2503,19 @@ fn building(b: &Building, terrain: &Terrain, near: &mut MeshBuilder, far: &mut M
         Vec4::new(-a.y, 0.0, a.x, 0.0),
         b.pos.extend(1.0),
     );
-    let day = (terrain.daylight(b.pos + Vec3::Y * 3.0) * 255.0) as u8;
+    // Carvings stand at a cliff's face, so their light is the open air in front.
+    let front = if matches!(b.kind, Kind::Faces | Kind::Warden) {
+        Vec3::new(-a.y, 0.0, a.x) * 40.0
+    } else {
+        Vec3::ZERO
+    };
+    let day = (terrain.daylight(b.pos + front + Vec3::Y * 3.0) * 255.0) as u8;
+    // Letters move into place but keep what their normals carry.
+    letters.verts.extend(n.letters.iter().map(|v| Vertex {
+        pos: m.transform_point3(Vec3::from(v.pos)).to_array(),
+        color: [v.color[0], v.color[1], v.color[2], day],
+        ..*v
+    }));
     for (parts, out) in [(n, near), (f, far)] {
         let start = out.verts.len();
         out.append(&parts.m, m);
@@ -1660,8 +2551,9 @@ pub fn vehicle(terrain: &Terrain, kind: Kind, size: Vec3, seed: u32) -> MeshBuil
         site: None,
         text: "",
     };
-    let (mut near, mut far) = (MeshBuilder::new(), MeshBuilder::new());
-    building(&b, terrain, &mut near, &mut far);
+    let (mut near, mut far, mut letters) =
+        (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    building(&b, terrain, &mut near, &mut far, &mut letters);
     // Daylight comes per instance instead.
     for v in &mut near.verts {
         v.color[3] = 255;
@@ -1824,6 +2716,35 @@ fn cruise(n: &mut Parts, f: &mut Parts) {
     n.m.glow_from(from);
 }
 
+/// A landmark's lamps and bulbs in the world, how big each is, and whether it burns all
+/// day (underground) or only at night.
+pub fn lamp_spots(b: &Building) -> Vec<(Vec3, f32, bool)> {
+    use zawnabout_sim::landmark::{Form, Mat as M, pieces};
+    let a = b.axis;
+    let m = Mat4::from_cols(
+        Vec4::new(a.x, 0.0, a.y, 0.0),
+        Vec4::Y,
+        Vec4::new(-a.y, 0.0, a.x, 0.0),
+        b.pos.extend(1.0),
+    );
+    let always = b.kind == Kind::Metro || b.style == Style::Cavern;
+    pieces(b.kind, b.seed, b.text)
+        .into_iter()
+        .filter(|p| p.mat == M::Lamp)
+        .map(|p| {
+            let (at, r) = match p.form {
+                Form::Box { at, half, .. } => (at + Vec3::Y * half.y * 0.5, half.max_element()),
+                Form::Round { at, h, r0, r1 } => (at + Vec3::Y * h * 0.5, r0.max(r1).max(h * 0.5)),
+                Form::Ball { at, r } => (at, r),
+                Form::Letter { at, cell, .. } => {
+                    (at + Vec3::Y * cell.abs() * 2.5, cell.abs() * 0.6)
+                }
+            };
+            (m.transform_point3(at), r, always)
+        })
+        .collect()
+}
+
 /// A landmark's pieces, in its own frame. Small loose pieces are left off the far mesh.
 fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
     use zawnabout_sim::landmark::{Form, Mat as M, pieces};
@@ -1858,8 +2779,49 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
             M::Copper => Rgb(0x6FB59B),
             M::Concrete => Rgb(0xC8C4BC),
             M::Asphalt => Rgb(0x6F6E73),
+            M::Rock => Rgb(0xB4A08A),
+            M::Hidden => continue,
         };
-        let lit = matches!(piece.mat, M::Glass | M::Screen | M::Water | M::Lamp);
+        // Water is not lit like windows: their lights come on in patches, which on a
+        // pool read as a checkerboard.
+        let lit = matches!(piece.mat, M::Glass | M::Screen | M::Lamp);
+        if let Form::Letter {
+            at,
+            cell,
+            depth,
+            ch,
+        } = piece.form
+        {
+            // One flat quad on the reading face, a hair proud of whatever is behind.
+            let flag =
+                if (b.kind == Kind::Metro || b.style == Style::Cavern) && piece.mat == M::Lamp {
+                    2
+                } else {
+                    lit as i8
+                };
+            let code = (ch.clamp(32, 95) - 32) as i8;
+            let z = at.z + (depth + 0.01) * cell.signum();
+            let (x0, x1, top) = (
+                at.x - cell * 1.5,
+                at.x + cell * 1.5,
+                at.y + cell.abs() * 5.0,
+            );
+            let c = col.0;
+            let rgb = [(c >> 16) as u8, (c >> 8) as u8, c as u8, 255];
+            let corner = |x: f32, y: f32, u: i8, v: i8| Vertex {
+                pos: [x, y, z],
+                normal: [u, v, code, flag],
+                color: rgb,
+            };
+            let (a, bb, cc, d) = (
+                corner(x0, at.y, 0, 0),
+                corner(x1, at.y, 127, 0),
+                corner(x1, top, 127, 127),
+                corner(x0, top, 0, 127),
+            );
+            n.letters.extend([a, bb, cc, a, cc, d]);
+            continue;
+        }
         let mut one = Parts::new();
         let place = match piece.form {
             Form::Box {
@@ -1895,28 +2857,184 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
                     .blob(Vec3::ZERO, Vec3::splat(r), r > 1.5, 0.06, 7, col);
                 Mat4::from_translation(at)
             }
+            Form::Letter { .. } => continue,
         };
         let add = |p: &mut Parts| {
             let from = p.m.verts.len();
             p.m.append(&one.m, place);
             // Lamps underground are lit all day.
-            if b.kind == Kind::Metro && matches!(piece.mat, M::Lamp) {
+            if (b.kind == Kind::Metro || b.style == Style::Cavern) && matches!(piece.mat, M::Lamp) {
                 p.m.glow_from(from);
             } else if lit {
                 p.night_from(from);
             }
         };
         add(n);
-        if piece.solid {
+        // Broad flat ground, like a park's lawn, a pool or a pen, shows from afar too, so
+        // a place never appears as loose pieces floating on the bare hillside.
+        let ground = match piece.form {
+            Form::Box { half, .. } => half.y <= 0.6 && half.x.min(half.z) >= 5.0,
+            Form::Round { h, r0, .. } => h <= 0.6 && r0 >= 5.0,
+            _ => false,
+        };
+        if piece.solid || ground {
             add(f);
         }
     }
 }
 
-/// Road surfaces as strips laid on the ground, decks and piers where they bridge water,
-/// and runway markings.
-fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32), Tile>) {
+/// Where roads meet: per road, per point, whether another road crosses or joins it there
+/// at about the same height, and whether that road outranks it (wider, or a runway).
+fn junctions(terrain: &Terrain) -> Vec<Vec<(bool, bool)>> {
     let def = terrain.def;
+    let rank = |r: &zawnabout_sim::terrain::Road| (r.runway, !r.rail, (r.w * 10.0) as u32);
+    def.roads
+        .iter()
+        .enumerate()
+        .map(|(ri, r)| {
+            let prof = terrain.road_points(ri);
+            r.pts
+                .iter()
+                .zip(prof)
+                .map(|(q, p)| {
+                    let at = Vec2::new(q[0], q[1]);
+                    let mut out = (false, false);
+                    for (oi, o) in def.roads.iter().enumerate() {
+                        if oi == ri || o.subway || r.subway {
+                            continue;
+                        }
+                        let reach = (o.w + r.w) * 0.5 + 2.0;
+                        let op = terrain.road_points(oi);
+                        let meets = o.pts.windows(2).zip(op.windows(2)).any(|(s, h)| {
+                            let (a, b) = (Vec2::new(s[0][0], s[0][1]), Vec2::new(s[1][0], s[1][1]));
+                            let ab = b - a;
+                            let t =
+                                ((at - a).dot(ab) / ab.length_squared().max(1e-3)).clamp(0.0, 1.0);
+                            let y = h[0].y + (h[1].y - h[0].y) * t;
+                            (a + ab * t).distance(at) < reach && (y - p.y).abs() < 3.0
+                        });
+                        if meets {
+                            out.0 = true;
+                            out.1 |= rank(o) > rank(r);
+                        }
+                    }
+                    out
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Pictures for the subway walls, 10 by 6, top row first: `.` is the panel, the
+/// letters colors from [`mural`].
+const MURALS: [[&str; 6]; 6] = [
+    // A fish.
+    [
+        "..........",
+        "...yyyy..y",
+        ".yyyyykyyy",
+        ".yyyyyyyyy",
+        "...yyyy..y",
+        "..........",
+    ],
+    // A whale with its spout.
+    [
+        "..w.w.....",
+        "...w......",
+        "..bbbbb...",
+        ".bbkbbbbb.",
+        "bbbbbbbbbb",
+        ".bbbbbbb.b",
+    ],
+    // The sun over the sea.
+    [
+        "....y.....",
+        ".y.yyy.y..",
+        "..yyyyy...",
+        ".yyyyyyy..",
+        "bbbbbbbbbb",
+        "wbbwbbbwbb",
+    ],
+    // A sailboat.
+    [
+        "....w.....",
+        "....ww....",
+        "....www...",
+        "....wwww..",
+        ".rrrrrrrr.",
+        "bbrrrrrrbb",
+    ],
+    // A flower.
+    [
+        "...rrr....",
+        "..rryrr...",
+        "...rrr....",
+        "....g..g..",
+        "....ggg...",
+        "....g.....",
+    ],
+    // A balloon.
+    [
+        "...rryr...",
+        "..rryyrr..",
+        "..rryyrr..",
+        "...rryr...",
+        "....w.w...",
+        ".....k....",
+    ],
+];
+
+/// A framed picture on a wall, centered at `c`, `along` the wall and `out` from it (both
+/// level unit vectors), lit so it glows in a dim tunnel. About 5 m wide.
+fn mural(m: &mut MeshBuilder, c: Vec3, along: Vec3, out: Vec3, which: usize) {
+    let from = m.verts.len();
+    let cell = 0.5;
+    let (cols, rows) = (10.0, 6.0);
+    let (hw, hh) = (cols * cell * 0.5, rows * cell * 0.5);
+    let quad = |m: &mut MeshBuilder, x0: f32, y0: f32, x1: f32, y1: f32, lift: f32, col: Rgb| {
+        let p = |x: f32, y: f32| c + along * x + Vec3::Y * y + out * lift;
+        m.quad(p(x1, y0), p(x0, y0), p(x0, y1), p(x1, y1), col);
+    };
+    quad(
+        m,
+        -hw - 0.3,
+        -hh - 0.3,
+        hw + 0.3,
+        hh + 0.3,
+        0.0,
+        Rgb(0x8E6A48),
+    );
+    let panel = [Rgb(0x2E6FB8), Rgb(0x3FA7A0), Rgb(0x6C5BB5), Rgb(0xE88AB0)][which % 4];
+    quad(m, -hw, -hh, hw, hh, 0.05, panel);
+    for (row, line) in MURALS[which].iter().enumerate() {
+        for (col, ch) in line.chars().enumerate() {
+            let color = match ch {
+                'y' => Rgb(0xF2C14E),
+                'w' => Rgb(0xF6F1E7),
+                'b' => Rgb(0x1E4E8C),
+                'r' => Rgb(0xE0564A),
+                'g' => Rgb(0x4CAF50),
+                'k' => Rgb(0x2A2A30),
+                _ => continue,
+            };
+            let x0 = -hw + col as f32 * cell;
+            let y1 = hh - row as f32 * cell;
+            quad(m, x0, y1 - cell, x0 + cell, y1, 0.1, color);
+        }
+    }
+    m.glow_from(from);
+}
+
+/// Every road's surface, markings, bridges and tunnel lamps. Stretches in tunnels go in
+/// the cave tiles too, which are the ones drawn from inside.
+fn roads(
+    terrain: &Terrain,
+    hung: &[Suspension],
+    tiles: &mut HashMap<(i32, i32), Tile>,
+    caves: &mut HashMap<(i32, i32), Tile>,
+) {
+    let def = terrain.def;
+    let joins = junctions(terrain);
     for (ri, r) in def.roads.iter().enumerate() {
         // Stretches held up by a suspension bridge's cables need no piers.
         let spans: Vec<[f32; 2]> = hung
@@ -1936,6 +3054,8 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
         };
         // Runways are long, so split them into short pieces that follow the ground.
         let mut pts: Vec<(Vec2, f32, bool, Vec2)> = Vec::new();
+        let mut meet: Vec<(bool, bool)> = Vec::new();
+        let mut tun: Vec<bool> = Vec::new();
         for i in 0..n - 1 {
             let (a, b) = (at(i), at(i + 1));
             let steps = ((b - a).length() / 10.0).ceil().max(1.0) as usize;
@@ -1949,9 +3069,24 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                     bridge,
                     side(i).lerp(side(i + 1), t).normalize_or_zero(),
                 ));
+                meet.push(joins[ri][if t < 0.5 { i } else { i + 1 }]);
+                tun.push(prof[i].tunnel && prof[i + 1].tunnel);
             }
         }
         pts.push((at(n - 1), prof[n - 1].y, prof[n - 1].bridge, side(n - 1)));
+        meet.push(joins[ri][n - 1]);
+        tun.push(false);
+        // Higher ranked roads lie a touch higher, so where two overlap at a junction the
+        // one that carries on through is the one seen.
+        let lift = if r.runway {
+            0.32
+        } else if r.rail {
+            0.2
+        } else if r.w >= 14.0 {
+            0.28
+        } else {
+            0.25
+        };
         let surface = if r.runway {
             ASPHALT
         } else if r.rail {
@@ -1960,20 +3095,14 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
             Rgb(0x8A8790)
         };
         let mut along = 0.0;
-        for w in pts.windows(2) {
+        for (k, w) in pts.windows(2).enumerate() {
             let ((a, ya, ba, sa), (b, yb, bb, sb)) = (w[0], w[1]);
-            let lift = 0.25;
-            // On a bridge or in a tunnel, the road's own height, else the ground under it.
-            let y = |p: Vec2, road_y: f32, bridge: bool| {
-                let ground = terrain.height(p.x, p.y);
-                let tunnel =
-                    ground > road_y + 6.0 && terrain.sdf(Vec3::new(p.x, road_y + 2.0, p.y)) > 0.0;
-                if bridge || tunnel {
-                    road_y + if tunnel { lift } else { 0.0 }
-                } else {
-                    ground + lift
-                }
-            };
+            // In a junction, and whether a bigger road runs through it.
+            let joined = meet[k].0 || meet[k + 1].0;
+            let minor = meet[k].1 || meet[k + 1].1;
+            // The road's own smooth height: the ground is graded to it, and bridge decks
+            // and tunnel floors are laid at it.
+            let y = |_: Vec2, road_y: f32, bridge: bool| road_y + if bridge { 0.0 } else { lift };
             let (la, ra) = (a + sa * half, a - sa * half);
             let (lb, rb) = (b + sb * half, b - sb * half);
             let v3 = |p: Vec2, yy: f32| Vec3::new(p.x, yy, p.y);
@@ -1984,27 +3113,99 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                 v3(lb, y(lb, yb, bb)),
             ];
             let key = tile_key(a);
-            let tile = tiles.entry(key).or_insert_with(|| Tile {
+            // Deep in the hill a tunnel is only ever seen from inside, so it goes with the
+            // cave insides alone. Near a mouth it is seen from outside too.
+            let (bore, rise) = Terrain::bore(r.w);
+            let buried = tun[k]
+                && [a, b]
+                    .iter()
+                    .all(|p| terrain.height(p.x, p.y) > ya.max(yb) + rise + bore + 4.0);
+            let map = if buried { &mut *caves } else { &mut *tiles };
+            let tile = map.entry(key).or_insert_with(|| Tile {
                 near: MeshBuilder::new(),
                 far: MeshBuilder::new(),
-                cave: false,
+                cave: buried,
+                heavy: Vec::new(),
+                distant: MeshBuilder::new(),
+                letters: MeshBuilder::new(),
             });
+            let from = (tile.near.verts.len(), tile.far.verts.len());
             for out in [&mut tile.near, &mut tile.far] {
                 out.quad(corners[0], corners[1], corners[2], corners[3], surface);
             }
             let seg = b.distance(a);
             let highway = !r.runway && !r.rail && r.w >= 14.0;
+            // Tunnels are lit by a row of lamps high on each wall, under the hill.
+            if tun[k]
+                && (along / 12.0) as i32 != ((along + seg) / 12.0) as i32
+                && terrain.height(a.x, a.y) > ya + rise + bore - 1.0
+            {
+                let from = tile.near.verts.len();
+                for s in [1.0f32, -1.0] {
+                    // Out from the road until just short of the tunnel wall.
+                    let mut out = half;
+                    while out < 30.0 && {
+                        let q = a + sa * s * (out + 1.0);
+                        terrain.sdf(Vec3::new(q.x, ya + 6.5, q.y)) > 0.6
+                    } {
+                        out += 0.5;
+                    }
+                    // Out in a cavern there is no wall to hang them on.
+                    if out >= 30.0 {
+                        continue;
+                    }
+                    let p = a + sa * s * out;
+                    let along_dir = Vec2::new(sa.y, -sa.x);
+                    let c = Vec3::new(p.x, ya + 6.5, p.y);
+                    let l = Vec3::new(along_dir.x, 0.0, along_dir.y) * 1.6;
+                    let w = Vec3::new(sa.x, 0.0, sa.y) * 0.35;
+                    tile.near
+                        .quad(c - l - w, c + l - w, c + l + w, c - l + w, Rgb(0xFFD58A));
+                    tile.near
+                        .quad(c - l + w, c + l + w, c + l - w, c - l - w, Rgb(0xFFD58A));
+                }
+                tile.near.glow_from(from);
+            }
+            // Subway riders pass a glowing picture on the tunnel wall every so often,
+            // one side then the other: fish, a whale, the sun, boats and balloons.
+            if r.subway
+                && tun[k]
+                && (along / 30.0) as i32 != ((along + seg) / 30.0) as i32
+                && terrain.height(a.x, a.y) > ya + rise + bore - 1.0
+            {
+                let n = ((along + seg) / 30.0) as usize;
+                let s = if n.is_multiple_of(2) { 1.0f32 } else { -1.0 };
+                let eye = ya + 3.6;
+                let mut out = half;
+                while out < 30.0 && {
+                    let q = a + sa * s * (out + 1.0);
+                    terrain.sdf(Vec3::new(q.x, eye, q.y)) > 0.6
+                } {
+                    out += 0.5;
+                }
+                if out < 30.0 {
+                    let p = a + sa * s * (out - 0.2);
+                    let along_dir = Vec2::new(sa.y, -sa.x) * s;
+                    mural(
+                        &mut tile.near,
+                        Vec3::new(p.x, eye, p.y),
+                        Vec3::new(along_dir.x, 0.0, along_dir.y),
+                        Vec3::new(-sa.x * s, 0.0, -sa.y * s),
+                        (ri * 7 + n) % MURALS.len(),
+                    );
+                }
+            }
             if r.rail {
                 // Sleepers across the ballast, and two steel rails along them.
                 let flat = |p: Vec2, s: Vec2, off: f32, rise: f32, yy: f32, bb: bool| {
                     let q = p + s * off;
                     v3(q, y(q, yy, bb) + rise)
                 };
-                let steps = (b.distance(a) / 3.0).ceil().max(1.0) as usize;
+                let steps = (b.distance(a) / 1.2).ceil().max(1.0) as usize;
                 for k in 0..steps {
                     let t = k as f32 / steps as f32;
                     let (p, s) = (a.lerp(b, t), sa.lerp(sb, t).normalize_or_zero());
-                    let along = Vec2::new(s.y, -s.x) * 0.3;
+                    let along = Vec2::new(s.y, -s.x) * 0.22;
                     let yy = ya + (yb - ya) * t;
                     tile.near.quad(
                         flat(p - along, s, 1.3, 0.08, yy, ba),
@@ -2016,16 +3217,26 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                 }
                 for off in [0.75f32, -0.75] {
                     {
-                        let (lo, hi) = (0.12f32, 0.24f32);
+                        // Seated on the sleepers, with both sides so the rail looks solid
+                        // from down on the track.
+                        let (lo, hi) = (0.08f32, 0.24f32);
                         let (pa, pb) = (flat(a, sa, off, hi, ya, ba), flat(b, sb, off, hi, yb, bb));
                         let w3 = |s: Vec2| Vec3::new(s.x, 0.0, s.y) * 0.06;
+                        let down = Vec3::Y * (hi - lo);
                         tile.near
                             .quad(pa + w3(sa), pa - w3(sa), pb - w3(sb), pb + w3(sb), STEEL);
                         tile.near.quad(
                             pa + w3(sa),
                             pb + w3(sb),
-                            pb + w3(sb) - Vec3::Y * (hi - lo),
-                            pa + w3(sa) - Vec3::Y * (hi - lo),
+                            pb + w3(sb) - down,
+                            pa + w3(sa) - down,
+                            STEEL,
+                        );
+                        tile.near.quad(
+                            pb - w3(sb),
+                            pa - w3(sa),
+                            pa - w3(sa) - down,
+                            pb - w3(sb) - down,
                             STEEL,
                         );
                     }
@@ -2043,13 +3254,17 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                     let (ca, cb) = (v3(pa, y(pa, ya, ba) + 0.03), v3(pb, y(pb, yb, bb) + 0.03));
                     out.quad(ca + oa, ca - oa, cb - ob, cb + ob, col);
                 };
-                for off in [half - 0.9, -(half - 0.9)] {
-                    line(&mut tile.near, off, 0.15, WHITE);
+                if !joined {
+                    for off in [half - 0.9, -(half - 0.9)] {
+                        line(&mut tile.near, off, 0.15, WHITE);
+                    }
                 }
-                for off in [0.25, -0.25] {
-                    line(&mut tile.near, off, 0.1, Rgb(0xF2C14E));
+                if !minor {
+                    for off in [0.25, -0.25] {
+                        line(&mut tile.near, off, 0.1, Rgb(0xF2C14E));
+                    }
                 }
-                if !(ba && bb) {
+                if !(ba && bb) && !joined {
                     for (p, q) in [(corners[0], corners[3]), (corners[1], corners[2])] {
                         tile.near
                             .quad(p, q, q + Vec3::Y * 0.7, p + Vec3::Y * 0.7, Rgb(0xC8C4BC));
@@ -2057,7 +3272,7 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                 }
             }
             // Dashes down the middle.
-            if !highway && !r.rail && (along / 12.0) as i32 % 2 == 0 {
+            if !highway && !r.rail && !minor && (along / 12.0) as i32 % 2 == 0 {
                 let cw = if r.runway { 0.8 } else { 0.2 };
                 let (ca, cb) = (
                     v3(a, (corners[0].y + corners[1].y) * 0.5 + 0.03),
@@ -2083,6 +3298,27 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                     tile.near.quad(pa + oa, pa - oa, pb - ob, pb + ob, WHITE);
                 }
             }
+            if tun[k] && !(ba && bb) {
+                // In a round tunnel the road is a slab over the curved floor: its sides
+                // reach down out of sight.
+                for out in [&mut tile.near, &mut tile.far] {
+                    let down = Vec3::Y * 3.0;
+                    out.quad(
+                        corners[0] - down,
+                        corners[0],
+                        corners[3],
+                        corners[3] - down,
+                        STONE,
+                    );
+                    out.quad(
+                        corners[1],
+                        corners[1] - down,
+                        corners[2] - down,
+                        corners[2],
+                        STONE,
+                    );
+                }
+            }
             if ba && bb {
                 // Deck sides, rails and a pier at every other step.
                 let (dl, dr) = (corners[0] - Vec3::Y * 1.6, corners[1] - Vec3::Y * 1.6);
@@ -2102,13 +3338,30 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                         RED.mix(WHITE, 0.3),
                     );
                 }
+                // A trestle across a cavern carries lanterns on its rails, lit always.
+                if tun[k] && (along / 18.0) as i32 != ((along + seg) / 18.0) as i32 {
+                    let from = tile.near.verts.len();
+                    for p in [corners[0], corners[1]] {
+                        tile.near.cube(
+                            p + Vec3::Y * 1.45,
+                            Vec3::new(0.22, 0.3, 0.22),
+                            Rgb(0xFFD58A),
+                        );
+                    }
+                    tile.near.glow_from(from);
+                }
                 let held = spans
                     .iter()
                     .any(|s| along > s[0] + 5.0 && along < s[1] - 5.0);
                 if (along / 10.0) as i32 % 4 == 0 && !held {
                     let mid = (a + b) * 0.5;
                     let top = (ya + yb) * 0.5 - 1.6;
-                    let ground = terrain.height(mid.x, mid.y).min(top);
+                    // Down to the cavern floor under a trestle, else the ground.
+                    let ground = if tun[k] {
+                        terrain.support(mid.x, mid.y, top)
+                    } else {
+                        terrain.height(mid.x, mid.y).min(top)
+                    };
                     let floor = ground.min(-4.0).max(ground);
                     let c = Vec3::new(mid.x, (top + floor) * 0.5, mid.y);
                     let half_h = (top - floor) * 0.5;
@@ -2119,10 +3372,99 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                     }
                 }
             }
+            // Near a mouth it is also drawn with the cave insides, which are what is drawn
+            // from inside.
+            let copy = (tun[k] && !buried).then(|| {
+                (
+                    tile.near.verts[from.0..].to_vec(),
+                    tile.far.verts[from.1..].to_vec(),
+                )
+            });
+            if let Some((near, far)) = copy {
+                let cave = caves.entry(key).or_insert_with(|| Tile {
+                    near: MeshBuilder::new(),
+                    far: MeshBuilder::new(),
+                    cave: true,
+                    heavy: Vec::new(),
+                    distant: MeshBuilder::new(),
+                    letters: MeshBuilder::new(),
+                });
+                cave.near.verts.extend(near);
+                cave.far.verts.extend(far);
+            }
             along += seg;
         }
-        // A road that ends in a town ends in a paved town square.
-        if !r.runway {
+        // Runways get threshold stripes at both ends.
+        if r.runway {
+            for end in [0, n - 1] {
+                let p = at(end);
+                let d = (at(n - 1 - end) - p).normalize_or(Vec2::X);
+                let s = Vec2::new(-d.y, d.x);
+                let y = prof[end].y + lift + 0.03;
+                let tile = open_tile(tiles, p);
+                let lanes = ((half - 4.0) / 4.2) as i32;
+                for j in 0..lanes {
+                    for sign in [-1.0f32, 1.0] {
+                        let c = s * sign * (3.0 + j as f32 * 4.2);
+                        let (a0, a1) = (p + d * 6.0 + c, p + d * 36.0 + c);
+                        let w3 = Vec3::new(s.x, 0.0, s.y) * 0.8;
+                        let (b0, b1) = (Vec3::new(a0.x, y, a0.y), Vec3::new(a1.x, y, a1.y));
+                        tile.near.quad(b0 - w3, b0 + w3, b1 + w3, b1 - w3, WHITE);
+                    }
+                }
+            }
+        }
+        // Concrete arches at both mouths of every tunnel, where the hill closes over.
+        let (bore, rise) = Terrain::bore(r.w);
+        let mut k = 0;
+        while k < pts.len() {
+            if !tun[k] {
+                k += 1;
+                continue;
+            }
+            let mut end = k;
+            while end + 1 < pts.len() && tun[end + 1] {
+                end += 1;
+            }
+            let covered = |j: usize| {
+                let (p, y, _, _) = pts[j];
+                terrain.height(p.x, p.y) > y + rise + bore - 1.0
+            };
+            let mouths = [
+                (k..=end).find(|&j| covered(j)),
+                (k..=end).rev().find(|&j| covered(j)),
+            ];
+            for j in mouths.into_iter().flatten() {
+                let (p, y, _, s) = pts[j];
+                let d = Vec2::new(s.y, -s.x);
+                let c = Vec3::new(p.x, y + rise, p.y);
+                let (side, along) = (Vec3::new(s.x, 0.0, s.y), Vec3::new(d.x, 0.0, d.y) * 0.8);
+                let low = -(rise / bore).asin();
+                let ring = |a: f32, rad: f32| c + (side * a.cos() + Vec3::Y * a.sin()) * rad;
+                let tile = open_tile(tiles, p);
+                let steps = 16;
+                for i in 0..steps {
+                    let span = std::f32::consts::PI - 2.0 * low;
+                    let (a, b) = (
+                        low + span * i as f32 / steps as f32,
+                        low + span * (i + 1) as f32 / steps as f32,
+                    );
+                    let (ia, ib) = (ring(a, bore - 0.2), ring(b, bore - 0.2));
+                    let (oa, ob) = (ring(a, bore + 1.6), ring(b, bore + 1.6));
+                    let concrete = Rgb(0xC8C4BC);
+                    for out in [&mut tile.near, &mut tile.far] {
+                        out.quad(ia - along, oa - along, ob - along, ib - along, concrete);
+                        out.quad(ib + along, ob + along, oa + along, ia + along, concrete);
+                        out.quad(oa - along, oa + along, ob + along, ob - along, concrete);
+                        out.quad(ib - along, ib + along, ia + along, ia - along, concrete);
+                    }
+                }
+            }
+            k = end + 1;
+        }
+        // A road that ends anywhere but at another road ends in a paved square: a town
+        // square in town, a turning place and car park out of it.
+        if !r.runway && !r.rail {
             for end in [0, n - 1] {
                 let p = at(end);
                 let other = at(n - 1 - end);
@@ -2133,10 +3475,7 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                                 .iter()
                                 .any(|q| Vec2::new(q[0], q[1]).distance(p) < o.w + half)
                     });
-                let town = terrain
-                    .cover(p.x, p.y)
-                    .is_some_and(|c| c.kind == CoverKind::Town);
-                if joins || !town || prof[end].bridge {
+                if joins || prof[end].bridge {
                     continue;
                 }
                 let key = tile_key(p);
@@ -2144,13 +3483,17 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                     near: MeshBuilder::new(),
                     far: MeshBuilder::new(),
                     cave: false,
+                    heavy: Vec::new(),
+                    distant: MeshBuilder::new(),
+                    letters: MeshBuilder::new(),
                 });
                 let s = side(end);
                 let f = Vec2::new(s.y, -s.x);
                 let size = half * 3.0;
                 let corner = |u: f32, v: f32| {
                     let q = p + s * u * size + f * v * size;
-                    Vec3::new(q.x, terrain.height(q.x, q.y) + 0.27, q.y)
+                    // Just under the road's own surface where they overlap.
+                    Vec3::new(q.x, terrain.height(q.x, q.y) + 0.22, q.y)
                 };
                 for (u, v) in [(-1.0f32, -1.0f32), (0.0, -1.0), (-1.0, 0.0), (0.0, 0.0)] {
                     for out in [&mut tile.near, &mut tile.far] {
@@ -2187,6 +3530,9 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
                 near: MeshBuilder::new(),
                 far: MeshBuilder::new(),
                 cave: false,
+                heavy: Vec::new(),
+                distant: MeshBuilder::new(),
+                letters: MeshBuilder::new(),
             });
             for out in [&mut tile.near, &mut tile.far] {
                 out.append(&unit, m);
@@ -2195,8 +3541,31 @@ fn roads(terrain: &Terrain, hung: &[Suspension], tiles: &mut HashMap<(i32, i32),
     }
 }
 
+/// The open-air tile a spot is on, made if it is not there yet.
+fn open_tile(tiles: &mut HashMap<(i32, i32), Tile>, p: Vec2) -> &mut Tile {
+    tiles.entry(tile_key(p)).or_insert_with(|| Tile {
+        near: MeshBuilder::new(),
+        far: MeshBuilder::new(),
+        cave: false,
+        heavy: Vec::new(),
+        distant: MeshBuilder::new(),
+        letters: MeshBuilder::new(),
+    })
+}
+
 pub fn tile_key(p: Vec2) -> (i32, i32) {
     ((p.x / TILE).floor() as i32, (p.y / TILE).floor() as i32)
+}
+
+/// A building's near and far triangles, for budgeting.
+pub fn building_cost(b: &Building, terrain: &Terrain) -> (usize, usize) {
+    let (mut near, mut far, mut letters) =
+        (MeshBuilder::new(), MeshBuilder::new(), MeshBuilder::new());
+    building(b, terrain, &mut near, &mut far, &mut letters);
+    (
+        (near.verts.len() + letters.verts.len()) / 3,
+        far.verts.len() / 3,
+    )
 }
 
 /// Every town and road mesh, by tile.
@@ -2207,33 +3576,84 @@ pub fn build(
 ) -> Vec<((i32, i32), Tile)> {
     let mut tiles: HashMap<(i32, i32), Tile> = HashMap::new();
     let mut caves: HashMap<(i32, i32), Tile> = HashMap::new();
+    // Ordinary buildings seen from far across the world merge into blocks, one per cell.
+    let mut blocks: HashMap<(i32, i32), Block> = HashMap::new();
     for b in buildings {
         let key = tile_key(Vec2::new(b.pos.x, b.pos.z));
         let under = b.style == Style::Cavern;
         let map = if under { &mut caves } else { &mut tiles };
         let tile = map.entry(key).or_insert_with(|| Tile {
-            near: MeshBuilder::new(),
-            far: MeshBuilder::new(),
             cave: under,
+            ..Default::default()
         });
-        let (near_from, far_from) = (tile.near.verts.len(), tile.far.verts.len());
-        building(b, terrain, &mut tile.near, &mut tile.far);
+        let (mut near, mut far) = (MeshBuilder::new(), MeshBuilder::new());
+        building(b, terrain, &mut near, &mut far, &mut tile.letters);
         // Boats moored afloat rock on the swell, all but their lit windows.
         if matches!(
             b.kind,
             Kind::Boat | Kind::Sailboat | Kind::Houseboat | Kind::Canoe
         ) {
-            for v in tile.near.verts[near_from..]
-                .iter_mut()
-                .chain(tile.far.verts[far_from..].iter_mut())
-            {
+            for v in near.verts.iter_mut().chain(far.verts.iter_mut()) {
                 if v.normal[3] == 0 {
                     v.normal[3] = crate::mesh::BOB;
                 }
             }
         }
+        let (lo, hi) = far.verts.iter().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(lo, hi), v| (lo.min(Vec3::from(v.pos)), hi.max(Vec3::from(v.pos))),
+        );
+        let reach = (hi - lo).length() * 0.5;
+        if !far.verts.is_empty() && reach >= SMALL {
+            if reach > BIG || under {
+                tile.distant.verts.extend_from_slice(&far.verts);
+            } else {
+                let cell = (
+                    (b.pos.x / BLOCK).floor() as i32,
+                    (b.pos.z / BLOCK).floor() as i32,
+                );
+                blocks
+                    .entry(cell)
+                    .or_insert_with(Block::new)
+                    .add(&far.verts, lo, hi);
+            }
+        }
+        if near.verts.len() > HEAVY * 3 {
+            tile.heavy.push((near, far));
+        } else {
+            tile.near.verts.extend_from_slice(&near.verts);
+            tile.far.verts.extend_from_slice(&far.verts);
+        }
     }
-    roads(terrain, bridges, &mut tiles);
+    // Everything roads add draws a touch nearer the camera than it is (see vs_lit), so
+    // coarse far terrain never pokes up through a road.
+    let count = |m: &HashMap<(i32, i32), Tile>| -> HashMap<(i32, i32), (usize, usize)> {
+        m.iter()
+            .map(|(k, t)| (*k, (t.near.verts.len(), t.far.verts.len())))
+            .collect()
+    };
+    let (before, before_caves) = (count(&tiles), count(&caves));
+    roads(terrain, bridges, &mut tiles, &mut caves);
+    for (k, t) in tiles.iter_mut().chain(caves.iter_mut()) {
+        let from = if t.cave { &before_caves } else { &before };
+        let (near, far) = from.get(k).copied().unwrap_or((0, 0));
+        for v in t.near.verts[near..]
+            .iter_mut()
+            .chain(t.far.verts[far..].iter_mut())
+        {
+            if v.normal[3] == 0 {
+                v.normal[3] = crate::mesh::ROAD;
+            }
+        }
+        let roads = t.far.verts[far..].to_vec();
+        t.distant.verts.extend_from_slice(&roads);
+    }
+    for block in blocks.values() {
+        let key = tile_key(Vec2::new(block.lo.x, block.lo.z));
+        if let Some(t) = tiles.get_mut(&key) {
+            block.mesh(&mut t.distant);
+        }
+    }
     let mut out: Vec<((i32, i32), Tile)> = tiles.into_iter().chain(caves).collect();
     out.sort_by_key(|(k, t)| (t.cave, *k));
     out

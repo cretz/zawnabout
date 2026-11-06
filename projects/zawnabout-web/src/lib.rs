@@ -19,6 +19,9 @@ mod web {
         config: wgpu::SurfaceConfiguration,
         script: Option<Script>,
         logs: Vec<String>,
+        /// The world's sound, filled in by the page's audio node once it starts.
+        synth: zawnabout_game::audio::Synth,
+        sound: bool,
     }
 
     #[wasm_bindgen]
@@ -71,6 +74,8 @@ mod web {
                 config,
                 script: None,
                 logs: Vec::new(),
+                synth: zawnabout_game::audio::Synth::new(),
+                sound: false,
             })
         }
 
@@ -114,7 +119,31 @@ mod web {
             });
             self.gfx.render(&self.game, &view);
             self.gfx.renderer.queue.present(tex);
+            if self.sound {
+                let mix = self.gfx.sound(&self.game);
+                self.synth.set(mix);
+            }
             host.join("\n")
+        }
+
+        /// Whether the sound is turned off, with U or the pause card.
+        pub fn muted(&self) -> bool {
+            self.game.muted
+        }
+
+        /// Turns the world's sound on or off. The page starts it on the first click or
+        /// key, as browsers ask.
+        pub fn set_sound(&mut self, on: bool) {
+            self.sound = on;
+        }
+
+        /// Fills interleaved stereo samples at `rate` per second, for the page's audio.
+        pub fn sound_fill(&mut self, out: &mut [f32], rate: f32) {
+            if self.sound {
+                self.synth.fill(out, rate);
+            } else {
+                out.fill(0.0);
+            }
         }
 
         pub fn key(&mut self, code: &str, down: bool, repeat: bool) {
@@ -123,7 +152,7 @@ mod web {
 
         /// Releases all held input, such as when the page loses focus.
         pub fn blur(&mut self) {
-            self.game.input.clear();
+            self.game.release_keys();
         }
 
         pub fn gamepad(&mut self, axes: &[f32], buttons: &[f32]) {
@@ -190,6 +219,25 @@ mod web {
             zawnabout_game::map::render(&self.game.sim.world.terrain, size, false)
         }
 
+        /// A square of the world for a close look on the big map: corner, width (m) and
+        /// pixels across, RGBA8.
+        pub fn map_area(&self, x0: f32, z0: f32, span: f32, size: u32) -> Vec<u8> {
+            zawnabout_game::map::render_area(
+                &self.game.sim.world.terrain,
+                x0,
+                z0,
+                span,
+                size,
+                false,
+            )
+        }
+
+        /// Places for the big map, one per line: kind, id, x, z, under (see
+        /// `map::places`).
+        pub fn map_places(&self) -> String {
+            zawnabout_game::map::places(&self.game.sim.world.terrain)
+        }
+
         /// What the map arrow shows: x, z and heading of the dragon, or of the camera in
         /// notes mode.
         pub fn map_marker(&self) -> Vec<f32> {
@@ -200,6 +248,28 @@ mod web {
                 let d = self.game.player_dragon();
                 vec![d.pos.x, d.pos.z, d.heading]
             }
+        }
+
+        /// The keys, one action a line: `flap Space KeyV`.
+        pub fn bindings_text(&self) -> String {
+            self.game.bindings.to_text()
+        }
+
+        /// Keys saved from [`App::bindings_text`].
+        pub fn set_bindings_text(&mut self, text: &str) {
+            self.game.bindings.set_text(text);
+        }
+
+        /// Makes `code` the one key for the action named `action` (`flap`, `up`...).
+        pub fn bind_key(&mut self, action: &str, code: &str) {
+            if let Some(a) = zawnabout_game::input::Action::from_name(action) {
+                self.game.bindings.rebind(a, code);
+            }
+        }
+
+        /// Back to the keys the game came with.
+        pub fn reset_keys(&mut self) {
+            self.game.bindings = zawnabout_game::input::Bindings::default();
         }
 
         /// Runs a debug command and returns its output, or `error: ...`.

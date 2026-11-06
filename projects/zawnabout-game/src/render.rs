@@ -52,8 +52,15 @@ pub struct Lighting {
     pub cave_ambient: Vec3,
     /// How far underground the camera is, 0 to 1. Turns the far haze dark.
     pub underground: f32,
+    /// How much the sky gives way to cave gloom, 0 to 1: deep in a cave, past the walls
+    /// it draws, it is dark rock, not daylight. Off when looking out of a mouth.
+    pub sky_gloom: f32,
     /// Day 0 to night 1: stars and a moon in the sky, lit windows.
     pub night: f32,
+    /// Morning mist lying over low ground and water, 0 to 1.
+    pub valley_fog: f32,
+    /// A rainbow in the sky opposite the sun, 0 to 1.
+    pub rainbow: f32,
 }
 
 /// Everything one frame draws.
@@ -86,6 +93,11 @@ pub struct Frame {
     pub water: Vec<(MeshId, Vec3, f32)>,
     /// Seconds, for moving water.
     pub time: f32,
+    /// Big clouds that shade the ground: middle (x, z), radius and base height. At most
+    /// [`crate::weather::SHADOWS`] are used.
+    pub clouds: Vec<Vec4>,
+    /// The heads-up display, drawn over everything.
+    pub hud: Vec<crate::hud::HudVertex>,
 }
 
 #[repr(C)]
@@ -105,11 +117,16 @@ struct Globals {
     misc: [f32; 4],
     /// Per light: position and reach, then color.
     lights: [[f32; 4]; MAX_LIGHTS * 2],
+    /// Cloud shadows: middle (x, z), radius, base height.
+    clouds: [[f32; 4]; crate::weather::SHADOWS],
 }
 
 struct GpuMesh {
     buf: wgpu::Buffer,
     count: u32,
+    /// Its bounding box.
+    lo: Vec3,
+    hi: Vec3,
 }
 
 struct StaticBatch {
@@ -117,6 +134,9 @@ struct StaticBatch {
     buf: wgpu::Buffer,
     count: u32,
     cull: Cull,
+    /// The box round every instance, which distances are measured to.
+    lo: Vec3,
+    hi: Vec3,
 }
 
 /// How a static batch is culled and simplified with distance.
@@ -159,8 +179,23 @@ impl Cull {
     };
 }
 
+/// The sign font for the shader: each printable character from space to underscore as
+/// 15 bits, 3 across and 5 down, the top left the highest bit.
+fn glyph_table() -> String {
+    (32u8..96)
+        .map(|c| {
+            let rows = zawnabout_sim::landmark::glyph(c as char);
+            let bits = rows
+                .iter()
+                .fold(0u32, |acc, r| (acc << 3) | (*r as u32 & 7));
+            format!("{bits}u")
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// What the last frame drew, for judging cost on slow devices.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Stats {
     pub draws: u32,
     /// Draws by group: static batches, terrain chunks and water.
@@ -173,6 +208,8 @@ pub struct Stats {
     pub props: u64,
     pub water: u64,
     pub meshes: u32,
+    /// The costliest instanced draws this frame: mesh, instances and triangles.
+    pub heaviest: Vec<(u32, u32, u64)>,
 }
 
 pub struct Renderer {
@@ -188,6 +225,8 @@ pub struct Renderer {
     bind: wgpu::BindGroup,
     sky: wgpu::RenderPipeline,
     lit: wgpu::RenderPipeline,
+    /// Painted letters, cut out of flat quads by the font in the shader.
+    letters: wgpu::RenderPipeline,
     ground: wgpu::RenderPipeline,
     water: wgpu::RenderPipeline,
     shadow: wgpu::RenderPipeline,
@@ -196,10 +235,15 @@ pub struct Renderer {
     meshes: Vec<Option<GpuMesh>>,
     free: Vec<u32>,
     statics: Vec<StaticBatch>,
+    letter_statics: Vec<StaticBatch>,
     dynamic: wgpu::Buffer,
     identity: wgpu::Buffer,
     shadow_mesh: Option<MeshId>,
     ring_mesh: Option<MeshId>,
+    hud: wgpu::RenderPipeline,
+    hud_atlas: wgpu::Texture,
+    hud_bind: wgpu::BindGroup,
+    hud_buf: wgpu::Buffer,
 }
 
 fn vec4(v: Vec3, w: f32) -> [f32; 4] {
@@ -233,7 +277,11 @@ impl Renderer {
     ) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("shader.wgsl")
+                    .replace("GLYPH_TABLE", &glyph_table())
+                    .into(),
+            ),
         });
         let globals = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("globals"),
@@ -330,6 +378,15 @@ impl Renderer {
         let mesh_buffers = [Some(vertex_layout), Some(instance_layout)];
         let sky = pipeline("sky", "vs_sky", "fs_sky", &[], false, false, None);
         let lit = pipeline("lit", "vs_lit", "fs_lit", &mesh_buffers, true, true, None);
+        let letters = pipeline(
+            "letters",
+            "vs_lit",
+            "fs_letter",
+            &mesh_buffers,
+            true,
+            true,
+            None,
+        );
         let ground = pipeline(
             "ground",
             "vs_lit",
@@ -385,6 +442,114 @@ impl Renderer {
             true,
             Some(premultiplied),
         );
+        // The HUD: flat triangles over everything, from its atlas.
+        let hud_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hud"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("hud.wgsl").into()),
+        });
+        let hud_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hud"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let (aw, ah) = crate::hud::ATLAS;
+        let hud_atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hud atlas"),
+            size: wgpu::Extent3d {
+                width: aw,
+                height: ah,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let hud_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("hud"),
+            ..Default::default()
+        });
+        let hud_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hud"),
+            layout: &hud_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(
+                        &hud_atlas.create_view(&Default::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&hud_sampler),
+                },
+            ],
+        });
+        let hud = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hud"),
+            layout: Some(
+                &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("hud"),
+                    bind_group_layouts: &[Some(&hud_layout)],
+                    immediate_size: 0,
+                }),
+            ),
+            vertex: wgpu::VertexState {
+                module: &hud_shader,
+                entry_point: Some("vs_hud"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: size_of::<crate::hud::HudVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2, 1 => Float32x2, 2 => Float32x4
+                    ],
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: SAMPLES,
+                ..Default::default()
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &hud_shader,
+                entry_point: Some("fs_hud"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let hud_buf = Self::hud_buffer(&device, 4096);
         let dynamic = Self::instance_buffer(&device, 256);
         let identity = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("identity instance"),
@@ -404,6 +569,7 @@ impl Renderer {
             bind,
             sky,
             lit,
+            letters,
             ground,
             water,
             shadow,
@@ -412,14 +578,61 @@ impl Renderer {
             meshes: Vec::new(),
             free: Vec::new(),
             statics: Vec::new(),
+            letter_statics: Vec::new(),
             dynamic,
             identity,
             shadow_mesh: None,
             ring_mesh: None,
+            hud,
+            hud_atlas,
+            hud_bind,
+            hud_buf,
         };
+        // The font goes in now. The map follows once it is drawn.
+        let mut atlas = vec![0u8; (aw * ah * 4) as usize];
+        crate::hud::font_into(&mut atlas);
+        r.write_hud_atlas(&atlas, 0, ah);
         r.shadow_mesh = Some(r.add_mesh(&crate::models::shadow_disc()));
         r.ring_mesh = Some(r.add_mesh(&crate::models::ring()));
         r
+    }
+
+    fn hud_buffer(device: &wgpu::Device, count: usize) -> wgpu::Buffer {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("hud"),
+            size: (count * size_of::<crate::hud::HudVertex>()) as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        })
+    }
+
+    /// Writes rows `y0..y0 + rows` of the HUD atlas from full-width RGBA rows.
+    pub fn write_hud_atlas(&self, rgba: &[u8], y0: u32, rows: u32) {
+        let w = crate::hud::ATLAS.0;
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.hud_atlas,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: y0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba[(y0 * w * 4) as usize..((y0 + rows) * w * 4) as usize],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(rows),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: rows,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Puts the world map, `MAP` square RGBA, into the HUD atlas.
+    pub fn set_hud_map(&self, rgba: &[u8]) {
+        self.write_hud_atlas(rgba, 0, crate::hud::MAP);
     }
 
     fn instance_buffer(device: &wgpu::Device, count: usize) -> wgpu::Buffer {
@@ -476,9 +689,15 @@ impl Renderer {
                 contents: bytemuck::cast_slice(&mesh.verts),
                 usage: wgpu::BufferUsages::VERTEX,
             });
+        let (lo, hi) = mesh.verts.iter().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(lo, hi), v| (lo.min(Vec3::from(v.pos)), hi.max(Vec3::from(v.pos))),
+        );
         let gpu = Some(GpuMesh {
             buf,
             count: mesh.verts.len() as u32,
+            lo,
+            hi,
         });
         match self.free.pop() {
             Some(i) => {
@@ -499,6 +718,16 @@ impl Renderer {
         }
     }
 
+    /// Adds a mesh of painted letters that never moves, culled like a static batch.
+    pub fn add_letters(&mut self, mesh: MeshId, cull: Cull) {
+        let n = self.statics.len();
+        self.add_static_culled(mesh, &[Instance::new(Mat4::IDENTITY)], cull);
+        if self.statics.len() > n {
+            let b = self.statics.pop().expect("just added");
+            self.letter_statics.push(b);
+        }
+    }
+
     /// Adds instances of a mesh that never move, always drawn.
     pub fn add_static(&mut self, mesh: MeshId, instances: &[Instance]) {
         self.add_static_culled(mesh, instances, Cull::ALWAYS);
@@ -516,11 +745,36 @@ impl Renderer {
                 contents: bytemuck::cast_slice(instances),
                 usage: wgpu::BufferUsages::VERTEX,
             });
+        // The box round every instance's box, or the cull sphere's if the mesh is gone.
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        match &self.meshes[mesh.0 as usize] {
+            Some(m) if m.count > 0 && cull.radius.is_finite() => {
+                for i in instances {
+                    let model = Mat4::from_cols_array_2d(&i.model);
+                    for k in 0..8 {
+                        let corner = Vec3::new(
+                            if k & 1 == 0 { m.lo.x } else { m.hi.x },
+                            if k & 2 == 0 { m.lo.y } else { m.hi.y },
+                            if k & 4 == 0 { m.lo.z } else { m.hi.z },
+                        );
+                        let p = model.transform_point3(corner);
+                        lo = lo.min(p);
+                        hi = hi.max(p);
+                    }
+                }
+            }
+            _ => {
+                lo = cull.center - Vec3::splat(cull.radius);
+                hi = cull.center + Vec3::splat(cull.radius);
+            }
+        }
         self.statics.push(StaticBatch {
             mesh,
             buf,
             count: instances.len() as u32,
             cull,
+            lo,
+            hi,
         });
     }
 
@@ -532,10 +786,10 @@ impl Renderer {
             view_proj: frame.view_proj.to_cols_array_2d(),
             inv_view_proj: frame.view_proj.inverse().to_cols_array_2d(),
             cam_pos: vec4(frame.cam_pos, 1.0),
-            sun_dir: vec4(l.sun_dir.normalize(), 0.0),
+            sun_dir: vec4(l.sun_dir.normalize(), l.sky_gloom),
             sun_color: vec4(l.sun_color, 0.0),
-            sky_top: vec4(l.sky_top, 0.0),
-            sky_horizon: vec4(l.sky_horizon, 0.0),
+            sky_top: vec4(l.sky_top, l.valley_fog),
+            sky_horizon: vec4(l.sky_horizon, l.rainbow),
             ambient_sky: vec4(l.ambient_sky, 0.0),
             ambient_ground: vec4(l.ambient_ground, 0.0),
             fog: [l.fog_start, l.fog_end, l.bands, l.shadow],
@@ -544,13 +798,20 @@ impl Renderer {
                 frame.time,
                 l.night,
                 frame.lights.len().min(MAX_LIGHTS) as f32,
-                0.0,
+                frame.clouds.len().min(crate::weather::SHADOWS) as f32,
             ],
             lights: {
                 let mut out = [[0.0; 4]; MAX_LIGHTS * 2];
                 for (i, (p, r, c)) in frame.lights.iter().take(MAX_LIGHTS).enumerate() {
                     out[i * 2] = vec4(*p, *r);
                     out[i * 2 + 1] = vec4(*c, 0.0);
+                }
+                out
+            },
+            clouds: {
+                let mut out = [[0.0; 4]; crate::weather::SHADOWS];
+                for (o, c) in out.iter_mut().zip(&frame.clouds) {
+                    *o = c.to_array();
                 }
                 out
             },
@@ -570,6 +831,13 @@ impl Renderer {
         fx.sort_by_key(|(m, _)| m.0);
         let fx_start = instances.len();
         instances.extend(fx.iter().map(|(_, i)| *i));
+        if (frame.hud.len() * size_of::<crate::hud::HudVertex>()) as u64 > self.hud_buf.size() {
+            self.hud_buf = Self::hud_buffer(&self.device, frame.hud.len().next_power_of_two());
+        }
+        if !frame.hud.is_empty() {
+            self.queue
+                .write_buffer(&self.hud_buf, 0, bytemuck::cast_slice(&frame.hud));
+        }
         let needed = (instances.len() * size_of::<Instance>()) as u64;
         if needed > self.dynamic.size() {
             self.dynamic = Self::instance_buffer(&self.device, instances.len().next_power_of_two());
@@ -612,7 +880,6 @@ impl Renderer {
             pass.set_pipeline(&self.sky);
             pass.draw(0..3, 0..1);
 
-            pass.set_pipeline(&self.lit);
             let planes = frustum(frame.view_proj);
             // Peeking in from outside shows cave walls but not everything inside.
             let inside = frame.lighting.underground > 0.1;
@@ -623,31 +890,41 @@ impl Renderer {
                     !frame.deep
                 }
             };
-            for s in self.statics.iter().filter(|s| shown(&s.cull)) {
-                let c = &s.cull;
-                let dist = (c.center - frame.cam_pos).length() - c.radius;
-                if dist > frame.prop_range * c.reach || !in_view(&planes, c.center, c.radius) {
-                    continue;
-                }
-                if let Some(g) = c.group {
-                    let away = (g.center - frame.cam_pos).length() - g.radius;
-                    if (away >= g.range * frame.detail_range) != g.merged {
+            let lists = [
+                (&self.lit, &self.statics),
+                (&self.letters, &self.letter_statics),
+            ];
+            for (pipe, list) in lists {
+                pass.set_pipeline(pipe);
+                for s in list.iter().filter(|s| shown(&s.cull)) {
+                    let c = &s.cull;
+                    let dist = frame.cam_pos.clamp(s.lo, s.hi).distance(frame.cam_pos);
+                    if dist > frame.prop_range * c.reach || !in_view(&planes, c.center, c.radius) {
                         continue;
                     }
+                    if let Some(g) = c.group {
+                        let away = (g.center - frame.cam_pos).length() - g.radius;
+                        if (away >= g.range * frame.detail_range) != g.merged {
+                            continue;
+                        }
+                    }
+                    let id = match c.far {
+                        Some(far) if dist > frame.detail_range * c.detail => far,
+                        _ => s.mesh,
+                    };
+                    let Some(mesh) = &self.meshes[id.0 as usize] else {
+                        continue;
+                    };
+                    pass.set_vertex_buffer(0, mesh.buf.slice(..));
+                    pass.set_vertex_buffer(1, s.buf.slice(..));
+                    pass.draw(0..mesh.count, 0..s.count);
+                    stats.draws += 1;
+                    stats.draws_static += 1;
+                    let tris = (mesh.count / 3) as u64 * s.count as u64;
+                    stats.props += tris;
+                    // Static batches show as their mesh number plus a million.
+                    stats.heaviest.push((id.0 + 1_000_000, s.count, tris));
                 }
-                let id = match c.far {
-                    Some(far) if dist > frame.detail_range * c.detail => far,
-                    _ => s.mesh,
-                };
-                let Some(mesh) = &self.meshes[id.0 as usize] else {
-                    continue;
-                };
-                pass.set_vertex_buffer(0, mesh.buf.slice(..));
-                pass.set_vertex_buffer(1, s.buf.slice(..));
-                pass.draw(0..mesh.count, 0..s.count);
-                stats.draws += 1;
-                stats.draws_static += 1;
-                stats.props += (mesh.count / 3) as u64 * s.count as u64;
             }
             pass.set_pipeline(&self.ground);
             for (id, center, radius) in &frame.terrain {
@@ -674,7 +951,9 @@ impl Renderer {
                     pass.set_vertex_buffer(1, self.dynamic.slice(..));
                     pass.draw(0..mesh.count, i as u32..end as u32);
                     stats.draws += 1;
-                    stats.triangles += (mesh.count / 3) as u64 * (end - i) as u64;
+                    let tris = (mesh.count / 3) as u64 * (end - i) as u64;
+                    stats.triangles += tris;
+                    stats.heaviest.push((id.0, (end - i) as u32, tris));
                 }
                 i = end;
             }
@@ -708,7 +987,12 @@ impl Renderer {
                         (fx_start + i) as u32..(fx_start + end) as u32,
                     );
                     stats.draws += 1;
-                    stats.triangles += (mesh.count / 3) as u64 * (end - i) as u64;
+                    let tris = (mesh.count / 3) as u64 * (end - i) as u64;
+                    stats.triangles += tris;
+                    // Glow and effects show as their mesh number plus two million.
+                    stats
+                        .heaviest
+                        .push((id.0 + 2_000_000, (end - i) as u32, tris));
                 }
                 i = end;
             }
@@ -734,6 +1018,13 @@ impl Renderer {
                     0..mesh.count,
                     ring_start..ring_start + frame.rings.len() as u32,
                 );
+            }
+            if !frame.hud.is_empty() {
+                pass.set_pipeline(&self.hud);
+                pass.set_bind_group(0, &self.hud_bind, &[]);
+                pass.set_vertex_buffer(0, self.hud_buf.slice(..));
+                pass.draw(0..frame.hud.len() as u32, 0..1);
+                stats.draws += 1;
             }
         }
         self.queue.submit([enc.finish()]);

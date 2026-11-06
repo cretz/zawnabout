@@ -190,7 +190,8 @@ fn shallow(
 }
 
 /// Still water over an outline at one level, in cells that reach past the shore. Cells
-/// only count where `wet` says the water is really there.
+/// only count where `wet` says the water is really there. Out in deep water, where every
+/// cell looks the same (the facets come from the shader), a row of cells is one quad.
 fn still(
     m: &mut MeshBuilder,
     pts: &[[f32; 2]],
@@ -206,18 +207,31 @@ fn still(
         hi = [hi[0].max(p[0]), hi[1].max(p[1])];
     }
     let y = level - 0.05;
+    let deep = OPAQUE_DEPTH;
     let mut z = lo[1] - 20.0;
     while z < hi[1] + 20.0 {
         let mut x = lo[0] - 20.0;
+        let mut run: Option<f32> = None;
+        let flush = |m: &mut MeshBuilder, run: &mut Option<f32>, end: f32| {
+            if let Some(start) = run.take() {
+                flat_quad(m, start, z, end, z + cell, y, [deep; 4], color, day);
+            }
+        };
         while x < hi[0] + 20.0 {
             let corners = [(x, z), (x, z + cell), (x + cell, z + cell), (x + cell, z)];
             let floors = corners.map(|(cx, cz)| floor(cx, cz));
-            if floors.iter().any(|f| f.is_some()) {
-                let d = floors.map(|f| f.map_or(0.0, |g| level - g));
-                flat_quad(m, x, z, x + cell, z + cell, y, d, color, day);
+            let d = floors.map(|f| f.map_or(0.0, |g| level - g));
+            if floors.iter().all(|f| f.is_some()) && d.iter().all(|v| *v >= deep) {
+                run.get_or_insert(x);
+            } else {
+                flush(m, &mut run, x);
+                if floors.iter().any(|f| f.is_some()) {
+                    flat_quad(m, x, z, x + cell, z + cell, y, d, color, day);
+                }
             }
             x += cell;
         }
+        flush(m, &mut run, x);
         z += cell;
     }
 }

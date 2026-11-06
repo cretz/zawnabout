@@ -11,6 +11,7 @@ pub mod swoop;
 pub mod terrain;
 pub mod town;
 pub mod traffic;
+pub mod trips;
 pub mod world;
 
 pub use dragon::{Dragon, DragonInput, EntityId, FlightParams, Mode};
@@ -309,12 +310,18 @@ mod tests {
         use crate::town::Kind;
         // Stand in the road where a car will be in two seconds. Some spots are at a road's
         // end where cars turn round, so try a few cars.
-        let bowled = (0..60).filter(|i| i % 7 == 0).any(|i| {
+        let cars: Vec<usize> = Sim::new(1)
+            .world
+            .traffic
+            .vehicles
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.kind == Kind::Car)
+            .map(|(i, _)| i)
+            .collect();
+        let bowled = cars.iter().step_by(7).take(9).any(|&i| {
             let mut sim = Sim::new(1);
             let t = &sim.world.traffic;
-            if t.vehicles[i].kind != Kind::Car {
-                return false;
-            }
             let ahead = t.pose(&t.vehicles[i], 2.0).pos;
             let id = sim.spawn_dragon(ahead.x, ahead.z, 0.0);
             let mut hit = false;

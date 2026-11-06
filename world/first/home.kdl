@@ -146,6 +146,15 @@ plateau highfall top=260 edge=cliff jag=20 {
 
 hill terrace-mound x=1500 z=350 h=190 r=420 stretch=1.6 rot=30
 
+// Gentle rises over the south meadow, so the open ground rolls a little between the
+// racetrack, the fair, the solar farm and the golf course.
+hill meadow-rise-1 x=900 z=500 h=9 r=110 stretch=1.5 rot=20
+hill meadow-rise-2 x=820 z=760 h=12 r=120 stretch=1.4 rot=-30
+hill meadow-rise-3 x=930 z=890 h=8 r=80 stretch=1.6 rot=60
+hill meadow-rise-4 x=500 z=880 h=10 r=100 stretch=1.5 rot=10
+hill meadow-rise-5 x=300 z=1000 h=7 r=90 stretch=1.3 rot=45
+hill meadow-rise-6 x=1350 z=1100 h=8 r=100 stretch=1.4 rot=-15
+
 // Water
 
 river long-river w=30 {
@@ -178,6 +187,18 @@ river long-river w=30 {
         p 100 560
         p -80 520
     }
+    branch dam-brook w=10 {
+        note "The dam's spillway water, down the gorge, over its lip in a falls and across the meadow to the river."
+        p -872 70
+        p -820 70
+        p -770 70
+        p -756 70
+        p -736 70
+        p -712 52
+        p -680 24
+        p -640 -12
+        p -600 -60
+    }
     // The delta. The river splits across the canal city into the bay.
     branch delta-west w=18 {
         p 0 700
@@ -193,6 +214,30 @@ river long-river w=30 {
         p 130 780
         p 220 920
     }
+}
+// A gorge cut into the west highland, out through its cliff. A dam holds a reservoir
+// in its upper half. Below the dam the spillway water runs on down a brook and over the lip.
+gorge dam-gorge w=140 {
+    p -1160 70 depth=5
+    p -1000 70 depth=40
+    p -890 70 depth=110
+    p -810 70 depth=140
+    p -775 70 depth=150
+    p -762 70 depth=130
+    p -752 70 depth=60
+    p -746 70 depth=0
+}
+lake highland-reservoir level=235 {
+    note "A reservoir behind the highland dam, filling the top of the gorge."
+    p -1120 72
+    p -1085 52
+    p -1030 46
+    p -975 36
+    p -905 36 sharp=#true
+    p -905 104 sharp=#true
+    p -960 100
+    p -1020 96
+    p -1075 90
 }
 valley long-valley w=380 depth=30 {
     p -650 -60
@@ -247,6 +292,25 @@ forest plateau-pines kind=open trees=pine {
     p -1350 200
     p -1750 250
     p -2050 50
+}
+forest rise-grove kind=open trees=round {
+    note "A grove on top of the rise east of the racetrack."
+    p 780 720
+    p 870 710
+    p 880 800
+    p 800 820
+}
+forest hollow-grove kind=open trees=round {
+    p 460 860
+    p 540 850
+    p 560 930
+    p 470 950
+}
+forest park-grove kind=open trees=round {
+    p 910 410
+    p 990 400
+    p 1000 480
+    p 920 500
 }
 forest peninsula-scrub kind=open trees=round {
     p -1500 1250
@@ -378,24 +442,263 @@ road meadow-hill w=14 {
     p 0 300
     p 450 450
     p 900 380
-    p 1250 350
 }
 road harbor-hill w=14 {
     note "Highway from the harbor city round to the hill city, closing the loop through the village."
     p -150 700
-    p 250 780
+    p 0 738
+    p 35 762
+    p 55 795
+    p 75 828
+    p 116 866
+    p 165 895
+    p 211 914
+    p 245 908
+    p 301 882
+    p 386 882
+    p 440 906
+    p 490 925
+    p 540 910
+    p 600 860
     p 700 760
     p 1000 600
-    p 1150 450
-    p 1250 350
+    p 1110 470
+    p 1130 415
+    p 1095 372
+    p 1000 366
+    p 900 380
+}
+road hill-spur w=10 {
+    note "Up off the highway's bend onto the lowest terrace of the hill city."
+    p 1108 388
+    p 1150 345
+    p 1172 330
+}
+road meadow-lane w=8 {
+    note "A country lane off the highway, past the racetrack and over the rises to the golf clubhouse."
+    p 75 828
+    p 300 795
+    p 620 790
+    p 900 860
+    p 870 1000
+    p 850 1145
+}
+road waterpark-lane w=8 {
+    note "Off the meadow lane to the water park gates."
+    p 900 860
+    p 1000 720
+    p 1030 650
 }
 road meadow-plateau w=10 {
-    note "Cut into the plateau's south face, climbing to the tiers."
-    p -300 12 200
-    p -800 50 500
-    p -1150 150 450
-    p -1450 260 480
-    p -1950 260 0
+    note "West from the meadow along the foot of the plateau's south cliff, to the gondola up to the sunset tiers."
+    p -300 200
+    p -800 480
+    p -1150 470
+    p -1500 480
+    p -1720 472
+}
+route tiers-gondola kind=gondola {
+    note "Cabins from the end of the cliff-foot road up over the cliff to the top of the sunset tiers."
+    p -1735 455
+    p -2060 140
+}
+
+// Boat tours underground: lantern-lit punts round the glass lake, and up and down the
+// still reach of the glass river under the glowworms.
+route glass-punts kind=punt {
+    note "Punts round the glass lake under the crystals. Land on one and drift round."
+    p -1750 -680 80
+    p -1520 -680 20
+    p -1360 -680 220
+    p -1420 -680 480
+    p -1700 -680 520
+    p -1820 -680 300
+    p -1750 -680 80
+}
+route river-punts kind=punt {
+    note "Punts up and down the still reach of the glass river."
+    p -650 -818.3 975
+    p -300 -818.3 995
+    p 0 -818.3 1000
+    p 300 -818.3 1020
+    p 600 -818.3 1040
+}
+
+// Life underground: Lantern Hollow's market, and cavers' camps out on the cavern floors.
+landmark hollow-market kind=market x=0 y=-940 z=330 rot=10 {
+    note "Lantern Hollow's market, busy at every hour under the lanterns."
+}
+landmark hall-camp kind=campsite x=900 y=-940 z=-100 rot=30 {
+    note "Cavers' camp out on the great hall floor, by the old columns."
+}
+landmark vault-camp kind=campsite x=150 y=-1300 z=-2180 rot=-20 {
+    note "An expedition camp among the ruins of the north vault."
+}
+landmark glass-camp kind=campsite x=-1250 y=-670 z=620 rot=60 {
+    note "Cavers camped by the glass lake, where the river leaves it."
+}
+
+landmark hollow-farm kind=shroomfarm x=520 y=-940 z=120 rot=10 {
+    note "Lantern Hollow's mushroom farm, at the edge of town."
+}
+landmark hollow-cafe kind=cafe x=-250 y=-940 z=180 rot=200 {
+    note "A cafe in Lantern Hollow, lit up under the strings of lights."
+}
+landmark glass-mine kind=mine x=-1620 y=-660 z=-160 rot=170 {
+    note "A crystal mine in the glass lake's north wall."
+}
+landmark glass-cafe kind=cafe x=-1330 y=-668 z=555 rot=200 {
+    note "A lakeside cafe where the punts come in."
+}
+
+landmark meadow-circuit kind=racetrack x=450 z=650 rot=0 {
+    note "A motor racing oval on the south meadow. Land on a car and take a few laps."
+}
+
+// The tarn's hydro scheme: a weir across the outlet above the falls, two penstocks down
+// the cliff beside them, and the power house at the foot.
+landmark tarn-weir kind=weir x=-760 y=427 z=-840 rot=-45 {
+    note "The weir that holds the tarn, sluice gates and all. The falls pour over its spillway."
+}
+landmark tarn-penstock kind=penstock x=-762 y=449 z=-782 rot=-121 text="63 188" {
+    note "Two pipes down the cliff from the tarn to the power house."
+}
+landmark tarn-hydro kind=hydro x=-805 y=261 z=-708 rot=-121 {
+    note "The power house at the foot of the falls. Its turbines hum."
+}
+
+// The power line from the tarn's power house down over the plateau and the meadow to the
+// village.
+route tarn-power kind=power {
+    p -770 -690
+    p -620 -420
+    p -420 -150
+    p -230 100
+    p -120 230
+}
+
+// The cave line: a little tour train round the great hall's floor, on trestles over the
+// dips, calling at Lantern Hollow, the falls and the ruins. Laid by caveline.py.
+railway hollow-line tour=#true {
+    note "Sightseers' train round the great hall. Land on it and ride the whole loop."
+    p 464 -937.3 341
+    p 497 -938.6 339
+    p 529 -939.9 337
+    p 561 -941.1 336
+    p 592 -942.4 335
+    p 623 -943.6 334
+    p 654 -944.9 334
+    p 694 -946.5 333
+    p 753 -948.8 334
+    p 809 -949.5 335
+    p 864 -947.3 334
+    p 918 -945.1 328
+    p 969 -943.0 318
+    p 1019 -940.9 303
+    p 1067 -940.9 284
+    p 1112 -942.9 260
+    p 1149 -944.8 233
+    p 1180 -946.5 202
+    p 1203 -948.1 168
+    p 1220 -949.8 130
+    p 1229 -951.5 89
+    p 1231 -953.1 49
+    p 1227 -954.7 9
+    p 1215 -954.0 -30
+    p 1196 -952.3 -69
+    p 1170 -950.5 -106
+    p 1140 -948.6 -140
+    p 1106 -946.8 -169
+    p 1068 -945.1 -192
+    p 1027 -943.3 -211
+    p 983 -941.4 -223
+    p 936 -939.5 -233
+    p 889 -937.6 -244
+    p 842 -935.7 -256
+    p 795 -933.7 -269
+    p 748 -931.8 -283
+    p 702 -929.8 -297
+    p 655 -927.8 -312
+    p 608 -925.9 -326
+    p 561 -923.9 -340
+    p 514 -922.0 -354
+    p 467 -922.6 -367
+    p 420 -924.5 -379
+    p 373 -924.6 -389
+    p 327 -923.7 -398
+    p 280 -925.6 -404
+    p 233 -927.5 -409
+    p 187 -926.3 -412
+    p 142 -925.0 -412
+    p 99 -925.9 -408
+    p 58 -927.5 -401
+    p 19 -929.1 -391
+    p -19 -930.8 -378
+    p -60 -932.5 -364
+    p -105 -934.4 -349
+    p -153 -936.4 -333
+    p -204 -938.6 -315
+    p -259 -940.9 -297
+    p -314 -943.2 -282
+    p -368 -942.9 -274
+    p -419 -940.9 -272
+    p -469 -938.8 -277
+    p -517 -936.9 -288
+    p -562 -935.0 -298
+    p -603 -933.4 -296
+    p -638 -932.4 -282
+    p -669 -930.8 -255
+    p -694 -928.9 -215
+    p -715 -926.7 -164
+    p -730 -924.5 -110
+    p -740 -922.3 -57
+    p -745 -920.3 -2
+    p -744 -922.1 53
+    p -739 -922.6 109
+    p -727 -924.9 166
+    p -712 -926.9 213
+    p -702 -928.1 242
+    p -689 -929.4 270
+    p -675 -930.7 299
+    p -659 -932.0 328
+    p -642 -933.3 357
+    p -623 -934.7 386
+    p -603 -936.1 415
+    p -581 -937.5 442
+    p -558 -938.9 466
+    p -532 -940.2 488
+    p -506 -940.3 508
+    p -478 -941.3 525
+    p -448 -942.6 540
+    p -416 -943.9 552
+    p -383 -945.3 562
+    p -349 -946.7 569
+    p -312 -948.2 574
+    p -275 -949.7 577
+    p -239 -951.2 578
+    p -203 -952.6 578
+    p -168 -954.0 577
+    p -135 -955.3 575
+    p -102 -954.5 571
+    p -70 -953.2 566
+    p -38 -952.0 560
+    p -8 -950.7 553
+    p 21 -949.5 545
+    p 59 -947.9 532
+    p 111 -945.6 510
+    p 155 -943.7 489
+    p 193 -941.9 466
+    p 223 -940.4 443
+    p 247 -939.0 419
+    p 269 -937.8 396
+    p 299 -936.3 377
+    p 338 -934.6 361
+    p 386 -934.4 350
+    p 433 -936.0 343
+    p 464 -937.3 341
+    station hollow-station x=330 z=420
+    station falls-station x=-560 z=-250
+    station ruins-station x=760 z=-200
 }
 
 // Small caves on their own
@@ -541,11 +844,11 @@ caves deep {
         p 650 -450 -550
     }
     mouth sea-gate kind=cliff w=70 {
-        note "Low in the east sea cliff, out of the drop hall."
+        note "A sea cave low in the east cliff under gate head, out of the drop hall."
         p 1900 -700 1050
         p 1870 -250 760
-        p 1930 30 640
-        p 2080 40 610
+        p 1930 18 640
+        p 2100 38 605
     }
     mouth north-stack-door kind=stack w=60 hidden=#true light=#true {
         note "Through a lone sea stack off the north coast, straight down into the north vault."

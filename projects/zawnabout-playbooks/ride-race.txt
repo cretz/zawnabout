@@ -1,0 +1,12 @@
+# Land on a racing car at the meadow circuit and ride a few fast laps round the oval.
+land-on racecar.0
+wait-until riding racecar.0 40
+wait 2
+expect riding racecar.0
+shot ride-race.png
+wait 30
+expect riding racecar.0
+shot ride-race-2.png
+wait 30
+expect riding racecar.0
+expect ground

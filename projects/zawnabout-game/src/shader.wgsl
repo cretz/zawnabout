@@ -13,10 +13,12 @@ struct Globals {
     fog: vec4f,
     // Cave light (rgb) and how far underground the camera is (a).
     cave: vec4f,
-    // Seconds (x), night (y), point light count (z).
+    // Seconds (x), night (y), point light count (z), cloud shadow count (w).
     misc: vec4f,
     // Per point light: position and reach, then color.
     lights: array<vec4f, 16>,
+    // Per big cloud: middle (x, z), radius, base height, for the shadows they cast.
+    clouds: array<vec4f, 16>,
 };
 
 @group(0) @binding(0) var<uniform> g: Globals;
@@ -54,6 +56,9 @@ fn sky(dir: vec3f) -> vec3f {
     // The sun by day, a big bright moon with a soft halo by night.
     let disc = pow(s, mix(900.0, 350.0, night));
     c += g.sun_color.rgb * (disc * mix(3.0, 6.0, night) + pow(s, 10.0) * mix(0.1, 0.25, night));
+    // A faint glow low over the horizon at night, so the sky's edge stands out from the
+    // darker sea.
+    c += vec3f(0.03, 0.05, 0.09) * night * pow(1.0 - up, 6.0);
     if night > 0.01 {
         // Stars: a few bright cells on a grid over the sky, twinkling slowly.
         let cell = floor(dir * 160.0);
@@ -63,6 +68,17 @@ fn sky(dir: vec3f) -> vec3f {
         c += vec3f(0.9, 0.93, 1.0) * star * twinkle * night * (1.0 - disc);
     }
     return c;
+}
+
+// A rainbow opposite the sun: bands 40 to 42 degrees round the point right away from
+// it, red outside and violet in. Only in the sky itself, not in reflections.
+fn rainbow(dir: vec3f) -> vec3f {
+    let bow = g.sky_horizon.w;
+    let theta = acos(clamp(dot(dir, -g.sun_dir.xyz), -1.0, 1.0));
+    let t = (theta - 0.7) / 0.045;
+    let band = smoothstep(-0.15, 0.1, t) * (1.0 - smoothstep(0.9, 1.15, t));
+    let hue = vec3f(smoothstep(0.35, 1.0, t), 1.0 - abs(t - 0.5) * 1.8, 1.0 - smoothstep(0.0, 0.55, t));
+    return clamp(hue, vec3f(0.0), vec3f(1.0)) * band * bow * 0.3 * smoothstep(0.0, 0.08, dir.y);
 }
 
 @vertex
@@ -85,6 +101,14 @@ fn vs_lit(v: VertIn) -> VertOut {
     }
     var o: VertOut;
     o.clip = g.view_proj * world;
+    // Roads (flag 30) draw nearer the camera along the line of sight, more so far off,
+    // so they stay put on screen but coarse distant ground never pokes through them.
+    if abs(v.normal.w - 0.236) < 0.02 {
+        let to = g.cam_pos.xyz - world.xyz;
+        let d = length(to);
+        let pull = to / max(d, 0.001) * min(d * 0.004, 3.0);
+        o.clip = g.view_proj * vec4f(world.xyz + pull, 1.0);
+    }
     o.world = world.xyz;
     o.normal = (m * vec4f(v.normal.xyz, 0.0)).xyz;
     o.color = vec4f(to_linear(v.color.rgb) * v.tint.rgb, v.color.a * v.tint.a);
@@ -108,12 +132,32 @@ fn point_lights(n: vec3f, world: vec3f) -> vec3f {
     return sum;
 }
 
+// How much sunlight reaches `world` past the big clouds overhead: each casts a soft
+// round shadow along the sun's way onto whatever is under it.
+fn cloud_light(world: vec3f) -> f32 {
+    let s = g.sun_dir.xyz;
+    var lit = 1.0;
+    if s.y > 0.05 {
+        let count = i32(g.misc.w);
+        for (var i = 0; i < count; i++) {
+            let c = g.clouds[i];
+            let lift = c.w - world.y;
+            if lift > 0.0 {
+                let q = world.xz + s.xz / s.y * lift;
+                let d = length(q - c.xy) / c.z;
+                lit *= 1.0 - 0.4 * (1.0 - smoothstep(0.55, 1.0, d));
+            }
+        }
+    }
+    return lit;
+}
+
 // Lights a surface color the way every solid thing is lit, then adds distance haze.
 fn shade(base: vec3f, n: vec3f, world: vec3f, day: f32, thin: f32) -> vec3f {
     var ndl = dot(n, g.sun_dir.xyz);
     // Thin surfaces glow when the sun is behind them.
     ndl = max(ndl, -ndl * 0.7 * thin);
-    var light = clamp(ndl * 0.75 + 0.25, 0.0, 1.0);
+    var light = clamp(ndl * 0.75 + 0.25, 0.0, 1.0) * cloud_light(world);
     let bands = g.fog.z;
     if bands > 0.5 {
         light = min(floor(light * bands + 0.35) / bands, 1.0);
@@ -133,10 +177,18 @@ fn haze(col: vec3f, world: vec3f) -> vec3f {
 // world outside a mouth (lit by day) still fades into the sky, so it stays bright.
 fn haze_lit(col: vec3f, world: vec3f, day: f32) -> vec3f {
     let to_frag = world - g.cam_pos.xyz;
-    let fog = smoothstep(g.fog.x, g.fog.y, length(to_frag));
     let gloom = g.cave.a * (1.0 - day);
-    let far = mix(sky(normalize(to_frag)), g.cave.rgb * 0.5, gloom);
-    return mix(col, far, fog * (1.0 - gloom * 0.4));
+    // Underground the far walls keep their rock colors much further, dimming into a
+    // dusky brown rather than washing out pale.
+    let fog = smoothstep(g.fog.x, g.fog.y, length(to_frag) / (1.0 + gloom * 1.5));
+    let far = mix(sky(normalize(to_frag)), g.cave.rgb * 0.3 + vec3f(0.05, 0.035, 0.025), gloom);
+    // Morning mist lying low over the water and the low ground, thicker off in the
+    // distance, never in caves.
+    let low = (1.0 - smoothstep(2.0, 40.0, world.y)) * smoothstep(60.0, 900.0, length(to_frag));
+    let bank = smoothstep(0.45, 0.75, vnoise(world.xz * 0.0025 + vec2f(g.misc.x * 0.004, 0.0)));
+    let mist = g.sky_top.w * low * bank * 0.6 * (1.0 - g.cave.a);
+    let veiled = mix(col, g.sky_horizon.rgb * 0.5 + vec3f(0.42), mist);
+    return mix(veiled, far, fog * (1.0 - gloom * 0.4));
 }
 
 fn facing(normal: vec3f, front: bool) -> vec3f {
@@ -206,7 +258,7 @@ fn vnoise(p: vec2f) -> f32 {
 }
 
 // Ground detail without textures: grass in drifts of lush and dry with tufts up close,
-// rock in layered strata, sand in faint ripples.
+// waves of wind and wildflowers, rock in layered strata, sand in faint ripples.
 fn ground_detail(base: vec3f, world: vec3f) -> vec3f {
     let w = world.xz;
     let hi = max(base.r, max(base.g, base.b));
@@ -227,6 +279,35 @@ fn ground_detail(base: vec3f, world: vec3f) -> vec3f {
     let near = 1.0 - smoothstep(0.06, 0.2, max(fwidth(tp.x), fwidth(tp.y)));
     let tuft = hash2(floor(tp));
     c *= 1.0 + (tuft - 0.5) * 0.12 * near * grass;
+    // Wind sweeping over the grass: gusts roll across in pale waves, as the blades bend
+    // and show their lighter undersides.
+    let t = g.misc.x;
+    let gp = w * vec2f(0.016, 0.011) - vec2f(t * 0.09, t * 0.06);
+    let gust = vnoise(gp) * 0.65 + vnoise(gp * 2.9 + 4.0) * 0.35;
+    let sheen = smoothstep(0.52, 0.82, gust) * grass * (1.0 - snow);
+    c = mix(c, c * vec3f(1.14, 1.12, 0.94) + vec3f(0.018, 0.022, 0.0), sheen * 0.75);
+    // Wildflowers dotted through some meadows, one to a cell, only up close.
+    let fp = w * 0.6;
+    let fw = max(fwidth(fp.x), fwidth(fp.y));
+    let fc = floor(fp);
+    let fh = hash2(fc + 91.0);
+    let spot = vec2f(hash2(fc + 3.0), hash2(fc + 5.0)) * 0.6 + 0.2;
+    let petal_r = 0.09 + fw * 0.5;
+    let dot_in = 1.0 - smoothstep(petal_r, petal_r + 0.05, length(fract(fp) - spot));
+    let patchy = smoothstep(0.48, 0.72, vnoise(w * 0.021 + 40.0));
+    let bloom = dot_in * step(0.5, fh) * patchy * grass * (1.0 - smoothstep(0.03, 0.08, fw));
+    let kind = hash2(fc + 17.0);
+    var petal = vec3f(0.92, 0.9, 0.82);
+    if kind > 0.45 {
+        petal = vec3f(0.95, 0.72, 0.08);
+    }
+    if kind > 0.75 {
+        petal = vec3f(0.62, 0.36, 0.9);
+    }
+    if kind > 0.9 {
+        petal = vec3f(0.95, 0.42, 0.55);
+    }
+    c = mix(c, petal, bloom * 0.9);
     // Rock in layers like sediment: each layer its own shade, from cool gray to warm
     // ochre, wavering with the noise, with a dark seam between layers.
     let y = world.y + (vnoise(w * 0.015) - 0.5) * 14.0;
@@ -251,6 +332,9 @@ fn fs_ground(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let n = facing(i.normal, front);
     var base = ground_detail(i.color.rgb, i.world);
     let above = i.thin * 12.7;
+    // Caustics' grid, measured out here before any branch for WebGPU.
+    let cp = i.world.xz * 0.32;
+    let cpx = max(fwidth(cp.x), fwidth(cp.y));
     if above < 12.6 {
         let t = g.misc.x;
         // Wet ground just above the water, darker.
@@ -258,14 +342,46 @@ fn fs_ground(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec
         // Under water the ground sinks into blue.
         let under = clamp(-above / 9.0, 0.0, 1.0);
         base = mix(base, DEEP_WATER, sqrt(under) * 0.85);
+        // Sunlight focused by the waves wanders over shallow beds in a bright net, where
+        // two drifting noises cross.
+        let a = vnoise(cp + vec2f(t * 0.31, t * 0.17));
+        let b = vnoise(cp * 1.37 + vec2f(-t * 0.23, t * 0.29) + 7.0);
+        let net = 1.0 - smoothstep(0.0, 0.07 + cpx * 0.5, abs(a - b));
+        let shallow = step(above, 0.0) * (1.0 - smoothstep(0.5, 6.0, -above));
+        let sharp = 1.0 - smoothstep(0.15, 0.5, cpx);
+        base += vec3f(0.22, 0.3, 0.26) * net * shallow * sharp * day;
         // A band of foam that laps up and down the shore.
         let wob = hash2(floor(i.world.xz * 0.15)) * 6.28;
         let lap = 0.18 * sin(t * 1.1 + wob) + 0.12 * sin(t * 0.37 + i.world.x * 0.03);
         let foam = 1.0 - smoothstep(0.08, 0.3, abs(above - lap - 0.05));
         base = mix(base, vec3f(0.95, 0.97, 1.0), foam * 0.85);
+        // Coral in warm sandy shallows: patches of pink, orange and violet under the
+        // water, fading out deeper down.
+        let sandy = smoothstep(0.1, 0.2, i.color.r - i.color.b) * (1.0 - smoothstep(0.02, 0.1, i.color.g - i.color.r));
+        let reef = smoothstep(0.55, 0.75, vnoise(i.world.xz * 0.06 + 70.0)) * sandy;
+        let shelf = smoothstep(-0.8, -1.5, above) * (1.0 - smoothstep(-6.0, -10.0, above));
+        let tint = mix(vec3f(0.85, 0.35, 0.45), vec3f(0.95, 0.55, 0.2), vnoise(i.world.xz * 0.15));
+        let coral = mix(tint, vec3f(0.55, 0.35, 0.8), smoothstep(0.62, 0.7, vnoise(i.world.xz * 0.35 + 30.0)));
+        base = mix(base, coral * 0.75, reef * shelf * 0.7);
     }
-    // Deep in caves, walls get flowstone streaks and veins of glowing ore.
-    let under = 1.0 - smoothstep(0.08, 0.35, day);
+    // Against sea cliffs the swell surges white up the rock every few seconds, each
+    // stretch of cliff in its own time. Measured from the sea itself, as a tall cliff
+    // face's own height over the water is too coarse.
+    {
+        let t = g.misc.x;
+        let wob = hash2(floor(i.world.xz * 0.15)) * 6.28;
+        let steep = 1.0 - smoothstep(0.35, 0.6, abs(n.y));
+        let beat = pow(max(sin(t * 0.95 + wob * 1.7), 0.0), 3.0);
+        let surge = 1.2 + 6.5 * beat * (0.6 + 0.4 * vnoise(i.world.xz * 0.05 + t * 0.2));
+        let y = i.world.y;
+        let froth = step(-0.3, y) * (1.0 - smoothstep(surge * 0.7, surge, y)) * step(0.6, day);
+        let lace = smoothstep(0.35, 0.6, vnoise(i.world.xz * 0.4 + vec2f(0.0, y * 0.7) + t));
+        base = mix(base, vec3f(0.96, 0.98, 1.0), froth * steep * mix(0.55, 0.95, lace));
+    }
+    // Deep in caves, walls get flowstone streaks and veins of glowing ore, except the
+    // pale tiles of built tunnels and halls.
+    let tiled = step(0.6, min(i.color.r, min(i.color.g, i.color.b)));
+    let under = (1.0 - smoothstep(0.08, 0.35, day)) * (1.0 - tiled);
     var ore = vec3f(0.0);
     // Flat coordinates on whichever plane the wall faces most, wrapped so the noise keeps
     // its precision far from the origin. Screen derivatives must be taken out here, before
@@ -296,7 +412,7 @@ fn fs_ground(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let fog_ore = smoothstep(g.fog.x, g.fog.y, length(i.world - g.cam_pos.xyz));
     col += ore * (1.0 - fog_ore);
     // Glowworms speckle cave roofs like a sky full of tiny blue-green stars.
-    let roof = (1.0 - smoothstep(0.08, 0.35, day)) * smoothstep(0.25, 0.7, -n.y);
+    let roof = under * smoothstep(0.25, 0.7, -n.y);
     if roof > 0.01 {
         let p = roof_p;
         let px = roof_px;
@@ -362,13 +478,18 @@ fn fs_water(i: VertOut) -> @location(0) vec4f {
         var ndl = clamp(dot(n, g.sun_dir.xyz), 0.0, 1.0);
         // Cave water glows a little on its own, like lit crystal.
         let glow = base * 0.35 + vec3f(0.02, 0.12, 0.14);
-        let lit = base * (mix(g.cave.rgb * 0.9, g.ambient_sky.rgb, day) + g.sun_color.rgb * (0.35 + 0.5 * ndl) * day) + glow * (1.0 - day);
+        let sun = g.sun_color.rgb * (0.35 + 0.5 * ndl) * day * cloud_light(i.world);
+        let lit = base * (mix(g.cave.rgb * 0.9, g.ambient_sky.rgb, day) + sun) + glow * (1.0 - day);
         let fres = pow(1.0 - clamp(dot(n, v), 0.0, 1.0), 4.0) * mix(0.35, 1.0, day);
         let refl = mix(g.cave.rgb * 0.5 + vec3f(0.0, 0.08, 0.1), sky(reflect(-v, n)), day);
         col = mix(lit, refl, fres * 0.75);
         // Sun glints, in hard little sparkles.
         let spec = pow(clamp(dot(reflect(-g.sun_dir.xyz, n), v), 0.0, 1.0), 120.0);
         col += g.sun_color.rgb * step(0.4, spec) * 1.2 * day * calm;
+        // The moon lays a long shimmering path across the water at night.
+        let night = g.misc.y;
+        let moon = pow(clamp(dot(reflect(-g.sun_dir.xyz, n), v), 0.0, 1.0), 18.0);
+        col += g.sun_color.rgb * moon * 0.7 * night * day;
         // Swell lines rolling in to the shore and breaking white in the shallows. Rivers
         // and pools are too small for surf, so only wide still water gets it.
         let still = 1.0 - smoothstep(0.5, 2.0, length(flow));
@@ -381,17 +502,61 @@ fn fs_water(i: VertOut) -> @location(0) vec4f {
         let gust = vnoise(wind) * smoothstep(0.45, 0.75, vnoise(i.world.xz * 0.02 + t * 0.03));
         let open = smoothstep(0.35, 0.8, depth) * still * (1.0 - smoothstep(80.0, 450.0, dist));
         col = mix(col, vec3f(0.95, 0.98, 1.0), smoothstep(0.8, 0.88, gust) * open * 0.5 * day);
+        // Running water: streaks of light and foam drawn out along the flow, racing
+        // downstream at its speed.
+        let speed = length(flow);
+        let along = flow / max(speed, 0.001);
+        let q = vec2f(dot(i.world.xz, vec2f(-along.y, along.x)) * 0.3, dot(i.world.xz, along) * 0.035 - t * speed * 0.035);
+        let streak = vnoise(q) * vnoise(q * vec2f(1.7, 1.3) + 9.0);
+        let running = smoothstep(0.3, 1.5, speed) * (1.0 - smoothstep(150.0, 600.0, dist));
+        col = mix(col, vec3f(0.9, 0.96, 1.0), smoothstep(0.3, 0.55, streak) * running * 0.5 * mix(0.4, 1.0, day));
         // Foam where the water thins out at its edges and where it rushes.
         let fizz = hash2(floor(i.world.xz * 0.5) + floor(t * 3.0));
         let edge = 1.0 - smoothstep(0.0, 0.08, depth);
         let rush = smoothstep(4.0, 9.0, length(flow)) * step(0.7, fizz);
         col = mix(col, vec3f(0.95, 0.98, 1.0), max(edge * 0.6, rush * 0.7));
         col = haze(col, i.world);
+        // At night the open water stays a shade darker than the sky over it, out to the
+        // horizon, so the two never run together.
+        col *= 1.0 - 0.38 * night * day * smoothstep(0.3, 0.8, depth);
         alpha = mix(0.35, 0.95, smoothstep(0.0, 1.0, depth));
         alpha = max(alpha, fres * 0.9) * mix(0.0, 1.0, smoothstep(0.0, 0.04, depth) + 0.4);
         alpha = clamp(alpha, 0.0, 1.0);
     }
     return vec4f(col, alpha);
+}
+
+// The sign font, filled in from the sim's own when the shader is built: space to
+// underscore, 3 by 5 bits each, the top left the highest.
+var<private> GLYPHS: array<u32, 64> = array<u32, 64>(GLYPH_TABLE);
+
+// Painted letters: flat quads that carry their corner (normal x, y) and character
+// (normal z) instead of a normal, cut to the letter's cells. Normal w is 1 for letters
+// that light up at night and 2 for ones that always glow.
+@fragment
+fn fs_letter(i: VertOut) -> @location(0) vec4f {
+    // The face's normal from screen derivatives, taken before any branch for WebGPU.
+    var n = normalize(cross(dpdx(i.world), dpdy(i.world)));
+    if dot(n, g.cam_pos.xyz - i.world) < 0.0 {
+        n = -n;
+    }
+    let u = clamp(i.normal.x, 0.0, 0.999);
+    let v = clamp(i.normal.y, 0.0, 0.999);
+    let code = min(u32(round(i.normal.z * 127.0)), 63u);
+    let cell = u32((1.0 - v) * 5.0) * 3u + u32(u * 3.0);
+    if ((GLYPHS[code] >> (14u - cell)) & 1u) == 0u {
+        discard;
+    }
+    let day = clamp(i.color.a, 0.0, 1.0);
+    let glow = haze(i.color.rgb * 1.5, i.world);
+    if i.thin > 0.012 {
+        return vec4f(glow, 1.0);
+    }
+    let col = shade(i.color.rgb, n, i.world, day, 0.0);
+    if i.thin > 0.004 {
+        return vec4f(mix(col, glow, g.misc.y), 1.0);
+    }
+    return vec4f(col, 1.0);
 }
 
 @fragment
@@ -425,5 +590,6 @@ fn vs_sky(@builtin(vertex_index) idx: u32) -> SkyOut {
 fn fs_sky(i: SkyOut) -> @location(0) vec4f {
     let far = g.inv_view_proj * vec4f(i.ndc, 1.0, 1.0);
     let dir = normalize(far.xyz / far.w - g.cam_pos.xyz);
-    return vec4f(sky(dir), 1.0);
+    // Deep in a cave, past the walls drawn, is more rock in the gloom, not daylight.
+    return vec4f(mix(sky(dir) + rainbow(dir), g.cave.rgb * 0.5, g.sun_dir.w), 1.0);
 }

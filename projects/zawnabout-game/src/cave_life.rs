@@ -1,5 +1,6 @@
 //! Life under the ground that is only for looks: bat colonies wheeling under the roofs of
-//! big caverns and glowing motes drifting in the air around you. Like everything in
+//! big caverns, glowing motes drifting in the air around you, and parties of cavers
+//! walking the cavern floors in single file with their headlamps on. Like everything in
 //! `life`, a pure function of the clock.
 
 use std::f32::consts::TAU;
@@ -9,6 +10,7 @@ use zawnabout_sim::World;
 use zawnabout_sim::shape::hash;
 use zawnabout_sim::terrain::VoidShape;
 
+use crate::mesh::Rgb;
 use crate::models;
 use crate::render::{Instance, MeshId, Renderer};
 
@@ -19,10 +21,39 @@ struct Colony {
     count: u32,
 }
 
+/// A party of cavers walking a loop over a cavern floor, one behind another.
+struct Party {
+    trail: Vec<Vec3>,
+    along: Vec<f32>,
+    size: u32,
+}
+
+impl Party {
+    fn len(&self) -> f32 {
+        *self.along.last().unwrap_or(&0.0)
+    }
+
+    /// Where `s` meters round the loop is, and which way it runs there.
+    fn at(&self, s: f32) -> (Vec3, Vec3) {
+        let s = s.rem_euclid(self.len().max(1.0));
+        let i = self
+            .along
+            .partition_point(|a| *a <= s)
+            .clamp(1, self.trail.len() - 1);
+        let (a, b) = (self.trail[i - 1], self.trail[i]);
+        let u = (s - self.along[i - 1]) / (self.along[i] - self.along[i - 1]).max(1e-3);
+        (a.lerp(b, u.clamp(0.0, 1.0)), (b - a).normalize_or(Vec3::Z))
+    }
+}
+
 pub struct CaveLife {
     colonies: Vec<Colony>,
+    parties: Vec<Party>,
     bat: MeshId,
 }
+
+/// Caver overalls: bright, to be seen by.
+const OVERALLS: [Rgb; 4] = [Rgb(0xE8743A), Rgb(0xE0453A), Rgb(0xF2C14E), Rgb(0x3E7FC4)];
 
 /// Mote grid spacing and how far around the camera they show (m).
 const MOTE_CELL: f32 = 11.0;
@@ -65,12 +96,14 @@ impl CaveLife {
         }
         Self {
             colonies,
+            parties: parties(terrain),
             bat: renderer.add_mesh(&models::bat()),
         }
     }
 
     /// Everything alive in the caves near the camera this moment. `tint` is the cave's own
     /// glow color, for the motes.
+    #[allow(clippy::too_many_arguments)]
     pub fn draw(
         &self,
         world: &World,
@@ -78,9 +111,41 @@ impl CaveLife {
         time: f32,
         tint: Vec3,
         pool: MeshId,
+        people: (MeshId, [MeshId; 3]),
         draws: &mut Vec<(MeshId, Instance)>,
         fx: &mut Vec<(MeshId, Instance)>,
     ) {
+        // Cavers walk their loops in single file, each with a headlamp lit.
+        let (body, heads) = people;
+        for (k, p) in self.parties.iter().enumerate() {
+            if p.trail[0].distance(cam) > 1200.0 + p.len() * 0.3 {
+                continue;
+            }
+            let lead = time * 0.8 + hash(k as u32 * 7 + 3) * p.len();
+            for i in 0..p.size {
+                let s = k as u32 * 29 + i;
+                let (at, dir) = p.at(lead - i as f32 * 2.2);
+                if at.distance(cam) > 700.0 {
+                    continue;
+                }
+                let bob = (time * 8.0 + s as f32).sin().abs() * 0.06;
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::splat(0.95 + hash(s) * 0.12),
+                    Quat::from_rotation_y(dir.x.atan2(dir.z)),
+                    at + Vec3::Y * bob,
+                );
+                let suit = crate::life::linear(OVERALLS[(hash(s + 1) * 4.0) as usize % 4]);
+                draws.push((body, Instance::tinted(m, suit.extend(1.0))));
+                draws.push((heads[(s % 3) as usize], Instance::new(m)));
+                let lamp = (m * Mat4::from_translation(Vec3::new(0.0, 1.72, 0.2)))
+                    .w_axis
+                    .truncate();
+                let face = Quat::from_rotation_arc(Vec3::Y, (cam - lamp).normalize_or(Vec3::Y));
+                let glow =
+                    Mat4::from_scale_rotation_translation(Vec3::new(0.3, 1.0, 0.3), face, lamp);
+                fx.push((pool, Instance::tinted(glow, Vec4::new(1.0, 0.95, 0.8, 1.0))));
+            }
+        }
         for (k, c) in self.colonies.iter().enumerate() {
             if c.center.distance(cam) > 1600.0 {
                 continue;
@@ -152,4 +217,66 @@ impl CaveLife {
             }
         }
     }
+}
+
+/// Loops for parties of cavers over the floors of the big caverns: a few spots round the
+/// middle of each, on open dry floor, joined up with the floor height every few meters.
+fn parties(terrain: &zawnabout_sim::terrain::Terrain) -> Vec<Party> {
+    use zawnabout_sim::terrain::Decor;
+    let mut out = Vec::new();
+    for (k, v) in terrain.def.voids.iter().enumerate() {
+        if matches!(v.shape, VoidShape::Tube | VoidShape::Basin)
+            || v.decor == Decor::Tiled
+            || v.half[0].min(v.half[2]) < 150.0
+        {
+            continue;
+        }
+        let c = Vec3::from(v.center);
+        let count = (1 + (v.half[0] * v.half[2] / 400_000.0) as u32).min(3);
+        for n in 0..count {
+            let seed = (k as u32 * 17 + n).wrapping_mul(2_654_435_761);
+            let r = |q: u32| hash(seed.wrapping_add(q.wrapping_mul(40_503)));
+            let floor = |x: f32, z: f32| {
+                let y = terrain.support(x, z, c.y);
+                let open = terrain.sdf(Vec3::new(x, y + 2.0, z)) > 1.0
+                    && y > c.y - v.half[1] * 1.3
+                    && terrain.cave_water(x, z, y).is_none();
+                open.then_some(y)
+            };
+            let mut spots = Vec::new();
+            for i in 0..7u32 {
+                let a = (i as f32 + r(i) * 0.5) / 7.0 * TAU;
+                let f = 0.25 + r(i + 20) * 0.4;
+                let (u, w) = (a.cos() * v.half[0] * f, a.sin() * v.half[2] * f);
+                let (x, z) = (c.x + u * v.cos - w * v.sin, c.z + u * v.sin + w * v.cos);
+                if let Some(y) = floor(x, z) {
+                    spots.push(Vec3::new(x, y, z));
+                }
+            }
+            if spots.len() < 4 {
+                continue;
+            }
+            let mut trail = Vec::new();
+            for i in 0..spots.len() {
+                let (a, b) = (spots[i], spots[(i + 1) % spots.len()]);
+                let steps = (a.distance(b) / 3.0).ceil().max(1.0) as u32;
+                for j in 0..steps {
+                    let p = a.lerp(b, j as f32 / steps as f32);
+                    let y = terrain.support(p.x, p.z, a.y.max(b.y) + 6.0);
+                    trail.push(Vec3::new(p.x, y, p.z));
+                }
+            }
+            trail.push(trail[0]);
+            let mut along = vec![0.0];
+            for w in trail.windows(2) {
+                along.push(along[along.len() - 1] + w[0].distance(w[1]));
+            }
+            out.push(Party {
+                trail,
+                along,
+                size: 3 + (r(99) * 3.0) as u32,
+            });
+        }
+    }
+    out
 }

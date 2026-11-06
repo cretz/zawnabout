@@ -4,6 +4,9 @@
 //!
 //! Neighboring chunks overlap by a cell, and coarser chunks sit slightly lower, so the
 //! finer one always shows and no cracks open between levels.
+//!
+//! Far chunks change rarely and each would cost a draw, so their outside meshes merge,
+//! one mesh per square of [`GROUP`], rebuilt only when the chunks in it change.
 
 use std::collections::{HashMap, HashSet};
 
@@ -19,7 +22,20 @@ const N: usize = 32;
 const CELL0: f32 = 6.0;
 const MAX_LOD: u8 = 5;
 /// A node splits while the camera is within this many node sizes of it.
-const SPLIT: f32 = 0.88;
+const SPLIT: f32 = 0.65;
+/// Coarse chunks far off split less readily than near ones, so far land, seen small,
+/// costs less.
+fn far_split(lod: u8) -> f32 {
+    if lod >= 3 {
+        0.7f32.powi(lod as i32 - 2)
+    } else {
+        1.0
+    }
+}
+
+/// Chunks this coarse and coarser merge into one mesh per square of `GROUP` meters.
+const MERGE_LOD: u8 = 2;
+const GROUP: f32 = N as f32 * CELL0 * 8.0;
 /// Chunks entirely below this are under opaque sea and never drawn.
 const UNDERWATER: f32 = -crate::water::OPAQUE_DEPTH - 2.0;
 
@@ -52,6 +68,8 @@ impl Key {
 #[derive(Clone, Default)]
 struct Built {
     outer: Option<(MeshId, Vec3, f32)>,
+    /// A far chunk's outside mesh, kept here for its group to merge instead of uploaded.
+    far: Option<MeshBuilder>,
     inner: Option<(MeshId, Vec3, f32)>,
     /// Caves deep under the ground left out, to mesh when the camera comes near them.
     skipped: Vec<u16>,
@@ -82,10 +100,25 @@ fn upload(renderer: &mut Renderer, mesh: &MeshBuilder) -> Option<(MeshId, Vec3, 
     ))
 }
 
+/// Far chunks drawn as one: which chunks, and their merged mesh.
+struct Group {
+    members: Vec<Key>,
+    mesh: Option<(MeshId, Vec3, f32)>,
+}
+
 #[derive(Default)]
 pub struct TerrainMeshes {
     built: HashMap<Key, Built>,
     drawn: Vec<Key>,
+    groups: HashMap<(i32, i32), Group>,
+}
+
+impl Key {
+    /// The square of far chunks this one merges into.
+    fn group(self) -> (i32, i32) {
+        let c = self.min() + Vec2::splat(self.size() * 0.5);
+        ((c.x / GROUP).floor() as i32, (c.y / GROUP).floor() as i32)
+    }
 }
 
 impl TerrainMeshes {
@@ -100,13 +133,12 @@ impl TerrainMeshes {
         deep: bool,
     ) -> Vec<(MeshId, Vec3, f32)> {
         let cave_range = PEEK_RANGE + (CAVE_RANGE - PEEK_RANGE) * (underground * 2.0).min(1.0);
+        let surface = |(_, c, r): &(MeshId, Vec3, f32)| !deep || c.distance(cam) - r < 300.0;
         self.drawn
             .iter()
             .filter_map(|k| self.built.get(k))
             .flat_map(|b| {
-                let outer = b
-                    .outer
-                    .filter(|(_, c, r)| !deep || c.distance(cam) - r < 300.0);
+                let outer = b.outer.filter(surface);
                 // Caves are dim and twisty, so far cave walls are not worth drawing.
                 let inner = b
                     .inner
@@ -114,6 +146,13 @@ impl TerrainMeshes {
                 [outer, inner]
             })
             .flatten()
+            // Far chunks are never near enough to show from deep underground.
+            .chain(
+                self.groups
+                    .values()
+                    .filter_map(|g| g.mesh)
+                    .filter(|_| !deep),
+            )
             .collect()
     }
 
@@ -147,7 +186,7 @@ impl TerrainMeshes {
             let flat = Vec2::new(cam.x, cam.z).clamp(a, b) - Vec2::new(cam.x, cam.z);
             let up = (cam.y - 400.0).max(0.0);
             let d = (flat.length_squared() + up * up).sqrt();
-            if k.lod > 0 && d < k.size() * split {
+            if k.lod > 0 && d < k.size() * split * far_split(k.lod) {
                 for (dx, dz) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
                     stack.push(Key {
                         lod: k.lod - 1,
@@ -181,8 +220,14 @@ impl TerrainMeshes {
             if !ready(self.built.get(k)) {
                 let (outer, inner, skipped) =
                     crate::prof::time("chunk", || build(terrain, *k, &near));
+                let merge = k.lod >= MERGE_LOD && !outer.verts.is_empty();
                 let built = Built {
-                    outer: upload(renderer, &outer),
+                    outer: if merge {
+                        None
+                    } else {
+                        upload(renderer, &outer)
+                    },
+                    far: merge.then_some(outer),
                     inner: upload(renderer, &inner),
                     skipped,
                 };
@@ -190,6 +235,12 @@ impl TerrainMeshes {
                     for (mesh, _, _) in [old.outer, old.inner].into_iter().flatten() {
                         renderer.free_mesh(mesh);
                     }
+                }
+                // A far chunk built afresh changes its square's merged mesh.
+                if let Some(g) = self.groups.remove(&k.group())
+                    && let Some((mesh, _, _)) = g.mesh
+                {
+                    renderer.free_mesh(mesh);
                 }
                 left -= 1;
             }
@@ -220,6 +271,40 @@ impl TerrainMeshes {
             stay
         });
         self.drawn = drawn;
+        self.merge(renderer);
+    }
+
+    /// Rebuilds the merged mesh of every square whose far chunks changed.
+    fn merge(&mut self, renderer: &mut Renderer) {
+        let mut want: HashMap<(i32, i32), Vec<Key>> = HashMap::new();
+        for k in &self.drawn {
+            if self.built.get(k).is_some_and(|b| b.far.is_some()) {
+                want.entry(k.group()).or_default().push(*k);
+            }
+        }
+        for members in want.values_mut() {
+            members.sort_by_key(|k| (k.lod, k.x, k.z));
+        }
+        self.groups.retain(|cell, g| {
+            let keep = want.get(cell).is_some_and(|m| *m == g.members);
+            if !keep && let Some((mesh, _, _)) = g.mesh {
+                renderer.free_mesh(mesh);
+            }
+            keep
+        });
+        for (cell, members) in want {
+            if self.groups.contains_key(&cell) {
+                continue;
+            }
+            let mut all = MeshBuilder::new();
+            for k in &members {
+                if let Some(far) = self.built.get(k).and_then(|b| b.far.as_ref()) {
+                    all.verts.extend_from_slice(&far.verts);
+                }
+            }
+            let mesh = upload(renderer, &all);
+            self.groups.insert(cell, Group { members, mesh });
+        }
     }
 
     /// Whether every wanted chunk is built, with the deep caves near the camera.
@@ -241,7 +326,7 @@ const ROCK: [Rgb; 3] = [Rgb(0x9C8F84), Rgb(0x8E8379), Rgb(0xA89C8E)];
 const ALPINE: Rgb = Rgb(0xA6B47E);
 const SNOW: Rgb = Rgb(0xF0F2F5);
 const TOWN: Rgb = Rgb(0xD9CBA8);
-const CAVE_ROCK: [Rgb; 3] = [Rgb(0x8C8078), Rgb(0x7E746E), Rgb(0x988A7C)];
+const CAVE_ROCK: [Rgb; 3] = [Rgb(0x947760), Rgb(0x806856), Rgb(0xA0846A)];
 const CAVE_FLOOR: [Rgb; 2] = [Rgb(0x9C9070), Rgb(0x7F9A68)];
 /// Dressed stone along canals.
 const QUAY: [Rgb; 2] = [Rgb(0xC2B59E), Rgb(0xB5A890)];
@@ -289,11 +374,30 @@ const TILE_FLOOR: Rgb = Rgb(0x9A958C);
 fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bool) -> Rgb {
     let h = hash(c);
     let pick = |list: &[Rgb]| list[(h * list.len() as f32) as usize % list.len()];
+    // Cold seas, rivers, quays and town canals get a grey pebbly bed under the water, too pale
+    // for the shader's coral, which needs warm sand.
+    let plain = || {
+        c.y < -0.5
+            && (wet
+                || terrain.climate(c.x, c.z) == 3
+                || terrain
+                    .cover(c.x, c.z)
+                    .is_some_and(|cv| cv.kind == CoverKind::Town))
+    };
+    let pebbles = |sand: Rgb| sand.mix(Rgb(0xB8B6AE), 0.85);
     if !inside && terrain.quay(c.x, c.z) {
-        return pick(&QUAY);
+        return if c.y < -0.5 {
+            pebbles(pick(&QUAY))
+        } else {
+            pick(&QUAY)
+        };
     }
     if wet {
-        return pick(&BED);
+        return if plain() {
+            pebbles(pick(&BED))
+        } else {
+            pick(&BED)
+        };
     }
     if tiled {
         if n.y > 0.7 {
@@ -311,7 +415,11 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bo
         return ground.mix(Rgb(0x000000), h * 0.07);
     }
     if c.y < 0.6 {
-        return pick(&SAND);
+        return if plain() {
+            pebbles(pick(&SAND))
+        } else {
+            pick(&SAND)
+        };
     }
     // Snow lies on ski runs even where they steepen, rock only shows on real drops.
     let snow = n.y > 0.4
@@ -328,7 +436,14 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bo
     if c.y < 3.5 && n.y > 0.8 {
         return pick(&SAND);
     }
-    if c.y > 880.0 {
+    // Cold islands are snowy above a far lower line.
+    let climate = terrain.climate(c.x, c.z);
+    let snowline = if climate == 3 {
+        230.0 + h * 40.0
+    } else {
+        880.0
+    };
+    if c.y > snowline {
         return SNOW.mix(pick(&ROCK), h * 0.3);
     }
     let base = match terrain.cover(c.x, c.z) {
@@ -341,6 +456,17 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bo
             (CoverKind::Meadow, _) => MEADOW.mix(pick(&GRASS), h * 0.4),
         },
         None => pick(&GRASS),
+    };
+    // Each island's own climate: deep greens in the rainforest, golden grass on the dry
+    // island, pale frosty grass on the cold one. Towns keep their colors.
+    let town = terrain
+        .cover(c.x, c.z)
+        .is_some_and(|cv| cv.kind == CoverKind::Town);
+    let base = match (climate, town) {
+        (_, true) | (0, _) => base,
+        (1, _) => base.mix(Rgb(0x2F7A34), 0.35),
+        (2, _) => base.mix(Rgb(0xD4B862).mix(Rgb(0xC9A452), h), 0.6),
+        _ => base.mix(Rgb(0xB9C0AA), 0.68),
     };
     let base = if c.y > 680.0 {
         base.mix(ALPINE, ((c.y - 680.0) / 150.0).clamp(0.0, 1.0))
@@ -361,13 +487,22 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bo
 fn near_void(terrain: &Terrain, v: u16, cam: Vec3) -> bool {
     let void = &terrain.def.voids[v as usize];
     let b = void_bounds(void);
-    (b.min - cam).max(cam - b.max).max(Vec3::ZERO).length() < DEEP_NEAR
-        && zawnabout_sim::terrain::void_sdf(void, cam) < DEEP_NEAR
+    // From inside one cave you can see a long way across into the next, so underground
+    // the reach is much longer.
+    let reach = if terrain.daylight(cam) < 0.5 {
+        DEEP_SEEN
+    } else {
+        DEEP_NEAR
+    };
+    (b.min - cam).max(cam - b.max).max(Vec3::ZERO).length() < reach
+        && zawnabout_sim::terrain::void_sdf(void, cam) < reach
 }
 
 /// How near a deep cave the camera must come before chunks mesh its walls (m). Cave
 /// insides start drawing at 150m, so this leaves time to build them.
 const DEEP_NEAR: f32 = 300.0;
+/// How near the camera must be when it is underground itself (m).
+const DEEP_SEEN: f32 = 1200.0;
 
 /// A chunk's outside and deep cave meshes, and the deep caves it left out because the
 /// camera is not near them (`near` says which are).

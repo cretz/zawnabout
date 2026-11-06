@@ -1,0 +1,12 @@
+# Ride a helicopter between helipads: lift off, cruise high over the sea and set down.
+ride helicopter.0
+wait 2
+expect riding helicopter.0
+wait 40
+shot ride-heli-1.png
+wait 40
+expect riding helicopter.0
+shot ride-heli-2.png
+wait 60
+expect riding helicopter.0
+shot ride-heli-3.png

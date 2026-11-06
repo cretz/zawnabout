@@ -2,6 +2,7 @@ import init, { App } from "../pkg/zawnabout_web.js";
 import { setupDebug } from "./debug.ts";
 import { setupMinimap } from "./minimap.ts";
 import { setupNotes } from "./notes.ts";
+import { setupSound } from "./sound.ts";
 import { setupTouch } from "./touch.ts";
 
 const query = new URLSearchParams(location.search);
@@ -48,6 +49,8 @@ function controlsHtml(touch: boolean): string {
         ["<kbd>F</kbd> or <kbd>R</kbd>", "Breathe fire. Light the beacons!"],
         ["Hold <kbd>W</kbd> on the ground", "Run"],
         ["Click a glowing spot", "Fly there and land"],
+        ["<kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> or right drag", "Look around"],
+        ["<kbd>M</kbd>", "Big map with everything to find"],
         ["<kbd>N</kbd>", "Notes mode: pause, fly around, leave notes"],
         ["<kbd>Esc</kbd> or <kbd>P</kbd>", "Pause"],
         ["Gamepad", "Stick, A flap, X fire, B or Y brake, triggers"],
@@ -118,8 +121,13 @@ async function start() {
     }
   });
 
+  const welcome = $("welcome");
   const notes = setupNotes(app, canvas, touch);
-  const minimap = setupMinimap(app, touch);
+  setupSound(app);
+  // The atlas pauses the world while it is open, unless the pause card already has.
+  const minimap = setupMinimap(app, touch, (on) => {
+    if (welcome.classList.contains("hidden")) app.command(on ? "pause" : "resume");
+  });
   // A tap on the touch stick area picks a note spot in notes mode, else a landing spot.
   if (touch)
     setupTouch(app, (x, y) => {
@@ -127,7 +135,6 @@ async function start() {
       else if (!notes.writing()) notes.pick(x, y);
     });
 
-  const welcome = $("welcome");
   $("controls").innerHTML = controlsHtml(touch);
   if (touch) $("start-hint").textContent = "Tap to start";
   // The welcome card doubles as the pause screen: the world waits while it is up.
@@ -143,14 +150,194 @@ async function start() {
       started = true;
       app.blur();
     }
-    app.command(show ? "pause" : "resume");
+    if (show || !minimap.atlas()) app.command(show ? "pause" : "resume");
   };
   if (!query.has("nowelcome")) showHelp(true);
   else started = true;
-  // Leaving the tab pauses too.
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden && !notes.active()) showHelp(true);
+  // Sound on or off from the pause card, remembered, and kept in step with the U key.
+  const SOUND_KEY = "zawnabout.sound";
+  const soundBox = $<HTMLInputElement>("sound-on");
+  try {
+    soundBox.checked = localStorage.getItem(SOUND_KEY) !== "0";
+  } catch {
+    soundBox.checked = true;
+  }
+  app.command(soundBox.checked ? "sound on" : "sound off");
+  soundBox.parentElement!.addEventListener("pointerdown", (e) => e.stopPropagation());
+  soundBox.addEventListener("change", () => {
+    app.command(soundBox.checked ? "sound on" : "sound off");
+    try {
+      localStorage.setItem(SOUND_KEY, soundBox.checked ? "1" : "0");
+    } catch {
+      // Kept for this visit only.
+    }
   });
+  addEventListener("keyup", (e) => {
+    if (e.code !== "KeyU") return;
+    soundBox.checked = !app.muted();
+    try {
+      localStorage.setItem(SOUND_KEY, soundBox.checked ? "1" : "0");
+    } catch {
+      // Kept for this visit only.
+    }
+  });
+  // Leaving the tab or the window pauses too, unless turned off on the pause card.
+  const PAUSE_KEY = "zawnabout.pauseaway";
+  const away = $<HTMLInputElement>("pause-away");
+  try {
+    away.checked = localStorage.getItem(PAUSE_KEY) !== "0";
+  } catch {
+    away.checked = true;
+  }
+  away.parentElement!.addEventListener("pointerdown", (e) => e.stopPropagation());
+  away.addEventListener("change", () => {
+    try {
+      localStorage.setItem(PAUSE_KEY, away.checked ? "1" : "0");
+    } catch {
+      // Kept for this visit only.
+    }
+  });
+  const leave = () => {
+    if (away.checked && started && !notes.active() && !query.has("nowelcome")) showHelp(true);
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) leave();
+  });
+  window.addEventListener("blur", leave);
+
+  // Changing keys on the pause card: pick an action, press its new key. Kept in the
+  // browser for next time.
+  const KEYS_SAVED = "zawnabout.keys";
+  try {
+    const saved = localStorage.getItem(KEYS_SAVED);
+    if (saved) app.set_bindings_text(saved);
+  } catch {
+    // The game's own keys then.
+  }
+  let rebinding: string | null = null;
+  const LABELS: Record<string, string> = {
+    up: "Nose up",
+    down: "Nose down",
+    left: "Turn left",
+    right: "Turn right",
+    flap: "Flap",
+    tuck: "Dive",
+    brake: "Brake, land, hover",
+    breath: "Breathe fire",
+  };
+  const keyName = (code: string) =>
+    code.replace(/^Key|^Digit/, "").replace(/^Arrow(.*)/, "$1 arrow").replace(/(Left|Right)$/, "");
+  // The corner card shows the keys as they are now, changed or not.
+  const drawCorner = () => {
+    const bound = new Map(
+      app
+        .bindings_text()
+        .trim()
+        .split(/\r?\n/)
+        .map((line) => {
+          const [action, ...codes] = line.split(" ");
+          return [action, codes.filter((c) => !c.startsWith("Arrow"))] as [string, string[]];
+        }),
+    );
+    const kbd = (action: string, n: number) =>
+      [...new Set((bound.get(action) ?? []).map(keyName))]
+        .slice(0, n)
+        .map((k) => `<kbd>${k}</kbd>`)
+        .join(" ");
+    $("keys-list").innerHTML = [
+      [["up", "left", "down", "right"].map((a) => kbd(a, 1)).join(""), "Steer"],
+      [kbd("flap", 1), "Flap"],
+      [kbd("tuck", 1), "Dive"],
+      [kbd("brake", 2), "Brake, land, hover"],
+      [kbd("breath", 1), "Breathe fire"],
+      ["<kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd>", "Look around"],
+      ["<kbd>M</kbd>", "Big map"],
+      ["<kbd>N</kbd>", "Notes"],
+      ["<kbd>U</kbd>", "Sound on/off"],
+      ["<kbd>Esc</kbd>", "Pause, all controls"],
+    ]
+      .map(([k, v]) => `<span class="keys">${k}</span><span>${v}</span>`)
+      .join("");
+  };
+  const drawKeys = () => {
+    drawCorner();
+    $("rebind-list").innerHTML = app
+      .bindings_text()
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => {
+        const [action, ...codes] = line.split(" ");
+        const shown =
+          rebinding === action ? "Press a key..." : [...new Set(codes.map(keyName))].join(", ") || "none";
+        return `<span>${LABELS[action] ?? action}</span><button type="button" data-action="${action}">${shown}</button>`;
+      })
+      .join("");
+  };
+  const saveKeys = () => {
+    try {
+      localStorage.setItem(KEYS_SAVED, app.bindings_text());
+    } catch {
+      // Kept for this visit only.
+    }
+  };
+  if (!touch) {
+    const rebind = $("rebind");
+    rebind.classList.remove("hidden");
+    rebind.addEventListener("pointerdown", (e) => e.stopPropagation());
+    $("rebind-list").addEventListener("click", (e) => {
+      const action = (e.target as HTMLElement).dataset?.action;
+      if (action) {
+        rebinding = action;
+        drawKeys();
+      }
+    });
+    $("rebind-reset").addEventListener("click", () => {
+      app.reset_keys();
+      saveKeys();
+      drawKeys();
+    });
+    // While waiting for a new key, that key goes nowhere else.
+    window.addEventListener(
+      "keydown",
+      (e) => {
+        if (!rebinding) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (e.code !== "Escape") {
+          app.bind_key(rebinding, e.code);
+          saveKeys();
+        }
+        rebinding = null;
+        drawKeys();
+      },
+      { capture: true },
+    );
+    drawKeys();
+  }
+
+  // A small corner card of the keys for keyboard players, folded away with its button.
+  const keys = $("keys-card");
+  if (!touch) {
+    const KEYS_KEY = "zawnabout.keyscard";
+    drawCorner();
+    const fold = (open: boolean) => {
+      keys.classList.toggle("folded", !open);
+      try {
+        localStorage.setItem(KEYS_KEY, open ? "1" : "0");
+      } catch {
+        // Kept for this visit only.
+      }
+    };
+    let open = true;
+    try {
+      open = localStorage.getItem(KEYS_KEY) !== "0";
+    } catch {
+      // Open then.
+    }
+    keys.classList.remove("hidden");
+    fold(open);
+    $("keys-toggle").addEventListener("click", () => fold(keys.classList.contains("folded")));
+  }
   $("help-btn").addEventListener("click", () => showHelp(welcome.classList.contains("hidden")));
   welcome.addEventListener("pointerdown", () => showHelp(false));
 
@@ -170,6 +357,11 @@ async function start() {
       showHelp(welcome.classList.contains("hidden"));
       return;
     }
+    // U sets the sound, even with the card open.
+    if (e.code === "KeyU") {
+      if (!e.repeat) app.key(e.code, true, false);
+      return;
+    }
     if (!welcome.classList.contains("hidden")) {
       // The key that closes the card only closes it.
       showHelp(false);
@@ -183,10 +375,14 @@ async function start() {
     app.key(e.code, false, false);
   });
   window.addEventListener("blur", () => app.blur());
-  // Click or tap the world to fly there and land. Drag it to look around.
+  // Click or tap the world to fly there and land. Drag it, or hold the right button, to
+  // look around.
   let press: { x: number; y: number; at: number; id: number; drag: boolean } | null = null;
   canvas.addEventListener("pointerdown", (e) => {
-    press = { x: e.clientX, y: e.clientY, at: performance.now(), id: e.pointerId, drag: false };
+    // The right button, or Ctrl with a click on a Mac, looks round from the first move.
+    const look = e.pointerType === "mouse" && (e.button === 2 || (e.button === 0 && e.ctrlKey));
+    press = { x: e.clientX, y: e.clientY, at: performance.now(), id: e.pointerId, drag: look };
+    if (look) canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", (e) => {
     if (!press || e.pointerId !== press.id || notes.active()) return;
@@ -239,7 +435,7 @@ async function start() {
       if (cmd === "save-trace") api.logs.push(app.take_trace() ?? "");
     }
     debugPanel?.update();
-    minimap.update(notes.spots());
+    minimap.update(notes.active() ? notes.spots() : []);
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

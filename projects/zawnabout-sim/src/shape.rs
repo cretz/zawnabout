@@ -119,7 +119,14 @@ impl Shape {
         match self {
             Shape::Frustum(f) => {
                 let d = Vec2::new(x - f.base.x, z - f.base.z).length();
-                (d <= f.r1 && f.r1 > 0.5).then(|| f.top())
+                if d <= f.r1 && f.r1 > 0.5 {
+                    return Some(f.top());
+                }
+                // A gently sloped cone, such as a carousel canopy or a round tent, is
+                // standable on its side too.
+                let fall = f.r0 - f.r1;
+                (fall > 0.5 && d <= f.r0 && f.height <= fall * 0.8)
+                    .then(|| f.base.y + f.height * ((f.r0 - d) / fall).min(1.0))
             }
             Shape::Sphere { center, radius } => {
                 let d = Vec2::new(x - center.x, z - center.z).length();

@@ -1,14 +1,14 @@
 //! Desktop host. Runs windowed for play, or `--headless` to run a debug script and write
 //! screenshots without a window.
 //!
-//! zawnabout [--headless] [--script FILE] [--out DIR] [--size WxH] [--seed N] [--debug]
+//! zawnabout [--headless] [--script FILE] [--out DIR] [--size WxH] [--seed N] [--debug] [--mute]
 //! zawnabout --map FILE [--size WxH]
 //!
 //! `--debug` reads commands from stdin while windowed. F12 saves a screenshot to `--out`.
 //! `--map` writes a top-down shaded map of the world, `--size` width wide, and exits.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Instant;
 
 use gilrs::{Axis, Button, Gilrs};
@@ -18,9 +18,77 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
+use zawnabout_game::audio::Synth;
+use zawnabout_game::hud::{HudKey, NoteChange};
+use zawnabout_game::notes::{Note, note_stamp};
 use zawnabout_game::{Game, Gfx, Output, Renderer, Script, wgpu};
 
 const FRAME: f32 = 1.0 / 60.0;
+
+/// Where the player's keys are kept between runs.
+fn keys_file() -> Option<PathBuf> {
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("zawnabout").join("keys.txt"))
+}
+
+/// Where design notes go: `working-area/feedback` beside the repo when the game runs from
+/// it, as the dev server does, or else a folder next to the saved keys.
+fn notes_dir() -> PathBuf {
+    let starts = [std::env::current_exe().ok(), std::env::current_dir().ok()];
+    for start in starts.into_iter().flatten() {
+        for dir in start.ancestors() {
+            let f = dir.join("working-area").join("feedback");
+            if f.is_dir() {
+                return f;
+            }
+        }
+    }
+    keys_file()
+        .and_then(|f| Some(f.parent()?.join("notes")))
+        .unwrap_or_else(|| PathBuf::from("notes"))
+}
+
+/// Every note in the folder, oldest first.
+fn load_notes(dir: &Path) -> Vec<Note> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    files.retain(|f| f.extension().is_some_and(|e| e == "json"));
+    files.sort();
+    files
+        .iter()
+        .filter_map(|f| Note::from_json(&std::fs::read_to_string(f).ok()?))
+        .collect()
+}
+
+/// Saves new notes and deletes old ones as the HUD asks, then lists them again.
+fn sync_notes(game: &mut Game, dir: &Path) {
+    let changes = std::mem::take(&mut game.hud.outbox);
+    if changes.is_empty() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dir);
+    for change in changes {
+        match change {
+            NoteChange::Save(mut note) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default();
+                (note.id, note.created) = note_stamp(now.as_secs(), now.subsec_nanos() as u64);
+                let _ = std::fs::write(dir.join(format!("{}.json", note.id)), note.to_json());
+            }
+            NoteChange::Delete(id) => {
+                // Only names the game made, so nothing outside the folder goes.
+                if !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                    let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
+                }
+            }
+        }
+    }
+    game.set_notes(load_notes(dir));
+}
 
 struct Args {
     headless: bool,
@@ -30,6 +98,7 @@ struct Args {
     size: (u32, u32),
     seed: u64,
     map: Option<PathBuf>,
+    mute: bool,
 }
 
 fn parse_args() -> Args {
@@ -41,6 +110,7 @@ fn parse_args() -> Args {
         size: (1280, 720),
         seed: 1,
         map: None,
+        mute: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -57,6 +127,7 @@ fn parse_args() -> Args {
             }
             "--seed" => a.seed = val().parse().expect("seed"),
             "--map" => a.map = Some(val().into()),
+            "--mute" => a.mute = true,
             _ => panic!("unknown argument {arg}"),
         }
     }
@@ -151,7 +222,7 @@ fn host_command(
         "stats" => {
             // Renders once so the numbers match the current view.
             let _ = gfx.capture(game);
-            let s = gfx.renderer.stats;
+            let s = &gfx.renderer.stats;
             println!(
                 "stats draws={} (static {} terrain {} water {}) triangles={} terrain={} props={} water={} meshes={}",
                 s.draws,
@@ -163,6 +234,61 @@ fn host_command(
                 s.props,
                 s.water,
                 s.meshes
+            );
+            if words.get(1).is_some_and(|w| w == "detail") {
+                let mut top = s.heaviest.clone();
+                top.sort_by_key(|t| std::cmp::Reverse(t.2));
+                for (mesh, count, tris) in
+                    top.iter()
+                        .take(if words.get(2).is_some() { 400 } else { 30 })
+                {
+                    println!("  mesh {mesh} x{count} = {tris} triangles");
+                }
+            }
+        }
+        // clouds: the big clouds nearest the camera, and the weather where it is.
+        "clouds" => {
+            let (cam, time) = (game.camera.pos, game.time as f32);
+            let w = gfx.weather();
+            let here = w.here(cam, time);
+            println!("clouds mist={:.2} rain={:.2}", here.mist, here.rain);
+            for s in w.strikes(time + 60.0, 60.0) {
+                println!(
+                    "  strike at {:.0} {:.0} {:.0} in {:.1}s",
+                    s.at.x,
+                    s.at.y,
+                    s.at.z,
+                    s.time - time
+                );
+            }
+            for (at, half, rain) in w.nearest(cam, time, 6) {
+                println!(
+                    "  cloud at {:.0} {:.0} {:.0} half {:.0} {:.0} {:.0}{}",
+                    at.x,
+                    at.y,
+                    at.z,
+                    half.x,
+                    half.y,
+                    half.z,
+                    if rain { " rain" } else { "" }
+                );
+            }
+        }
+        // sound: what the world sounds like here, as the listener mixes it.
+        "sound" => {
+            let m = gfx.sound(game);
+            println!(
+                "sound master={:.0} wind={:.2} rush={:.2} surf={:.2} rain={:.2} falls={:.2} bustle={:.2} birds={:.2} organ={:.2} events={:?}",
+                m.master,
+                m.wind,
+                m.rush,
+                m.surf,
+                m.rain,
+                m.falls,
+                m.bustle,
+                m.birds,
+                m.organ,
+                m.events
             );
         }
         "profile" => {
@@ -225,11 +351,64 @@ struct App {
     script: Option<Script>,
     stdin: Option<mpsc::Receiver<String>>,
     cursor: (f64, f64),
+    /// The right mouse button is held, looking round.
+    looking: bool,
     shots: u32,
     title_at: f32,
+    notes: PathBuf,
+    /// The world's sound, played on the default output, and the stream playing it.
+    synth: Option<Arc<Mutex<Synth>>>,
+    stream: Option<cpal::Stream>,
+}
+
+/// Starts sound on the default output device, if there is one that takes floats.
+fn start_sound(synth: Arc<Mutex<Synth>>) -> Option<cpal::Stream> {
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    let device = cpal::default_host().default_output_device()?;
+    let config = device.default_output_config().ok()?;
+    if config.sample_format() != cpal::SampleFormat::F32 {
+        println!("sound: output is not float samples, staying quiet");
+        return None;
+    }
+    let channels = config.channels() as usize;
+    let rate = config.sample_rate().0 as f32;
+    let mut stereo = Vec::new();
+    let stream = device
+        .build_output_stream(
+            &config.into(),
+            move |out: &mut [f32], _| {
+                let frames = out.len() / channels.max(1);
+                stereo.resize(frames * 2, 0.0);
+                if let Ok(mut s) = synth.lock() {
+                    s.fill(&mut stereo, rate);
+                }
+                for (f, lr) in out.chunks_mut(channels).zip(stereo.chunks(2)) {
+                    for (c, v) in f.iter_mut().enumerate() {
+                        *v = lr[c.min(1)];
+                    }
+                }
+            },
+            |e| eprintln!("sound: {e}"),
+            None,
+        )
+        .ok()?;
+    stream.play().ok()?;
+    Some(stream)
 }
 
 impl App {
+    /// Pauses or resumes, saying so in the title bar.
+    fn set_paused(&mut self, on: bool) {
+        let _ = self.game.command(if on { "pause" } else { "resume" });
+        if let Some(win) = &self.win {
+            win.window.set_title(if on {
+                "zawnabout (paused, press Esc to keep flying)"
+            } else {
+                "zawnabout"
+            });
+        }
+    }
+
     fn new(args: Args) -> Self {
         let script = args
             .script
@@ -255,8 +434,12 @@ impl App {
             script,
             stdin,
             cursor: (0.0, 0.0),
+            looking: false,
             shots: 0,
             title_at: 0.0,
+            notes: notes_dir(),
+            synth: None,
+            stream: None,
         }
     }
 
@@ -366,6 +549,12 @@ impl App {
             ..Default::default()
         });
         win.gfx.render(&self.game, &view);
+        if let Some(s) = &self.synth {
+            let mix = win.gfx.sound(&self.game);
+            if let Ok(mut s) = s.lock() {
+                s.set(mix);
+            }
+        }
         win.window.pre_present_notify();
         win.gfx.renderer.queue.present(tex);
     }
@@ -426,6 +615,20 @@ impl ApplicationHandler for App {
         surface.configure(&device, &config);
         let renderer = Renderer::new(device, queue, view_format, (config.width, config.height));
         let gfx = Gfx::new(renderer, &self.game);
+        // Played in a window, the game draws its own map and help, with the player's keys.
+        self.game.hud.on = true;
+        if let Some(text) = keys_file().and_then(|f| std::fs::read_to_string(f).ok()) {
+            self.game.bindings.set_text(&text);
+        }
+        if !self.args.mute {
+            let synth = Arc::new(Mutex::new(Synth::new()));
+            self.stream = start_sound(synth.clone());
+            if self.stream.is_some() {
+                self.synth = Some(synth);
+            }
+        }
+        self.game.hud.notes_where = format!("saved to {}", self.notes.display());
+        self.game.set_notes(load_notes(&self.notes));
         self.win = Some(Window_ {
             window,
             surface,
@@ -439,8 +642,30 @@ impl ApplicationHandler for App {
         match event {
             WindowEvent::CloseRequested => el.exit(),
             WindowEvent::Resized(s) => self.resize(s.width, s.height),
-            WindowEvent::Focused(false) => self.game.input.clear(),
-            WindowEvent::CursorMoved { position, .. } => self.cursor = (position.x, position.y),
+            // Leaving the window pauses, as the web page does. Esc or P resumes.
+            WindowEvent::Focused(false) => {
+                self.game.release_keys();
+                if !self.args.debug {
+                    self.set_paused(true);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                // Holding the right button looks round.
+                if self.looking {
+                    let (dx, dy) = (position.x - self.cursor.0, position.y - self.cursor.1);
+                    if self.game.feedback.active {
+                        self.game.feedback_look(dx as f32, dy as f32);
+                    } else {
+                        self.game.look_drag(dx as f32, dy as f32);
+                    }
+                }
+                self.cursor = (position.x, position.y);
+            }
+            WindowEvent::MouseInput {
+                state,
+                button: winit::event::MouseButton::Right,
+                ..
+            } => self.looking = state.is_pressed(),
             WindowEvent::MouseInput {
                 state: winit::event::ElementState::Pressed,
                 button: winit::event::MouseButton::Left,
@@ -448,11 +673,17 @@ impl ApplicationHandler for App {
             } => {
                 if let Some(win) = &self.win {
                     let (w, h) = (win.config.width as f64, win.config.height as f64);
-                    self.game.tap(
+                    let (nx, ny, aspect) = (
                         (self.cursor.0 / w) as f32,
                         (self.cursor.1 / h) as f32,
                         (w / h) as f32,
                     );
+                    // In notes mode a click starts a note there, otherwise it lands there.
+                    if self.game.feedback.active {
+                        self.game.notes_pick(nx, ny, aspect);
+                    } else {
+                        self.game.tap(nx, ny, aspect);
+                    }
                 }
             }
             WindowEvent::KeyboardInput { event, .. } => {
@@ -471,6 +702,48 @@ impl ApplicationHandler for App {
                             &mut self.shots,
                         );
                     }
+                    return;
+                }
+                // The HUD's panels and notes take keys first, and its panels pause the
+                // game while open. Held keys repeat only while writing a note.
+                let writing = self.game.hud.writing.is_some();
+                if event.state.is_pressed() && (!event.repeat || writing) {
+                    let was = self.game.hud.open();
+                    let in_notes = self.game.feedback.active;
+                    if self.game.hud_key(&name, event.text.as_deref()) == HudKey::Used {
+                        sync_notes(&mut self.game, &self.notes);
+                        // Entering notes mode reads the folder again, for replies.
+                        if !in_notes && self.game.feedback.active {
+                            self.game.set_notes(load_notes(&self.notes));
+                        }
+                        if std::mem::take(&mut self.game.hud.changed)
+                            && let Some(f) = keys_file()
+                        {
+                            let _ = std::fs::create_dir_all(f.parent().unwrap_or(Path::new(".")));
+                            let _ = std::fs::write(f, self.game.bindings.to_text());
+                        }
+                        let open = self.game.hud.open();
+                        if open != was || (!open && self.game.paused) {
+                            self.set_paused(open);
+                        }
+                        return;
+                    }
+                }
+                if matches!(name.as_str(), "Escape" | "KeyP") && event.state.is_pressed() {
+                    if !event.repeat {
+                        let paused = self.game.paused;
+                        self.set_paused(!paused);
+                    }
+                    return;
+                }
+                // U sets the sound, paused or not.
+                if name == "KeyU" {
+                    self.game.key(&name, event.state.is_pressed(), event.repeat);
+                    return;
+                }
+                if self.game.paused && event.state.is_pressed() {
+                    // Any other key just wakes it.
+                    self.set_paused(false);
                     return;
                 }
                 self.game.key(&name, event.state.is_pressed(), event.repeat);

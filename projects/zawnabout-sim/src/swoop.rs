@@ -64,13 +64,22 @@ impl Swoop {
         let dist = flat.length().max(1.0);
         let across = flat / dist;
 
-        // Clear the tallest thing under the straight line, with room to spare.
+        // Clear the tallest thing under the straight line, with room to spare, but only
+        // things near the line: the hill over a cave is no reason to climb. And never
+        // rise into a roof overhead.
         let mut top = pos.y.max(end.y);
+        let mut roof = f32::MAX;
+        let reach_up = top + 60.0;
         for i in 0..=24 {
             let p = pos.lerp(end, i as f32 / 24.0);
-            top = top.max(world.support(p.x, p.z, 1.0e4) + stand_height);
+            top = top.max(world.support(p.x, p.z, reach_up) + stand_height);
+            if let Some(k) = (1..=20).find(|k| world.solid_at(p + Vec3::Y * (*k as f32 * 4.0))) {
+                roof = roof.min(p.y + k as f32 * 4.0);
+            }
         }
-        let clear = top + 8.0 + dist * 0.06;
+        let clear = (top + 8.0 + dist * 0.06)
+            .min(roof - stand_height - 4.0)
+            .max(pos.y.max(end.y));
 
         let speed = vel.length();
         // Leave along the current motion, already leaning toward the target. From a

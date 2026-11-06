@@ -2,7 +2,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use zawnabout_sim::PropKind;
 use zawnabout_sim::shape::spire_tiers;
 use zawnabout_sim::world::spire_tree_offset;
@@ -1159,6 +1159,47 @@ pub fn skis() -> MeshBuilder {
     m
 }
 
+/// A pair of water skis under a skier's feet, tips toward +z and turned up.
+pub fn water_skis() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let board = Rgb(0xF2C14E);
+    for x in [-0.16f32, 0.16] {
+        m.cube(Vec3::new(x, 0.03, 0.1), Vec3::new(0.07, 0.03, 0.85), board);
+        m.cube(Vec3::new(x, 0.1, 0.97), Vec3::new(0.07, 0.04, 0.08), board);
+    }
+    m
+}
+
+/// A parasail canopy, about 9 m across, arched over the origin where its lines meet, its
+/// span along x and the open front toward +z. Striped in bright panels.
+pub fn parasail() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let cols = [Rgb(0xE0564A), Rgb(0xF2C14E), Rgb(0x2E6FB8), Rgb(0xF6F1E7)];
+    let n = 10;
+    let (r, up, depth) = (4.6f32, 7.0f32, 2.2f32);
+    let at = |k: u32| {
+        let a = (k as f32 / n as f32 - 0.5) * 2.2;
+        Vec3::new(a.sin() * r, up + a.cos() * 1.6, 0.0)
+    };
+    for k in 0..n {
+        let (a, b) = (at(k), at(k + 1));
+        let back = Vec3::Z * -depth * 0.5;
+        let front = Vec3::Z * depth * 0.5;
+        let col = cols[k as usize % cols.len()];
+        m.quad(a + back, b + back, b + front, a + front, col);
+        m.quad(a + front, b + front, b + back, a + back, col);
+    }
+    // Lines from the canopy's edge down to the harness.
+    let dark = Rgb(0x3A3A40);
+    for k in [0, n / 2, n] {
+        let top = at(k);
+        let w = Vec3::Z * 0.02;
+        m.quad(-w, w, top + w, top - w, dark);
+        m.quad(top - w, top + w, w, -w, dark);
+    }
+    m
+}
+
 /// A tuft of grass blades, about knee high to a person, dark at the root and pale at the
 /// tips. Its color comes from the instance tint, and the blades sway in the wind (their
 /// normal's w marks them, see the shader).
@@ -1618,6 +1659,22 @@ pub fn flagpole() -> MeshBuilder {
     m
 }
 
+/// A person seen from afar: legs and a shirt, tinted like the body.
+pub fn townsfolk_far() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(
+        Vec3::new(0.0, 0.4, 0.0),
+        Vec3::new(0.2, 0.4, 0.15),
+        Rgb(0x9A9AA0),
+    );
+    m.cube(
+        Vec3::new(0.0, 1.2, 0.0),
+        Vec3::new(0.26, 0.45, 0.17),
+        Rgb(0xFFFFFF),
+    );
+    m
+}
+
 /// A person's body, white so the instance tint colors the clothes, feet at the origin.
 pub fn townsfolk_body() -> MeshBuilder {
     let mut m = MeshBuilder::new();
@@ -1747,21 +1804,6 @@ pub fn ferris_wheel() -> MeshBuilder {
     for v in &mut m.verts[from..] {
         v.normal[3] = -64;
     }
-    m
-}
-
-/// A fairground gondola, hanging from its pin at the origin: a little open car with a
-/// striped roof. White, for tinting.
-pub fn gondola() -> MeshBuilder {
-    let mut m = MeshBuilder::new();
-    let w = Rgb(0xFFFFFF);
-    m.cube(Vec3::new(0.0, -2.0, 0.0), Vec3::new(0.9, 0.5, 0.7), w);
-    m.frustum(6, -1.0, 1.1, -0.6, 0.0, w, w);
-    m.cube(
-        Vec3::new(0.0, -0.8, 0.0),
-        Vec3::new(0.05, 0.4, 0.05),
-        Rgb(0x8C949C),
-    );
     m
 }
 
@@ -2076,21 +2118,44 @@ pub fn prop_far(kind: PropKind, v: u32) -> Option<MeshBuilder> {
     let mut m = MeshBuilder::new();
     match kind {
         PropKind::RoundTree => {
-            // Far away the trunk is hidden by the canopy anyway.
-            octahedron(
-                &mut m,
-                Vec3::new(0.3, 4.3, 0.15),
-                Vec3::new(2.8, 2.6, 2.8),
-                LEAF[v as usize],
-            );
+            // A rounded crown on a bare trunk, so it still reads as a tree, not a gem.
+            let leaf = LEAF[v as usize];
+            let (c, r) = (Vec3::new(0.3, 4.6, 0.15), Vec3::new(2.8, 2.4, 2.8));
+            let ring: Vec<Vec3> = (0..5)
+                .map(|i| {
+                    let a = i as f32 / 5.0 * TAU;
+                    c + Vec3::new(a.cos() * r.x, r.y * 0.15, a.sin() * r.z)
+                })
+                .collect();
+            let (top, foot) = (c + Vec3::Y * r.y, c - Vec3::Y * r.y * 0.6);
+            for i in 0..5 {
+                let (a, b) = (ring[i], ring[(i + 1) % 5]);
+                m.tri(b, a, top, leaf);
+                m.tri(a, b, foot, leaf.mix(Rgb(0x000000), 0.12));
+            }
+            let trunk: Vec<Vec3> = (0..3)
+                .map(|i| {
+                    let a = i as f32 / 3.0 * TAU;
+                    Vec3::new(a.cos() * 0.35, 0.0, a.sin() * 0.35)
+                })
+                .collect();
+            for i in 0..3 {
+                m.tri(trunk[(i + 1) % 3], trunk[i], foot, TRUNK);
+            }
         }
         PropKind::Cloud => {
-            let puffs = 3 + v;
-            for i in 0..puffs {
-                let t = i as f32 / (puffs - 1) as f32;
-                let r = 8.0 + (1.0 - (t - 0.5).abs() * 2.0) * 5.0;
-                let c = Vec3::new((t - 0.5) * 22.0, r * 0.3, 0.0);
-                octahedron(&mut m, c, Vec3::new(r, r * 0.7, r * 0.85), CLOUD);
+            // Far off a cloud is one round lump with a flat belly, its puffs blurred into
+            // one.
+            m.blob(
+                Vec3::new(0.0, 4.0, 0.0),
+                Vec3::new(22.0, 8.5, 11.0),
+                false,
+                0.06,
+                v * 7 + 1,
+                CLOUD,
+            );
+            for p in &mut m.verts {
+                p.pos[1] = p.pos[1].max(-0.5);
             }
         }
         PropKind::PineTree => {
@@ -2101,15 +2166,6 @@ pub fn prop_far(kind: PropKind, v: u32) -> Option<MeshBuilder> {
         _ => return None,
     }
     Some(m)
-}
-
-/// Eight faces around a center, stretched by `r`.
-fn octahedron(m: &mut MeshBuilder, c: Vec3, r: Vec3, color: Rgb) {
-    let (x, y, z) = (Vec3::X * r.x, Vec3::Y * r.y, Vec3::Z * r.z);
-    for (a, b) in [(x, z), (z, -x), (-x, -z), (-z, x)] {
-        m.tri(c + y, c + b, c + a, color);
-        m.tri(c - y, c + a, c + b, color.mix(Rgb(0x000000), 0.08));
-    }
 }
 
 fn round_tree(v: u32) -> MeshBuilder {
@@ -2225,7 +2281,107 @@ fn cloud(v: u32) -> MeshBuilder {
     m
 }
 
+/// A cloud piece for the middle distance: the same puffs as [`cloud`], each a plain
+/// twenty-sided lump with the same flat belly, far cheaper but still round.
+pub fn cloud_mid(v: u32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let puffs = 4 + v;
+    for i in 0..puffs {
+        let t = i as f32 / (puffs - 1) as f32;
+        let x = (t - 0.5) * 22.0;
+        let r = 7.0 + (1.0 - (t - 0.5).abs() * 2.0) * 5.0 + hash(v * 9 + i) * 2.0;
+        let c = Vec3::new(x, r * 0.2, (hash(v * 4 + i) - 0.5) * 6.0);
+        m.blob(
+            c,
+            Vec3::new(r, r * 0.72, r * 0.85),
+            false,
+            0.08,
+            v * 19 + i,
+            CLOUD,
+        );
+    }
+    for p in &mut m.verts {
+        if p.pos[1] < -0.5 {
+            p.pos[1] = -0.5;
+            p.color = CLOUD_BELLY.bytes();
+        }
+    }
+    m
+}
+
 /// A lump of spray, for the foot of falls.
+/// A splash playground's big bucket, about its pivot: yellow outside, red bands, and
+/// water to the brim, with the axle through it.
+pub fn splash_bucket() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.frustum(12, -1.3, 1.0, 0.75, 1.45, Rgb(0xF2C14E), Rgb(0x7FD3EA));
+    m.frustum(12, 0.45, 1.39, 0.75, 1.47, Rgb(0xE0564A), Rgb(0x7FD3EA));
+    m.cube(Vec3::ZERO, Vec3::new(2.3, 0.12, 0.12), Rgb(0x8C949C));
+    m
+}
+
+/// A chair swing's crown, about the top of its tower: a striped, scalloped canopy with
+/// bulbs round its rim.
+pub fn swing_crown() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.frustum(16, 0.0, 5.2, 1.6, 0.6, Rgb(0xE0564A), Rgb(0xF2C14E));
+    m.frustum(16, -0.6, 5.3, 0.0, 5.2, Rgb(0xF2C14E), Rgb(0xF2C14E));
+    let from = m.verts.len();
+    for k in 0..16 {
+        let a = k as f32 / 16.0 * TAU;
+        m.cube(
+            Vec3::new(a.cos() * 5.35, -0.35, a.sin() * 5.35),
+            Vec3::splat(0.12),
+            Rgb(0xFFF2C0),
+        );
+    }
+    m.glow_from(from);
+    m
+}
+
+/// One chair on a chair swing, hanging from the origin: two chains down to a seat with a
+/// back and a footrest. White, tinted per chair.
+pub fn swing_chair(drop: f32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let w = Rgb(0xFFFFFF);
+    for x in [-0.28f32, 0.28] {
+        m.cube(
+            Vec3::new(x, -drop * 0.5, 0.0),
+            Vec3::new(0.02, drop * 0.5, 0.02),
+            Rgb(0x8C949C),
+        );
+    }
+    m.cube(Vec3::new(0.0, -drop, 0.0), Vec3::new(0.3, 0.05, 0.25), w);
+    m.cube(
+        Vec3::new(0.0, -drop + 0.3, -0.24),
+        Vec3::new(0.3, 0.3, 0.03),
+        w,
+    );
+    m.cube(
+        Vec3::new(0.0, -drop - 0.4, 0.3),
+        Vec3::new(0.2, 0.03, 0.08),
+        w,
+    );
+    m
+}
+
+/// A bumper car facing +z, floor at the origin: a round-nosed tub on a black rubber
+/// bumper, a seat, and a pole up to the ceiling with a spark at its top. White, tinted.
+pub fn bumper_car() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (w, dark) = (Rgb(0xFFFFFF), Rgb(0x2A2A2E));
+    m.cube(Vec3::new(0.0, 0.2, 0.0), Vec3::new(0.85, 0.2, 1.15), dark);
+    m.cube(Vec3::new(0.0, 0.55, 0.05), Vec3::new(0.75, 0.2, 1.05), w);
+    m.cube(Vec3::new(0.0, 0.85, -0.6), Vec3::new(0.6, 0.35, 0.12), w);
+    m.cube(Vec3::new(0.0, 0.8, 0.75), Vec3::new(0.55, 0.12, 0.25), w);
+    m.cube(
+        Vec3::new(0.0, 2.9, -0.85),
+        Vec3::new(0.04, 2.1, 0.04),
+        Rgb(0x8C949C),
+    );
+    m
+}
+
 pub fn spray() -> MeshBuilder {
     let mut m = MeshBuilder::new();
     m.blob(Vec3::ZERO, Vec3::ONE, false, 0.18, 7, CLOUD);
@@ -2853,11 +3009,22 @@ pub fn swim_ring() -> MeshBuilder {
 /// A water park's slides, in the park's frame: smooth open troughs spiralling down from
 /// the tower, a little water running in each.
 pub fn water_slides() -> MeshBuilder {
+    slides_mesh(90, 6, true)
+}
+
+/// The slides from afar: coarse troughs, no water.
+pub fn water_slides_far() -> MeshBuilder {
+    slides_mesh(30, 2, false)
+}
+
+/// Slides with `n` steps down each and `sides` faces across, with or without the sheet
+/// of water.
+fn slides_mesh(n: usize, sides: usize, wet: bool) -> MeshBuilder {
     use zawnabout_sim::landmark::{SLIDES, slide};
     let mut m = MeshBuilder::new();
     let paint = [Rgb(0xE0564A), Rgb(0x4A90C8), Rgb(0xE88AB0)];
     let water = Rgb(0xA8E6F6);
-    let (n, sides, w) = (90, 6, 0.85);
+    let w = 0.85;
     for s in 0..SLIDES {
         let c = paint[s as usize % paint.len()];
         let inner = c.mix(Rgb(0xFFFFFF), 0.25);
@@ -2881,6 +3048,10 @@ pub fn water_slides() -> MeshBuilder {
                 let (a, b, cc, d) = (prev[k], prev[k + 1], next[k + 1], next[k]);
                 m.quad(a, b, cc, d, inner);
                 m.quad(d, cc, b, a, c);
+            }
+            if !wet {
+                prev = next;
+                continue;
             }
             // A thin sheet of water down the middle.
             let lift = Vec3::Y * 0.03;
@@ -3053,6 +3224,353 @@ pub fn fishing_rod() -> MeshBuilder {
         0.0,
         5,
         Rgb(0xE0564A),
+    );
+    m
+}
+
+/// A mine's ore cart on its track at the origin, x along the track: a steel tub on four
+/// wheels, heaped with rock and a glint or two of crystal.
+pub fn ore_cart() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (steel, dark) = (Rgb(0x7A7F86), Rgb(0x3A3A40));
+    for (x, z) in [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        m.cube(
+            Vec3::new(x * 0.5, 0.2, z * 0.45),
+            Vec3::new(0.18, 0.18, 0.06),
+            dark,
+        );
+    }
+    m.cube(Vec3::new(0.0, 0.75, 0.0), Vec3::new(0.85, 0.4, 0.55), steel);
+    m.cube(Vec3::new(0.0, 1.16, 0.0), Vec3::new(0.88, 0.04, 0.58), dark);
+    m.blob(
+        Vec3::new(-0.3, 1.2, 0.0),
+        Vec3::new(0.45, 0.22, 0.4),
+        false,
+        0.1,
+        5,
+        Rgb(0x8C8078),
+    );
+    m.blob(
+        Vec3::new(0.35, 1.22, 0.1),
+        Vec3::new(0.38, 0.2, 0.35),
+        false,
+        0.1,
+        5,
+        Rgb(0x9C8F84),
+    );
+    m.frustum(4, 1.2, 0.08, 1.55, 0.0, Rgb(0xC9A8F0), Rgb(0xE8D8FF));
+    m
+}
+
+/// A diamond kite with a ribbon tail, its bridle at the origin, facing +z. White, for
+/// tinting, with a red tail.
+pub fn kite() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (w, top, low) = (0.6, 0.9, -0.6);
+    let c = Rgb(0xFFFFFF);
+    let (l, r, t, b) = (
+        Vec3::new(-w, 0.0, 0.0),
+        Vec3::new(w, 0.0, 0.0),
+        Vec3::new(0.0, top, 0.0),
+        Vec3::new(0.0, low, 0.0),
+    );
+    m.thin_tri(l, r, t, c);
+    m.thin_tri(r, l, b, c);
+    for k in 0..4 {
+        let y = low - 0.35 - k as f32 * 0.45;
+        let x = if k % 2 == 0 { 0.08 } else { -0.08 };
+        m.thin_tri(
+            Vec3::new(x - 0.12, y, 0.0),
+            Vec3::new(x + 0.12, y, 0.0),
+            Vec3::new(x, y + 0.3, 0.0),
+            Rgb(0xE0453A),
+        );
+    }
+    m
+}
+
+/// A thin line from the origin up to unit height, for kite strings.
+pub fn line() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let c = Rgb(0xEDEDED);
+    let w = Vec3::X * 0.015;
+    m.quad(-w, w, w + Vec3::Y, -w + Vec3::Y, c);
+    m.quad(-w + Vec3::Y, w + Vec3::Y, w, -w, c);
+    m
+}
+
+/// A wooden crate carried in front, centered at the origin, half a meter on a side.
+pub fn crate_box() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(Vec3::ZERO, Vec3::splat(0.26), Rgb(0xA87A4C));
+    m.cube(
+        Vec3::new(0.0, 0.0, 0.265),
+        Vec3::new(0.27, 0.05, 0.01),
+        Rgb(0x8B5E3C),
+    );
+    m
+}
+
+/// A theme park's roller coaster track in the park's frame: two steel rails on ties over
+/// a box spine, banked into the turns the way the cars lean, following `ride`.
+/// The coaster's track seen from afar: one red beam along every fourth point.
+pub fn coaster_track_far(ride: &zawnabout_sim::landmark::Coaster) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let n = ride.pts.len();
+    let pts: Vec<Vec3> = (0..n).step_by(4).map(|i| ride.pts[i]).collect();
+    for (i, &a) in pts.iter().enumerate() {
+        let b = pts[(i + 1) % pts.len()];
+        let fwd = (b - a).normalize_or(Vec3::Z);
+        let side = fwd.cross(Vec3::Y).normalize_or(Vec3::X) * 0.6;
+        let up = Vec3::Y * 0.35;
+        let (a, b) = (a - Vec3::Y * 0.25, b - Vec3::Y * 0.25);
+        let c = Rgb(0xD8473A);
+        m.quad(
+            a + side + up,
+            b + side + up,
+            b - side + up,
+            a - side + up,
+            Rgb(0xD8DCE0),
+        );
+        m.quad(
+            a - side - up,
+            b - side - up,
+            b + side - up,
+            a + side - up,
+            c,
+        );
+        m.quad(
+            a + side - up,
+            b + side - up,
+            b + side + up,
+            a + side + up,
+            c,
+        );
+        m.quad(
+            a - side + up,
+            b - side + up,
+            b - side - up,
+            a - side - up,
+            c,
+        );
+    }
+    m
+}
+
+pub fn coaster_track(ride: &zawnabout_sim::landmark::Coaster) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (rail, spine, tie) = (Rgb(0xD8DCE0), Rgb(0xD8473A), Rgb(0x6A7078));
+    let n = ride.pts.len();
+    let at = |i: usize| ride.pts[i % n];
+    // The track's banked frame at each point: forward, lateral and up.
+    let frames: Vec<(Vec3, Vec3, Vec3)> = (0..n)
+        .map(|i| {
+            let p = at(i);
+            let fwd = (at(i + 1) - at(i + n - 1)).normalize_or(Vec3::Z);
+            // Measured over 6 m either way, as the cars measure it.
+            let k = (6.0 / ride.step).round() as usize;
+            let (p0, p2) = (at(i + n - k), at(i + k));
+            let (d0, d1) = (
+                Vec2::new(p.x - p0.x, p.z - p0.z),
+                Vec2::new(p2.x - p.x, p2.z - p.z),
+            );
+            let bend = d0.perp_dot(d1) / (d0.length() * d1.length() * 6.0).max(1e-3);
+            let dt = if i + 1 < n {
+                ride.at[i + 1] - ride.at[i]
+            } else {
+                ride.lap - ride.at[i]
+            };
+            let speed = ride.step / dt.max(1e-3);
+            let bank = (speed * speed * bend / 9.8).atan().clamp(-0.7, 0.7);
+            let right = fwd.cross(Vec3::Y).normalize_or(Vec3::X);
+            let up = right.cross(fwd);
+            let side = -(right * bank.cos() + up * bank.sin());
+            let up = up * bank.cos() - right * bank.sin();
+            (p, side, up)
+        })
+        .collect();
+    // A square tube from one point to the next, `off` across and up from the track line.
+    let tube = |m: &mut MeshBuilder, i: usize, off: Vec2, half: Vec2, c: Rgb| {
+        let (a, sa, ua) = frames[i];
+        let (b, sb, ub) = frames[(i + 1) % n];
+        let ring = |p: Vec3, s: Vec3, u: Vec3| {
+            let o = p + s * off.x + u * off.y;
+            [
+                o + s * half.x + u * half.y,
+                o - s * half.x + u * half.y,
+                o - s * half.x - u * half.y,
+                o + s * half.x - u * half.y,
+            ]
+        };
+        let (ra, rb) = (ring(a, sa, ua), ring(b, sb, ub));
+        for k in 0..4 {
+            let j = (k + 1) % 4;
+            m.quad(ra[k], ra[j], rb[j], rb[k], c);
+        }
+    };
+    for i in 0..n {
+        for x in [-0.55f32, 0.55] {
+            tube(&mut m, i, Vec2::new(x, -0.03), Vec2::new(0.07, 0.07), rail);
+        }
+        tube(
+            &mut m,
+            i,
+            Vec2::new(0.0, -0.45),
+            Vec2::new(0.22, 0.22),
+            spine,
+        );
+        if i % 3 == 0 {
+            let (p, s, u) = frames[i];
+            m.cube(p - u * 0.2, Vec3::new(0.05, 0.05, 0.05), tie);
+            let (l, r) = (p + s * 0.62 - u * 0.12, p - s * 0.62 - u * 0.12);
+            let fwd = (frames[(i + 1) % n].0 - p).normalize_or(Vec3::Z) * 0.08;
+            let d = u * 0.06;
+            m.quad(l - fwd + d, r - fwd + d, r + fwd + d, l + fwd + d, tie);
+            m.quad(l + fwd - d, r + fwd - d, r - fwd - d, l - fwd - d, tie);
+            // A brace from the ties down to the spine.
+            let bot = p - u * 0.45;
+            m.quad(l - fwd, l + fwd, bot + fwd, bot - fwd, tie);
+            m.quad(r + fwd, r - fwd, bot - fwd, bot + fwd, tie);
+        }
+    }
+    m
+}
+
+/// A drawbridge leaf hinged at the origin and reaching 8.2 m along +x, its deck on top at
+/// y = 0: planks on a steel frame, railings both sides and a red and white band at its
+/// tip so boats can see it.
+pub fn bridge_leaf() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (wood, steel, white, red) = (Rgb(0xA8794C), Rgb(0x5A6068), Rgb(0xF2F2F2), Rgb(0xD8473A));
+    m.cube(Vec3::new(4.1, -0.25, 0.0), Vec3::new(4.1, 0.25, 2.5), wood);
+    m.cube(Vec3::new(4.1, -0.65, 0.0), Vec3::new(4.0, 0.15, 2.2), steel);
+    for z in [-2.4f32, 2.4] {
+        for k in 0..4 {
+            m.cube(
+                Vec3::new(0.6 + k as f32 * 2.4, 0.55, z),
+                Vec3::new(0.05, 0.55, 0.05),
+                white,
+            );
+        }
+        m.cube(Vec3::new(4.1, 1.08, z), Vec3::new(4.1, 0.06, 0.06), white);
+    }
+    for k in 0..5 {
+        let c = if k % 2 == 0 { red } else { white };
+        m.cube(
+            Vec3::new(8.05, -0.25, -2.0 + k as f32 * 1.0),
+            Vec3::new(0.12, 0.27, 0.5),
+            c,
+        );
+    }
+    m
+}
+
+/// A skateboard, nose toward +z, its deck at the origin: a painted deck on four wheels.
+pub fn skateboard() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(
+        Vec3::new(0.0, 0.06, 0.0),
+        Vec3::new(0.11, 0.015, 0.42),
+        Rgb(0xE0564A),
+    );
+    for (x, z) in [(1.0f32, 1.0f32), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+        m.cube(
+            Vec3::new(x * 0.09, 0.025, z * 0.3),
+            Vec3::new(0.03, 0.025, 0.03),
+            Rgb(0xF2F2F2),
+        );
+    }
+    m
+}
+
+/// A racetrack's tarmac in its frame, smooth all the way round: on the ground a strip
+/// just over the grass, and up on the overpass a deck with concrete sides, an underside
+/// and a parapet along each edge.
+pub fn race_track() -> MeshBuilder {
+    use zawnabout_sim::landmark::{RACE_OVAL, race_height, race_line};
+    let mut m = MeshBuilder::new();
+    let (tar, con) = (Rgb(0x6F6E73), Rgb(0xC8C4BC));
+    let hw = RACE_OVAL.2;
+    let n = 480;
+    let at = |k: usize, out: f32, up: f32| {
+        let u = k as f32 / n as f32;
+        let (p, _) = race_line(u, out);
+        Vec3::new(p.x, race_height(u) + up, p.y)
+    };
+    for k in 0..n {
+        let (l0, r0, l1, r1) = (
+            at(k, hw, 0.13),
+            at(k, -hw, 0.13),
+            at(k + 1, hw, 0.13),
+            at(k + 1, -hw, 0.13),
+        );
+        m.quad(r0, l0, l1, r1, tar);
+        let y = race_height(k as f32 / n as f32).max(race_height((k + 1) as f32 / n as f32));
+        if y < 0.4 {
+            continue;
+        }
+        let (e, w) = (hw + 0.9, 0.3);
+        // Sides and underside of the deck, then a parapet on each edge.
+        for s in [1.0f32, -1.0] {
+            let (a0, a1) = (at(k, s * e, 0.13), at(k + 1, s * e, 0.13));
+            let (b0, b1) = (at(k, s * e, -0.75), at(k + 1, s * e, -0.75));
+            if s > 0.0 {
+                m.quad(a0, b0, b1, a1, con);
+            } else {
+                m.quad(a1, b1, b0, a0, con);
+            }
+            let (i0, i1) = (at(k, s * (e - w), 1.1), at(k + 1, s * (e - w), 1.1));
+            let (o0, o1) = (at(k, s * e, 1.1), at(k + 1, s * e, 1.1));
+            let (f0, f1) = (at(k, s * (e - w), 0.13), at(k + 1, s * (e - w), 0.13));
+            if s > 0.0 {
+                m.quad(f1, i1, i0, f0, con);
+                m.quad(i0, i1, o1, o0, con);
+                m.quad(o0, o1, a1, a0, con);
+            } else {
+                m.quad(f0, i0, i1, f1, con);
+                m.quad(o0, o1, i1, i0, con);
+                m.quad(a0, a1, o1, o0, con);
+            }
+        }
+        let (u0, u1, v0, v1) = (
+            at(k, e, -0.75),
+            at(k + 1, e, -0.75),
+            at(k, -e, -0.75),
+            at(k + 1, -e, -0.75),
+        );
+        m.quad(u0, v0, v1, u1, con);
+        // Fill between the strip and the deck's edge on top.
+        for s in [1.0f32, -1.0] {
+            let (a0, a1) = (at(k, s * hw, 0.13), at(k + 1, s * hw, 0.13));
+            let (b0, b1) = (at(k, s * (e - w), 0.13), at(k + 1, s * (e - w), 0.13));
+            if s > 0.0 {
+                m.quad(a0, b0, b1, a1, con);
+            } else {
+                m.quad(a1, b1, b0, a0, con);
+            }
+        }
+    }
+    m
+}
+
+/// A helicopter's main rotor about the origin: two long blades across, and a hub.
+pub fn heli_rotor() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let blade = Rgb(0x3A3A40);
+    m.cube(Vec3::ZERO, Vec3::new(5.6, 0.04, 0.22), blade);
+    m.cube(Vec3::ZERO, Vec3::new(0.22, 0.04, 5.6), blade);
+    m.cube(Vec3::new(0.0, 0.05, 0.0), Vec3::new(0.3, 0.12, 0.3), blade);
+    m
+}
+
+/// A clock hand from its pivot at the origin up to y = 1, a unit wide, flat on z = 0,
+/// for scaling to an hour or a minute hand.
+pub fn clock_hand() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(
+        Vec3::new(0.0, 0.42, 0.0),
+        Vec3::new(0.5, 0.58, 0.03),
+        Rgb(0x22222A),
     );
     m
 }

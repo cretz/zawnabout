@@ -1,0 +1,8 @@
+# A tap on a cruise ship's sky deck lands up there, not down on its usual pool deck.
+wait 276
+goto 1497 2290 75 180
+wait 0.5
+tap-screen 0.4 0.75
+wait-until landed 20
+expect riding cruise
+expect feet-above 41.5

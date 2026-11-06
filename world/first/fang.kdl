@@ -121,7 +121,7 @@ village canopy style=stilts tech=simple {
 }
 
 // The ski area on the east spur: snow runs from under the rim down to a lodge village,
-// two chairlifts, and a road round the north shore from the stilt village.
+// two chairlifts, and a gondola up from the cove at the end of the north shore road.
 snowfield fang-runs {
     note "Groomed runs. Skiers come down all day."
     p 330 -330
@@ -156,17 +156,31 @@ route fang-chair-2 kind=chairlift {
     p 650 -330
 }
 road fang-road w=9 {
-    note "Round the north shore from the stilt village, then up the spur to the lodge."
+    note "Round the north shore from the stilt village, under the north spur and on to the cove, where the gondola goes up to the lodge."
     p -1000 -150
     p -900 -550
     p -550 -880
     p -100 -980
-    p 350 -950
-    p 700 -760
-    p 850 -560
-    p 900 -420
-    p 950 -300
-    p 990 -190
+    p 150 -965
+    p 240 18 -958 tunnel=#true
+    p 450 18 -930 tunnel=#true
+    p 640 18 -880 tunnel=#true
+    p 690 19 -866 tunnel=#true
+    p 720 -852
+    p 820 -830
+}
+village fang-cove style=hill tech=mid {
+    note "A few houses, a car park and the gondola's valley station in the cove under the east spur."
+    p 700 -900
+    p 880 -880
+    p 900 -760
+    p 760 -740
+    p 690 -800
+}
+route fang-gondola kind=gondola {
+    note "Cabins from the cove up the east spur to the lodge. The only way up but on wings."
+    p 845 -790
+    p 985 -200
 }
 
 dugout fang-nook-1 x=-500 y=60 z=-930 facing=north r=22
@@ -175,6 +189,10 @@ dugout fang-nook-3 x=250 y=90 z=-1080 facing=north r=22
 dugout fang-nook-4 x=550 y=120 z=-1150 facing=north r=22
 dugout fang-nook-5 x=-850 y=40 z=-760 facing=north r=22
 dugout fang-nook-6 x=1100 y=60 z=-650 facing=east r=22
+
+landmark deep-camp kind=campsite x=300 y=-800 z=300 rot=15 {
+    note "A geologists' camp in the deep ember chamber."
+}
 
 // Old lava tube and the magma chamber under it. Isolated from every other system.
 
@@ -208,4 +226,121 @@ caves old-tube {
         note "The emptied magma chamber. Huge, warm glow from the walls, the deepest heat in the world."
         beacon fang-deep-beacon x=-300 y=-860 z=300
     }
+}
+
+// The ember mine line: ore carts round the floor of the fang deep, past the ember mine
+// in its east wall and back. Laid by scratch/scripts/caveline.py over the deep's floor.
+landmark ember-mine kind=mine x=780 y=-800 z=-240 rot=250 {
+    note "Miners dig glowing ember stone out of the fang deep's east wall."
+}
+railway ember-line mine=#true {
+    note "Ride the ore carts round the warm glow of the fang deep."
+    p -272 -855.0 -447
+    p -239 -853.4 -452
+    p -207 -851.7 -455
+    p -174 -850.1 -459
+    p -142 -848.5 -461
+    p -111 -846.9 -462
+    p -80 -845.5 -462
+    p -49 -847.0 -462
+    p -18 -848.5 -461
+    p 12 -850.1 -459
+    p 49 -851.9 -455
+    p 88 -853.9 -449
+    p 126 -854.5 -442
+    p 165 -856.3 -433
+    p 202 -858.3 -422
+    p 239 -860.2 -410
+    p 275 -862.2 -397
+    p 311 -864.1 -382
+    p 346 -866.0 -365
+    p 381 -866.3 -347
+    p 414 -868.2 -328
+    p 445 -868.8 -308
+    p 474 -867.0 -287
+    p 501 -865.3 -265
+    p 527 -863.6 -243
+    p 550 -862.6 -220
+    p 571 -864.1 -196
+    p 591 -865.7 -171
+    p 608 -867.2 -145
+    p 624 -868.8 -119
+    p 637 -870.3 -92
+    p 649 -871.8 -64
+    p 658 -873.3 -35
+    p 666 -874.8 -6
+    p 672 -876.4 24
+    p 676 -877.9 55
+    p 677 -879.5 86
+    p 676 -881.5 126
+    p 670 -881.6 169
+    p 660 -879.5 210
+    p 644 -877.4 250
+    p 624 -875.2 288
+    p 599 -873.0 323
+    p 576 -871.3 350
+    p 554 -869.7 372
+    p 530 -868.1 394
+    p 504 -866.4 414
+    p 475 -864.7 434
+    p 445 -865.0 453
+    p 413 -866.8 471
+    p 380 -868.6 486
+    p 347 -867.7 500
+    p 313 -865.9 511
+    p 278 -864.2 521
+    p 242 -866.0 529
+    p 206 -867.9 534
+    p 169 -869.7 538
+    p 131 -871.6 540
+    p 92 -873.6 540
+    p 52 -875.6 538
+    p 19 -877.3 534
+    p -12 -877.5 530
+    p -43 -876.0 525
+    p -75 -874.4 519
+    p -107 -873.7 512
+    p -139 -872.2 503
+    p -172 -870.5 494
+    p -203 -868.8 484
+    p -234 -867.2 473
+    p -264 -865.6 463
+    p -293 -864.1 452
+    p -329 -862.1 436
+    p -364 -860.2 420
+    p -397 -858.3 402
+    p -429 -856.5 384
+    p -459 -854.7 366
+    p -487 -853.3 346
+    p -513 -853.7 326
+    p -537 -853.7 305
+    p -560 -852.5 283
+    p -581 -853.9 260
+    p -600 -855.4 237
+    p -625 -857.7 200
+    p -647 -859.8 162
+    p -665 -861.9 125
+    p -680 -863.9 88
+    p -691 -865.8 50
+    p -698 -864.5 12
+    p -702 -862.6 -25
+    p -703 -860.8 -62
+    p -700 -858.9 -100
+    p -694 -857.0 -138
+    p -684 -856.2 -175
+    p -670 -857.0 -212
+    p -652 -859.0 -248
+    p -629 -861.0 -280
+    p -601 -863.1 -310
+    p -569 -865.2 -338
+    p -536 -867.2 -360
+    p -508 -867.5 -375
+    p -479 -865.8 -389
+    p -447 -864.1 -402
+    p -414 -862.3 -414
+    p -378 -860.5 -424
+    p -343 -858.7 -433
+    p -313 -857.2 -439
+    p -282 -855.6 -445
+    p -272 -855.0 -447
 }

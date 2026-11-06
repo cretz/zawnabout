@@ -36,6 +36,8 @@ pub struct Gfx {
     water: Vec<(MeshId, Vec3, f32, bool)>,
     spray: MeshId,
     falls: Vec<(Vec3, f32)>,
+    /// What can be heard where the camera is.
+    listener: crate::audio::Listener,
     flame: MeshId,
     ember: MeshId,
     /// Light streaming down sky openings into caves, with bounding spheres and where
@@ -48,6 +50,7 @@ pub struct Gfx {
     park_life: crate::park_life::ParkLife,
     sea_life: crate::sea_life::SeaLife,
     wildlife: crate::wildlife::Wildlife,
+    weather: crate::weather::Weather,
     /// Dark plugs a little way into every cave mouth, so from outside a mouth looks like
     /// darkness instead of a hole onto the sky where the deep walls are not drawn.
     plugs: Vec<Mat4>,
@@ -62,9 +65,15 @@ pub struct Gfx {
     vehicles: Vec<MeshId>,
     /// Every lamp's head and foot, and whether it is underground where it always burns.
     lamps: Vec<(Vec3, Vec3, bool)>,
+    /// Every landmark's lamps and bulbs: where, how big, whether they burn all day, and
+    /// whether they are a fair's colored bulbs that chase round.
+    bulbs: Vec<(Vec3, f32, bool, bool)>,
     pool: MeshId,
     /// Terrain chunks built per frame at most. Slow devices want 1.
     pub chunk_budget: usize,
+    /// The HUD's world map, drawn on another thread the first time the HUD shows, and
+    /// whether it is in the atlas yet.
+    hud_map: (Option<std::sync::mpsc::Receiver<Vec<u8>>>, bool),
 }
 
 /// A point light: position, reach and color.
@@ -131,6 +140,25 @@ fn bounds(mesh: &crate::mesh::MeshBuilder) -> (Vec3, f32) {
     ((lo + hi) * 0.5, (hi - lo).length() * 0.5)
 }
 
+/// Lamps on the fronts of terraces and flats, by every third door, so city streets glow
+/// at night: the lamp, the ground under it, and never underground.
+fn wall_lamps(world: &zawnabout_sim::World) -> impl Iterator<Item = (Vec3, Vec3, bool)> + '_ {
+    use zawnabout_sim::town::Kind;
+    world
+        .buildings
+        .iter()
+        .filter(|b| matches!(b.kind, Kind::Row | Kind::Flat) && b.seed % 3 == 0)
+        .filter(|b| world.terrain.daylight(b.pos + Vec3::Y) >= 0.5)
+        .map(|b| {
+            let f = b.front();
+            let face = b.pos + Vec3::new(f.x, 0.0, f.y) * (b.size.z * 0.5 + 0.3);
+            let side = Vec3::new(b.axis.x, 0.0, b.axis.y) * b.size.x * 0.3;
+            let lamp = face + side + Vec3::Y * 3.2;
+            let foot = Vec3::new(lamp.x, world.terrain.height(lamp.x, lamp.z) + 0.25, lamp.z);
+            (lamp, foot, false)
+        })
+}
+
 /// Props are batched per square of this size (m), so far squares can be skipped.
 const PROP_TILE: f32 = 1024.0;
 const CLOUD_TILE: f32 = 3000.0;
@@ -138,17 +166,36 @@ const CLOUD_TILE: f32 = 3000.0;
 /// draws as one.
 const GROUP: i32 = 4;
 const GROUP_RANGE: f32 = 1.5;
+/// Heavy buildings show their full detail within this many times the detail range of
+/// their own bounds.
+const HEAVY_DETAIL: f32 = 0.4;
+/// Signs' letters draw out to this many times the prop range.
+const LETTERS_REACH: f32 = 0.35;
+/// People farther than this (m) draw as a speck.
+const PERSON_FAR: f32 = 140.0;
+/// Merged groups farther than this many times the detail range draw only their big
+/// things.
+const DISTANT: f32 = 3.0;
 /// Flowers, bushes and small rocks bake per square of this size (m), and draw out to
 /// this many times the prop range.
 const SMALL_TILE: f32 = 256.0;
 const SMALL_REACH: f32 = 0.14;
 /// Water merges per square of this size (m).
-const WATER_TILE: f32 = 2048.0;
+const WATER_TILE: f32 = 4096.0;
 
 use zawnabout_sim::traffic::CAR_KINDS;
 
 /// The car mesh painted white, which the tint colors.
 const CAR_WHITE: u8 = 3;
+/// Fairground colors as tints over a white ferris car or tour carriage: red, blue,
+/// yellow, green, pink.
+const FAIR_PAINT: [Vec3; 5] = [
+    Vec3::new(0.752, 0.092, 0.066),
+    Vec3::new(0.066, 0.284, 0.586),
+    Vec3::new(0.891, 0.542, 0.074),
+    Vec3::new(0.148, 0.530, 0.198),
+    Vec3::new(0.812, 0.259, 0.442),
+];
 /// Car paints as tints over white: red, blue, yellow, white, green, pink.
 const CAR_PAINT: [Vec3; 6] = [
     Vec3::new(0.78, 0.13, 0.08),
@@ -238,9 +285,18 @@ impl Gfx {
                 .partition(|(_, t)| t.cave);
         let mut tiles: HashMap<(i32, i32), crate::town_mesh::Tile> = open.into_iter().collect();
         // Far meshes for the merged groups: buildings as they are, trees as spires.
-        let mut group_far: HashMap<(i32, i32), MeshBuilder> =
-            tiles.iter().map(|(k, t)| (*k, t.far.clone())).collect();
-        let mut cloud_tiles: HashMap<(i32, i32), (MeshBuilder, MeshBuilder)> = HashMap::new();
+        let mut group_far: HashMap<(i32, i32), MeshBuilder> = tiles
+            .iter()
+            .map(|(k, t)| {
+                let mut far = t.far.clone();
+                for (_, f) in &t.heavy {
+                    far.verts.extend_from_slice(&f.verts);
+                }
+                (*k, far)
+            })
+            .collect();
+        let mut group_distant: HashMap<(i32, i32), MeshBuilder> =
+            tiles.iter().map(|(k, t)| (*k, t.distant.clone())).collect();
         let mut small_tiles: HashMap<(i32, i32), MeshBuilder> = HashMap::new();
         for p in &world.props {
             let variants = &shapes[&p.kind];
@@ -252,18 +308,8 @@ impl Gfx {
             );
             // Clouds glow a little so they stay white from below. Alpha is daylight.
             let day = world.terrain.daylight(p.pos + Vec3::Y);
+            // Clouds drift with the weather instead.
             if p.kind == PropKind::Cloud {
-                // Clouds bake per big tile too, every shape in one mesh.
-                let key = (
-                    (p.pos.x / CLOUD_TILE).floor() as i32,
-                    (p.pos.z / CLOUD_TILE).floor() as i32,
-                );
-                let (near, far, _) = &variants[v as usize];
-                let tile = cloud_tiles.entry(key).or_default();
-                tile.0.place(near, m);
-                if let Some(far) = far {
-                    tile.1.place(far, m);
-                }
                 continue;
             }
             let small = matches!(p.kind, PropKind::Flower | PropKind::Bush)
@@ -289,16 +335,23 @@ impl Gfx {
                     near: MeshBuilder::new(),
                     far: MeshBuilder::new(),
                     cave: false,
+                    heavy: Vec::new(),
+                    distant: MeshBuilder::new(),
+                    letters: MeshBuilder::new(),
                 });
                 let (near, far, spire) = &variants[v as usize];
                 let alpha = (day * 255.0) as u8;
                 // Every tree its own green, and now and then one turning for autumn.
                 let leaves = leaf_tint(p.kind, p.id);
                 if let Some(spire) = spire {
-                    let g = group_far.entry(key).or_default();
-                    let from = g.verts.len();
-                    g.place(spire, m);
-                    g.verts[from..].iter_mut().for_each(|v| v.color[3] = alpha);
+                    for g in [
+                        group_far.entry(key).or_default(),
+                        group_distant.entry(key).or_default(),
+                    ] {
+                        let from = g.verts.len();
+                        g.place(spire, m);
+                        g.verts[from..].iter_mut().for_each(|v| v.color[3] = alpha);
+                    }
                 }
                 let from = tile.near.verts.len();
                 tile.near.place(near, m);
@@ -342,30 +395,6 @@ impl Gfx {
                 },
             );
         }
-        let mut cloud_keys: Vec<_> = cloud_tiles.keys().copied().collect();
-        cloud_keys.sort();
-        for key in cloud_keys {
-            let (near, far) = &cloud_tiles[&key];
-            let (center, radius) = bounds(near);
-            let id = renderer.add_mesh(near);
-            let far = (!far.verts.is_empty()).then(|| renderer.add_mesh(far));
-            renderer.add_static_culled(
-                id,
-                &[Instance::tinted(
-                    Mat4::IDENTITY,
-                    Vec4::new(1.5, 1.5, 1.5, 1.0),
-                )],
-                Cull {
-                    center,
-                    radius,
-                    reach: 2.2,
-                    far,
-                    detail: 1.0,
-                    cave: false,
-                    group: None,
-                },
-            );
-        }
         let mut keys: Vec<_> = batches.keys().copied().collect();
         keys.sort_by_key(|(k, v, t, c)| (*k as u8, *v, *t, *c));
         let mut ids: HashMap<(PropKind, u8), MeshId> = HashMap::new();
@@ -385,7 +414,7 @@ impl Gfx {
             // Clouds reach farther and keep detail longer, flowers only show up close.
             let (size, y, reach, detail) = match kind {
                 // Caves are big and hazy: few big batches that stop at the haze.
-                _ if cave => (CLOUD_TILE, instances[0].model[3][1], 0.35, 1.0),
+                _ if cave => (CLOUD_TILE, instances[0].model[3][1], 0.28, 0.8),
                 PropKind::Cloud => (CLOUD_TILE, 700.0, 2.2, 1.0),
                 PropKind::Flower | PropKind::Bush => (PROP_TILE, 300.0, 0.18, 1.0),
                 _ => (PROP_TILE, 300.0, 1.0, 1.0),
@@ -441,12 +470,24 @@ impl Gfx {
                 .verts
                 .extend_from_slice(&far.verts);
         }
+        let mut distant: HashMap<(i32, i32), MeshBuilder> = HashMap::new();
+        for (key, d) in &group_distant {
+            distant
+                .entry(group_of(*key))
+                .or_default()
+                .verts
+                .extend_from_slice(&d.verts);
+        }
         let groups: HashMap<(i32, i32), Group> = merged
             .iter()
             .filter(|(_, m)| !m.verts.is_empty())
             .map(|(key, m)| {
                 let (center, radius) = bounds(m);
                 let id = renderer.add_mesh(m);
+                let far = distant
+                    .get(key)
+                    .filter(|d| !d.verts.is_empty())
+                    .map(|d| renderer.add_mesh(d));
                 let group = Group {
                     center,
                     radius,
@@ -460,8 +501,8 @@ impl Gfx {
                         center,
                         radius,
                         reach: 2.4,
-                        far: None,
-                        detail: 1.0,
+                        far,
+                        detail: DISTANT,
                         cave: false,
                         group: Some(group),
                     },
@@ -471,12 +512,6 @@ impl Gfx {
             .collect();
         tiles.append(&mut cave_tiles);
         for (key, tile) in tiles {
-            if tile.near.verts.is_empty() {
-                continue;
-            }
-            let (center, radius) = bounds(&tile.near);
-            let near = renderer.add_mesh(&tile.near);
-            let far = (!tile.far.verts.is_empty()).then(|| renderer.add_mesh(&tile.far));
             let group = if tile.cave {
                 None
             } else {
@@ -485,6 +520,48 @@ impl Gfx {
                     ..*g
                 })
             };
+            // Signs' painted letters, up close only.
+            if !tile.letters.verts.is_empty() {
+                let (center, radius) = bounds(&tile.letters);
+                let id = renderer.add_mesh(&tile.letters);
+                renderer.add_letters(
+                    id,
+                    Cull {
+                        center,
+                        radius,
+                        reach: LETTERS_REACH,
+                        far: None,
+                        detail: 1.0,
+                        cave: tile.cave,
+                        group,
+                    },
+                );
+            }
+            // Heavy buildings switch to their far mesh by their own bounds, not the tile's.
+            for (near, far) in &tile.heavy {
+                let (center, radius) = bounds(near);
+                let id = renderer.add_mesh(near);
+                let far = (!far.verts.is_empty()).then(|| renderer.add_mesh(far));
+                renderer.add_static_culled(
+                    id,
+                    &[Instance::new(Mat4::IDENTITY)],
+                    Cull {
+                        center,
+                        radius,
+                        reach: 2.4,
+                        far,
+                        detail: HEAVY_DETAIL,
+                        cave: tile.cave,
+                        group,
+                    },
+                );
+            }
+            if tile.near.verts.is_empty() {
+                continue;
+            }
+            let (center, radius) = bounds(&tile.near);
+            let near = renderer.add_mesh(&tile.near);
+            let far = (!tile.far.verts.is_empty()).then(|| renderer.add_mesh(&tile.far));
             renderer.add_static_culled(
                 near,
                 &[Instance::new(Mat4::IDENTITY)],
@@ -538,6 +615,61 @@ impl Gfx {
             );
         }
 
+        // Power lines: three dark conductors a side, sagging between the pylons.
+        {
+            use zawnabout_sim::landmark::PYLON_ARMS;
+            let mut mesh = crate::mesh::MeshBuilder::new();
+            let col = Rgb(0x3A3A40);
+            for line in &world.power_lines {
+                for w in line.windows(2) {
+                    let (a, b) = (&world.buildings[w[0]], &world.buildings[w[1]]);
+                    for (y, out) in PYLON_ARMS {
+                        for s in [-1.0f32, 1.0] {
+                            let hook = |p: &zawnabout_sim::town::Building| {
+                                let f = p.front();
+                                p.pos + Vec3::new(f.x * s * out, y - 0.7, f.y * s * out)
+                            };
+                            let (pa, pb) = (hook(a), hook(b));
+                            let sag = pa.distance(pb) * 0.035;
+                            let steps = 10;
+                            for k in 0..steps {
+                                let at =
+                                    |t: f32| pa.lerp(pb, t) - Vec3::Y * sag * 4.0 * t * (1.0 - t);
+                                let (p0, p1) = (
+                                    at(k as f32 / steps as f32),
+                                    at((k + 1) as f32 / steps as f32),
+                                );
+                                let along = (p1 - p0).normalize_or(Vec3::X);
+                                let across = along.cross(Vec3::Y).normalize_or(Vec3::Z) * 0.06;
+                                let up = Vec3::Y * 0.06;
+                                mesh.quad(p0 - up, p1 - up, p1 + up, p0 + up, col);
+                                mesh.quad(p0 + up, p1 + up, p1 - up, p0 - up, col);
+                                mesh.quad(p0 - across, p1 - across, p1 + across, p0 + across, col);
+                                mesh.quad(p0 + across, p1 + across, p1 - across, p0 - across, col);
+                            }
+                        }
+                    }
+                }
+            }
+            if !mesh.verts.is_empty() {
+                let (center, radius) = bounds(&mesh);
+                let id = renderer.add_mesh(&mesh);
+                renderer.add_static_culled(
+                    id,
+                    &[Instance::new(Mat4::IDENTITY)],
+                    Cull {
+                        center,
+                        radius,
+                        reach: 3.0,
+                        far: None,
+                        detail: 1.0,
+                        cave: false,
+                        group: None,
+                    },
+                );
+            }
+        }
+
         // Lift cables: thin and dark, sagging nowhere, following each lift's line.
         for line in world.traffic.cables() {
             let mut cable = crate::mesh::MeshBuilder::new();
@@ -571,9 +703,10 @@ impl Gfx {
         let flame = renderer.add_mesh(&models::flame());
         let pool = renderer.add_mesh(&models::pool());
         let tuft = renderer.add_mesh(&models::tuft());
-        let life = crate::life::Life::new(&mut renderer, world);
+        let life = crate::life::Life::new(&mut renderer, world, pool);
+        let weather = crate::weather::Weather::new(&mut renderer, world, pool);
         let cave_life = crate::cave_life::CaveLife::new(&mut renderer, world);
-        let park_life = crate::park_life::ParkLife::new(&mut renderer, world);
+        let park_life = crate::park_life::ParkLife::new(&mut renderer, world, life.people(), pool);
         let sea_life = crate::sea_life::SeaLife::new(&mut renderer, world);
         let wildlife = crate::wildlife::Wildlife::new(&mut renderer, world);
         let (plugs, mouths) = mouth_plugs(&world.terrain);
@@ -594,14 +727,33 @@ impl Gfx {
                     cave,
                 )
             })
+            .chain(wall_lamps(world))
+            .collect();
+        let bulbs = world
+            .buildings
+            .iter()
+            .flat_map(|b| {
+                use zawnabout_sim::town::Kind;
+                let fair = matches!(b.kind, Kind::Carnival | Kind::ThemePark | Kind::Pier);
+                crate::town_mesh::lamp_spots(b)
+                    .into_iter()
+                    .map(move |(p, r, always)| (p, r, always, fair))
+            })
             .collect();
         // Ordinary cars share one white mesh, painted per car by the instance tint, so
         // they draw in one go.
+        // Vehicles that differ only in paint share one white mesh, tinted per vehicle, so
+        // they cost one draw between them.
         let shared = |v: &zawnabout_sim::traffic::Vehicle| {
-            if v.kind == zawnabout_sim::town::Kind::Car && v.variant < CAR_KINDS {
-                CAR_WHITE
-            } else {
-                v.variant
+            use zawnabout_sim::town::Kind;
+            use zawnabout_sim::traffic::TOUR_CAR;
+            match v.kind {
+                Kind::Car if v.variant < CAR_KINDS => CAR_WHITE,
+                Kind::FerrisCar | Kind::Punt | Kind::RaceCar | Kind::CoasterCar => 0,
+                Kind::Train if (TOUR_CAR..TOUR_CAR + 3).contains(&v.variant) => TOUR_CAR,
+                // Balloons come in four stripes.
+                Kind::Balloon => v.variant % 4,
+                _ => v.variant,
             }
         };
         let mut vehicle_ids: HashMap<(u8, u8), MeshId> = HashMap::new();
@@ -674,10 +826,12 @@ impl Gfx {
             glowers,
             vehicles,
             lamps,
+            bulbs,
             pool,
             tuft,
             life,
             cave_life,
+            weather,
             park_life,
             sea_life,
             wildlife,
@@ -686,10 +840,17 @@ impl Gfx {
             plug,
             tufts: std::cell::RefCell::new(((i32::MAX, 0), Vec::new())),
             falls: crate::water::falls_feet(&game.sim.world.terrain),
+            listener: crate::audio::Listener::new(game),
             chunk_budget: 3,
+            hud_map: (None, false),
         };
         gfx.update_terrain(game, usize::MAX);
         gfx
+    }
+
+    /// The weather, for scripts to ask about.
+    pub fn weather(&self) -> &crate::weather::Weather {
+        &self.weather
     }
 
     /// Streams terrain chunks around the camera, building at most `budget` new ones.
@@ -742,8 +903,67 @@ impl Gfx {
             shadow: look.shadow,
             cave_ambient: cave_tint(&game.sim.world.terrain, game.camera.pos),
             underground: 1.0 - game.sim.world.terrain.daylight(game.camera.pos),
+            sky_gloom: 0.0,
             night,
+            // Mist lies in the low ground from first light, and burns off by mid morning.
+            valley_fog: smooth(4.8, 6.2, sky.hour) * (1.0 - smooth(7.8, 10.0, sky.hour)),
+            rainbow: 0.0,
         };
+        // Inside a cloud the world whites out into mist close round, and under a rain
+        // cloud the light turns grey.
+        // Under rock, as in a tunnel or a cave, it never rains.
+        let open_sky = {
+            let p = game.camera.pos;
+            game.sim.world.terrain.height(p.x, p.z) < p.y + 1.5
+        };
+        let mut weather = self.weather.here(game.camera.pos, game.time as f32);
+        if !open_sky {
+            weather.rain = 0.0;
+        }
+        let mut lighting = lighting;
+        {
+            let (mist, rain) = (weather.mist, weather.rain);
+            let cloud = c(0xF2F4F8, 1.0).lerp(c(0x2B3F6E, 1.0), night);
+            let grey = c(0x9AA3B0, 1.0).lerp(c(0x1E2840, 1.0), night);
+            let l = &mut lighting;
+            l.sky_top = l.sky_top.lerp(grey, rain * 0.6).lerp(cloud, mist);
+            l.sky_horizon = l.sky_horizon.lerp(grey, rain * 0.5).lerp(cloud, mist);
+            l.sun_color *= 1.0 - rain * 0.45 - mist * 0.3;
+            l.ambient_sky = l.ambient_sky.lerp(cloud * 0.7, mist * 0.5);
+            // Rain closes in the distance a little, mist all of it.
+            l.fog_end *= 1.0 - rain * 0.35;
+            l.fog_start += (2.0 - l.fog_start) * mist;
+            l.fog_end += (70.0 - l.fog_end) * mist;
+            // A lightning flash whitens the sky and lights everything for a moment.
+            // By day it is only a glint, by night the whole sky lights up.
+            let flash = c(0xE8ECFF, 1.0) * weather.flash * (0.15 + 0.85 * night);
+            l.sky_top += flash * 0.6;
+            l.sky_horizon += flash * 0.8;
+            l.ambient_sky += flash * 0.7;
+            l.ambient_ground += flash * 0.4;
+            // A rainbow when the sun is up and not too high, behind you, and rain falls
+            // out in front, not on you.
+            let anti = Vec2::new(-l.sun_dir.x, -l.sun_dir.z).normalize_or_zero();
+            let sun_ok = smooth(0.03, 0.12, l.sun_dir.y) * (1.0 - smooth(0.55, 0.75, l.sun_dir.y));
+            let cam = game.camera.pos;
+            let showers = self
+                .weather
+                .nearest(cam, game.time as f32, 8)
+                .into_iter()
+                .filter(|(_, _, rain)| *rain)
+                .map(|(at, _, _)| {
+                    let to = Vec2::new(at.x - cam.x, at.z - cam.z);
+                    let near = 1.0 - smooth(2500.0, 6000.0, to.length());
+                    near * smooth(0.2, 0.6, to.normalize_or_zero().dot(anti))
+                })
+                .fold(0.0f32, f32::max);
+            l.rainbow = showers
+                * sun_ok
+                * (1.0 - night)
+                * (1.0 - rain)
+                * (1.0 - mist)
+                * open_sky as u8 as f32;
+        }
 
         let alpha = game.alpha();
         let mut parts = Vec::new();
@@ -777,14 +997,29 @@ impl Gfx {
         }
 
         let t = game.time as f32;
-        let peek = self
-            .mouths
-            .iter()
-            .any(|m| m.distance(game.camera.pos) < 450.0);
+        // Near a mouth, or looking out of one from further in, the outside draws too, so
+        // the opening shows the world beyond and not just sky.
+        let cam = &game.camera;
+        let ahead = (cam.look - cam.pos).normalize_or(Vec3::Z);
+        let peek = self.mouths.iter().any(|m| {
+            let d = m.distance(cam.pos);
+            d < 450.0 || (d < 1600.0 && (*m - cam.pos).normalize_or(Vec3::Z).dot(ahead) > 0.6)
+        });
         let outside = lighting.underground < 0.5 || peek;
+        lighting.sky_gloom = if peek {
+            0.0
+        } else {
+            ((lighting.underground - 0.5) * 2.5).clamp(0.0, 1.0)
+        };
+        let close =
+            lighting.underground < 0.5 || self.mouths.iter().any(|m| m.distance(cam.pos) < 450.0);
         use crate::prof::time;
-        time("vehicles", || self.vehicles(game, &mut draws));
-        if outside {
+        // Deep in a cave with no mouth close by, only cave vehicles draw: ships and cabins
+        // out in the open would show through a far mouth for a lot of cost.
+        let open_air = lighting.underground < 0.85 || close;
+        time("vehicles", || self.vehicles(game, open_air, &mut draws));
+        // Grass only shows close up, so not through a far mouth.
+        if close {
             time("grass", || self.grass(game, &mut draws));
         }
         // Spray boils up at the foot of every falls nearby.
@@ -848,14 +1083,43 @@ impl Gfx {
 
         let caves = lighting.underground > 0.05 || world.terrain.near_voids(game.camera.pos, 150.0);
         let (mut fx, lights) = time("effects", || self.effects(game, caves, t));
-        if outside {
+        // People live underground too, so their towns' life draws near the caves.
+        if outside || caves {
             time("life", || {
-                self.life
-                    .draw(world, game.camera.pos, t, night, &mut draws, &mut fx)
+                let sim_time = (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT;
+                self.life.draw(
+                    world,
+                    game.camera.pos,
+                    t,
+                    sim_time,
+                    night,
+                    &mut draws,
+                    &mut fx,
+                )
             });
             time("park_life", || {
-                self.park_life
-                    .draw(game.camera.pos, t, night, &mut draws, &mut fx)
+                self.park_life.draw(
+                    &world.traffic,
+                    (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT,
+                    game.sky().hour,
+                    game.camera.pos,
+                    t,
+                    night,
+                    &mut draws,
+                    &mut fx,
+                )
+            });
+        }
+        if outside {
+            time("weather", || {
+                self.weather.draw(
+                    game.camera.pos,
+                    game.time as f32,
+                    night,
+                    open_sky,
+                    &mut draws,
+                    &mut fx,
+                )
             });
             time("sea_life", || {
                 self.sea_life.draw(game.camera.pos, t, &mut draws)
@@ -879,9 +1143,26 @@ impl Gfx {
                 t,
                 lighting.cave_ambient,
                 self.pool,
+                self.life.people(),
                 &mut draws,
                 &mut fx,
             );
+        }
+        // People far off are a speck of shirt: a cheap body, and no head.
+        {
+            let (body, heads) = self.life.people();
+            let far = self.life.person_far();
+            let cam = game.camera.pos;
+            draws.retain_mut(|(m, i)| {
+                let away = Vec3::from_slice(&i.model[3][..3]).distance_squared(cam);
+                if away < PERSON_FAR * PERSON_FAR {
+                    return true;
+                }
+                if *m == body {
+                    *m = far;
+                }
+                !heads.contains(m)
+            });
         }
         if !caves {
             for m in &self.plugs {
@@ -890,7 +1171,14 @@ impl Gfx {
                 }
             }
         }
+        // Seen through a far mouth, the outside is only its land and water: the props and
+        // towns out there would cost a great deal for a small hole of view.
         let deep = lighting.underground > 0.85 && !peek;
+        let near_mouth = self
+            .mouths
+            .iter()
+            .any(|m| m.distance(game.camera.pos) < 450.0);
+        let deep_statics = lighting.underground > 0.85 && !near_mouth;
         let water = self
             .water
             .iter()
@@ -910,12 +1198,31 @@ impl Gfx {
                 .draw_list(game.camera.pos, caves, lighting.underground, deep),
             prop_range: game.look.prop_range,
             detail_range: game.look.detail_range,
-            deep,
+            deep: deep_statics,
             caves,
             shadows,
             rings,
             fx,
             lights,
+            clouds: if outside {
+                self.weather.shadows(game.camera.pos, game.time as f32)
+            } else {
+                Vec::new()
+            },
+            hud: {
+                let d = game.player_dragon();
+                game.hud.build(
+                    self.renderer.size(),
+                    glam::Vec2::new(d.pos.x, d.pos.z),
+                    d.heading,
+                    game.sim.world.terrain.def.bounds,
+                    &game.bindings,
+                    self.hud_map.1,
+                    game.feedback.active,
+                    game.paused,
+                    game.muted,
+                )
+            },
         }
     }
 
@@ -980,7 +1287,7 @@ impl Gfx {
     }
 
     /// Ferries, boats, planes and cars where they are this frame, between ticks.
-    fn vehicles(&self, game: &Game, draws: &mut Vec<(MeshId, Instance)>) {
+    fn vehicles(&self, game: &Game, open_air: bool, draws: &mut Vec<(MeshId, Instance)>) {
         let traffic = &game.sim.world.traffic;
         let terrain = &game.sim.world.terrain;
         let time = (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT;
@@ -993,10 +1300,14 @@ impl Gfx {
                     | zawnabout_sim::town::Kind::Train
                     | zawnabout_sim::town::Kind::LiftChair
                     | zawnabout_sim::town::Kind::LiftCabin
+                    | zawnabout_sim::town::Kind::FerrisCar
+                    | zawnabout_sim::town::Kind::RaceCar
+                    | zawnabout_sim::town::Kind::CoasterCar
             ) {
                 1500.0
             } else {
-                6000.0
+                // Big ships and planes show a long way off, small boats not so far.
+                (v.size.max_element() * 220.0).clamp(1500.0, 6000.0)
             };
             if p.pos.distance(cam) > range {
                 continue;
@@ -1010,10 +1321,24 @@ impl Gfx {
             );
             let m = basis * Mat4::from_rotation_z(p.pitch) * Mat4::from_rotation_x(p.bank);
             let day = terrain.daylight(p.pos + Vec3::Y * 2.0);
-            let paint = if v.kind == zawnabout_sim::town::Kind::Car && v.variant < CAR_KINDS {
-                CAR_PAINT[v.variant as usize % CAR_PAINT.len()]
-            } else {
-                Vec3::ONE
+            if !open_air && day > 0.5 {
+                continue;
+            }
+            let paint = {
+                use zawnabout_sim::town::Kind;
+                use zawnabout_sim::traffic::TOUR_CAR;
+                match v.kind {
+                    Kind::Car if v.variant < CAR_KINDS => {
+                        CAR_PAINT[v.variant as usize % CAR_PAINT.len()]
+                    }
+                    Kind::FerrisCar | Kind::RaceCar | Kind::CoasterCar => {
+                        FAIR_PAINT[v.variant as usize % FAIR_PAINT.len()]
+                    }
+                    Kind::Train if (TOUR_CAR..TOUR_CAR + 3).contains(&v.variant) => {
+                        FAIR_PAINT[(v.variant - TOUR_CAR) as usize % 3]
+                    }
+                    _ => Vec3::ONE,
+                }
             };
             draws.push((*mesh, Instance::tinted(m, paint.extend(day))));
         }
@@ -1085,6 +1410,69 @@ impl Gfx {
                 near.push((*lamp, 22.0, warm * 1.6 * on));
             }
         }
+        // Headlights and tail lights on cars, buses and trains after dark.
+        if night > 0.15 {
+            use zawnabout_sim::town::Kind;
+            let traffic = &world.traffic;
+            let time = (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT;
+            let (head, tail) = (linear(Rgb(0xFFF2D0), 1.0), linear(Rgb(0xFF2A1A), 1.0));
+            for v in &traffic.vehicles {
+                if !matches!(v.kind, Kind::Car | Kind::Train) {
+                    continue;
+                }
+                let p = traffic.pose(v, time);
+                let dist = p.pos.distance(cam);
+                if dist > 600.0 {
+                    continue;
+                }
+                let a = p.axis();
+                let (fwd, side) = (Vec3::new(a.x, 0.0, a.y), Vec3::new(-a.y, 0.0, a.x));
+                let to_cam = (cam - p.pos).normalize_or(Vec3::Y);
+                let face = Quat::from_rotation_arc(Vec3::Y, to_cam);
+                let (len, wide) = (v.size.x * 0.5, v.size.z * 0.36);
+                for (end, color, size) in [(len, head, 0.55), (-len, tail, 0.35)] {
+                    // Only the end facing the camera shows its lights.
+                    if fwd.dot(to_cam) * end < 0.0 {
+                        continue;
+                    }
+                    for s in [-1.0f32, 1.0] {
+                        let at = p.pos + fwd * end + side * wide * s + Vec3::Y * 0.75;
+                        let r = size + dist * 0.0025;
+                        let m =
+                            Mat4::from_scale_rotation_translation(Vec3::new(r, 1.0, r), face, at);
+                        fx.push((self.pool, Instance::tinted(m, color.extend(night))));
+                    }
+                }
+            }
+        }
+        // Landmark lamps and fair bulbs: a soft halo each, the fair's in colors that chase
+        // round the strings.
+        const FAIR: [u32; 5] = [0xFFD27A, 0xFF6A5A, 0x6AB8FF, 0x7CE08A, 0xFFF4D6];
+        let t = game.time as f32;
+        for (k, &(p, r, always, fair)) in self.bulbs.iter().enumerate() {
+            let on = if always { 1.0 } else { night };
+            let dist = p.distance(cam);
+            if on < 0.05 || (always && !caves) || dist > 900.0 {
+                continue;
+            }
+            let (color, pulse) = if fair {
+                let chase = (t * 3.0 - k as f32 * 0.7).sin() * 0.5 + 0.5;
+                (linear(Rgb(FAIR[k % FAIR.len()]), 1.0), 0.45 + 0.55 * chase)
+            } else {
+                (warm, 1.0)
+            };
+            let to_cam = (cam - p).normalize_or(Vec3::Y);
+            let size = (r * 5.0).clamp(0.6, 2.2) + dist * 0.003;
+            let halo = Mat4::from_scale_rotation_translation(
+                Vec3::new(size, 1.0, size),
+                Quat::from_rotation_arc(Vec3::Y, to_cam),
+                p,
+            );
+            fx.push((
+                self.pool,
+                Instance::tinted(halo, (color * 0.9).extend(on * pulse)),
+            ));
+        }
         if caves {
             near.extend(self.glowers.iter().copied());
             // A pool of daylight where each shaft lands.
@@ -1103,7 +1491,13 @@ impl Gfx {
 
         for p in &game.fx.puffs {
             let u = p.t();
-            let (color, alpha, size) = if p.spark {
+            let (color, alpha, size) = if p.water {
+                (
+                    Vec3::new(0.85, 0.94, 1.0) * 1.1,
+                    (1.0 - u) * 0.7,
+                    0.3 + 0.25 * zawnabout_sim::shape::hash(p.seed),
+                )
+            } else if p.spark {
                 (
                     Vec3::new(1.0, 0.8, 0.4) * 2.0,
                     (1.0 - u) * 0.9,
@@ -1145,9 +1539,49 @@ impl Gfx {
 
     pub fn render(&mut self, game: &Game, target: &wgpu::TextureView) {
         use crate::prof::time;
+        self.load_hud_map(game);
         time("terrain", || self.update_terrain(game, self.chunk_budget));
         let frame = time("frame", || self.frame(game));
         time("encode", || self.renderer.render(target, &frame));
+    }
+
+    /// What the world sounds like this frame, for the host's [`crate::audio::Synth`].
+    pub fn sound(&mut self, game: &Game) -> crate::audio::Mix {
+        self.listener.listen(game, &self.weather, &self.falls)
+    }
+
+    /// Draws the HUD's map the first time the HUD is on, off the main thread where there
+    /// are threads, and puts it in the atlas when done.
+    fn load_hud_map(&mut self, game: &Game) {
+        if !game.hud.on || self.hud_map.1 {
+            return;
+        }
+        let draw =
+            |t: &zawnabout_sim::terrain::Terrain| crate::map::render(t, crate::hud::MAP, false);
+        match &self.hud_map.0 {
+            None => {
+                let terrain = game.sim.world.terrain.clone();
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let _ = tx.send(draw(&terrain));
+                    });
+                    self.hud_map.0 = Some(rx);
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    self.renderer.set_hud_map(&draw(&terrain));
+                    self.hud_map.1 = true;
+                }
+            }
+            Some(rx) => {
+                if let Ok(rgba) = rx.try_recv() {
+                    self.renderer.set_hud_map(&rgba);
+                    self.hud_map.1 = true;
+                }
+            }
+        }
     }
 
     /// Plays `frames` frames of the game, rendering each offscreen, and reports the CPU
@@ -1268,7 +1702,7 @@ impl Gfx {
 /// one is, so passing from one to the next fades.
 fn cave_tint(terrain: &zawnabout_sim::terrain::Terrain, p: Vec3) -> Vec3 {
     use zawnabout_sim::terrain::{Decor, VoidShape, void_sdf};
-    let base = linear(Rgb(0xB8B4D8), 0.95);
+    let base = linear(Rgb(0xC6BCCE), 0.95);
     let reach = 250.0;
     let list = terrain.voids_in(p - Vec3::splat(reach), p + Vec3::splat(reach));
     let (mut sum, mut weight) = (Vec3::ZERO, 0.0);

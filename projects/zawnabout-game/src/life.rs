@@ -35,6 +35,9 @@ struct Walker {
     a: Vec2,
     b: Vec2,
     kind: u8,
+    /// Underground, the height to look down for the floor from: the cavern town's own
+    /// ground rather than the hill far overhead.
+    under: Option<f32>,
 }
 
 /// A ski run beside a chairlift: from its top station down to its bottom one.
@@ -48,6 +51,8 @@ struct Run {
 struct Ride {
     pts: Vec<Vec3>,
     along: Vec<f32>,
+    /// How far right of the center line the cyclist keeps: by the curb, clear of cars.
+    curb: f32,
 }
 
 impl Ride {
@@ -76,6 +81,10 @@ pub struct Life {
     rides: Vec<Ride>,
     /// Where someone sits fishing off the end of a pier, facing the water.
     anglers: Vec<Mat4>,
+    /// Piers, as where they meet the shore and where they end, for porters carrying
+    /// crates out to the boats.
+    piers: Vec<(Vec3, Vec3)>,
+    crate_box: MeshId,
     bike: MeshId,
     rod: MeshId,
     flocks: Vec<Flock>,
@@ -83,6 +92,8 @@ pub struct Life {
     walkers: Vec<Walker>,
     pods: Vec<Pod>,
     beams: Vec<Vec3>,
+    /// Each lighthouse's gallery: its middle and how far out the keeper walks round it.
+    keepers: Vec<(Vec3, f32)>,
     /// Turbine hubs and the way their rotors face.
     turbines: Vec<(Vec3, Vec3)>,
     fires: Vec<Vec3>,
@@ -90,6 +101,10 @@ pub struct Life {
     wheels: Vec<Mat4>,
     swings: Vec<Mat4>,
     springs: Vec<Vec3>,
+    /// Chimneys and cooling towers letting off steam, and how wide each plume starts.
+    stacks: Vec<(Vec3, f32)>,
+    /// Water pouring down a dam's spillway: where it leaves and where it lands.
+    spills: Vec<(Vec3, Vec3)>,
     runs: Vec<Run>,
     skis: MeshId,
     /// Chimney tops, and flagpole tops with the way they face.
@@ -98,7 +113,6 @@ pub struct Life {
     flag: MeshId,
     pole: MeshId,
     wheel: MeshId,
-    gondola: MeshId,
     seat: MeshId,
     steam: MeshId,
     rotor: MeshId,
@@ -109,6 +123,8 @@ pub struct Life {
     horse: MeshId,
     dog: MeshId,
     body: MeshId,
+    /// Body and head as two boxes, for afar.
+    body_far: MeshId,
     heads: [MeshId; 3],
     dolphin: MeshId,
     beam: MeshId,
@@ -135,13 +151,26 @@ pub(crate) const SHIRTS: [Rgb; 8] = [
     Rgb(0x3E7F8C),
 ];
 
+impl Life {
+    /// The townsfolk meshes, body and heads, for others to draw people with.
+    pub fn people(&self) -> (MeshId, [MeshId; 3]) {
+        (self.body, self.heads)
+    }
+
+    /// A person seen from afar, standing in for body and head.
+    pub fn person_far(&self) -> MeshId {
+        self.body_far
+    }
+}
+
 pub(crate) fn linear(c: Rgb) -> Vec3 {
     let f = |s: u32| ((s & 0xFF) as f32 / 255.0).powf(2.2);
     Vec3::new(f(c.0 >> 16), f(c.0 >> 8), f(c.0))
 }
 
 impl Life {
-    pub fn new(renderer: &mut Renderer, world: &World) -> Self {
+    /// `pool` is the shared soft glow, for steam and lanterns.
+    pub fn new(renderer: &mut Renderer, world: &World, pool: MeshId) -> Self {
         let terrain = &world.terrain;
         let h = world.half_size;
         // Coasts, open grass and sea from a coarse look over the whole world, spaced out.
@@ -204,9 +233,6 @@ impl Life {
             .collect();
         let mut walkers = Vec::new();
         for (i, w) in homes.windows(2).enumerate() {
-            if i % 4 != 0 {
-                continue;
-            }
             let door = |b: &zawnabout_sim::town::Building| {
                 let depth = if b.kind == Kind::Row {
                     b.size.x
@@ -216,11 +242,18 @@ impl Life {
                 Vec2::new(b.pos.x, b.pos.z) + b.front() * (depth * 0.5 + 1.5)
             };
             let (a, b) = (door(w[0]), door(w[1]));
-            if a.distance(b) > 3.0 && a.distance(b) < 120.0 {
+            let under = (w[0].style == zawnabout_sim::terrain::Style::Cavern)
+                .then(|| w[0].pos.y.max(w[1].pos.y) + 3.0);
+            // Cavern towns are busy at every hour, so they have twice the people.
+            if (i % 4 == 0 || (under.is_some() && i % 2 == 0))
+                && a.distance(b) > 3.0
+                && a.distance(b) < 120.0
+            {
                 walkers.push(Walker {
                     a,
                     b,
                     kind: (hash(i as u32 * 17) * 3.0) as u8,
+                    under,
                 });
             }
         }
@@ -229,6 +262,12 @@ impl Life {
             .iter()
             .filter(|b| b.kind == Kind::Lighthouse)
             .map(|b| b.pos + Vec3::Y * (b.size.y + zawnabout_sim::town::LAMP_ROOM * 0.5))
+            .collect();
+        let keepers = world
+            .buildings
+            .iter()
+            .filter(|b| b.kind == Kind::Lighthouse)
+            .map(|b| (b.pos + Vec3::Y * b.size.y, b.size.x * 0.5 * 0.64 + 0.7))
             .collect();
         let turbines = world
             .buildings
@@ -260,6 +299,24 @@ impl Life {
         let of = |k: Kind| world.buildings.iter().filter(move |b| b.kind == k);
         let wheels = of(Kind::Ferris).map(frame).collect();
         let swings = of(Kind::Swing).map(frame).collect();
+        let stacks = world
+            .buildings
+            .iter()
+            .flat_map(|b| {
+                zawnabout_sim::landmark::stacks(b.kind)
+                    .into_iter()
+                    .map(|(c, w)| (b.at(c.x, c.y, c.z), w))
+            })
+            .collect();
+        let spills = world
+            .buildings
+            .iter()
+            .flat_map(|b| {
+                zawnabout_sim::landmark::spills(b.kind)
+                    .into_iter()
+                    .map(|(a, c)| (b.at(a.x, a.y, a.z), b.at(c.x, c.y, c.z)))
+            })
+            .collect();
         let springs = of(Kind::HotSpring)
             .map(|b| {
                 let c = zawnabout_sim::landmark::SPRING;
@@ -306,6 +363,7 @@ impl Life {
             }
             let prof = terrain.road_points(i);
             let mut run: Vec<Vec3> = Vec::new();
+            let curb = r.w * 0.5 - 1.1;
             let flush = |run: &mut Vec<Vec3>, rides: &mut Vec<Ride>| {
                 let mut along = vec![0.0];
                 for w in run.windows(2) {
@@ -315,6 +373,7 @@ impl Life {
                     rides.push(Ride {
                         pts: std::mem::take(run),
                         along,
+                        curb,
                     });
                 }
                 run.clear();
@@ -334,6 +393,17 @@ impl Life {
             }
             flush(&mut run, &mut rides);
         }
+        let piers = world
+            .buildings
+            .iter()
+            .filter(|b| b.kind == Kind::Pier && b.size.x > 60.0)
+            .map(|b| {
+                (
+                    b.at(-b.size.x * 0.5 + 2.0, b.size.y, 0.0),
+                    b.at(b.size.x * 0.5 - 6.0, b.size.y, 0.0),
+                )
+            })
+            .collect();
         let anglers = world
             .buildings
             .iter()
@@ -356,11 +426,15 @@ impl Life {
         Self {
             rides,
             anglers,
+            piers,
+            crate_box: renderer.add_mesh(&models::crate_box()),
             bike: renderer.add_mesh(&models::bicycle()),
             rod: renderer.add_mesh(&models::fishing_rod()),
             wheels,
             swings,
             springs,
+            stacks,
+            spills,
             chimneys,
             flags,
             flag: renderer.add_mesh(&models::flag()),
@@ -368,9 +442,8 @@ impl Life {
             runs,
             skis: renderer.add_mesh(&models::skis()),
             wheel: renderer.add_mesh(&models::ferris_wheel()),
-            gondola: renderer.add_mesh(&models::gondola()),
             seat: renderer.add_mesh(&models::swing_seat()),
-            steam: renderer.add_mesh(&models::pool()),
+            steam: pool,
             turbines,
             fires,
             rotor: renderer.add_mesh(&models::rotor()),
@@ -380,12 +453,14 @@ impl Life {
             walkers,
             pods,
             beams,
+            keepers,
             gull: renderer.add_mesh(&models::gull()),
             sheep: renderer.add_mesh(&models::sheep()),
             cow: renderer.add_mesh(&models::cow()),
             horse: renderer.add_mesh(&models::horse()),
             dog: renderer.add_mesh(&models::dog()),
             body: renderer.add_mesh(&models::townsfolk_body()),
+            body_far: renderer.add_mesh(&models::townsfolk_far()),
             heads: [0, 1, 2].map(|v| renderer.add_mesh(&models::townsfolk_head(v))),
             dolphin: renderer.add_mesh(&models::dolphin()),
             beam: renderer.add_mesh(&models::lighthouse_beam()),
@@ -398,6 +473,7 @@ impl Life {
         world: &World,
         cam: Vec3,
         time: f32,
+        sim_time: f32,
         night: f32,
         draws: &mut Vec<(MeshId, Instance)>,
         fx: &mut Vec<(MeshId, Instance)>,
@@ -429,6 +505,33 @@ impl Life {
                     );
                     draws.push((self.gull, Instance::new(m)));
                 }
+            }
+        }
+        // Gulls trail every fishing boat, wheeling low over its stern.
+        for (i, v) in world.traffic.vehicles.iter().enumerate() {
+            if v.kind != Kind::Trawler {
+                continue;
+            }
+            let p = world.traffic.poses[i];
+            if !near(Vec2::new(p.pos.x, p.pos.z), 1200.0) {
+                continue;
+            }
+            let stern = p.pos - Vec3::new(p.axis().x, 0.0, p.axis().y) * v.size.x * 0.5;
+            for b in 0..8u32 {
+                let s = i as u32 * 131 + b;
+                let r = 6.0 + hash(s) * 12.0;
+                let dir = if hash(s + 2) < 0.5 { 1.0 } else { -1.0 };
+                let a = time * (8.0 + hash(s + 1) * 4.0) / r * dir + hash(s + 3) * TAU;
+                let y = 7.0 + hash(s + 4) * 8.0 + (time * 0.7 + s as f32).sin() * 2.0;
+                let pos = stern + Vec3::new(a.cos() * r, y, a.sin() * r);
+                let heading = (-a.sin() * dir).atan2(a.cos() * dir);
+                let flap = 0.35 + 0.65 * (time * 9.0 + s as f32).sin();
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, flap, 1.0) * 1.3,
+                    Quat::from_rotation_y(heading) * Quat::from_rotation_z(0.35 * dir),
+                    pos,
+                );
+                draws.push((self.gull, Instance::new(m)));
             }
         }
         for (k, herd) in self.herds.iter().enumerate() {
@@ -569,7 +672,7 @@ impl Life {
                 let (p, dir) = r.at(along);
                 let dir = if back { -dir } else { dir };
                 let right = Vec3::new(-dir.z, 0.0, dir.x).normalize_or(Vec3::X);
-                let at = p - right * 2.4;
+                let at = p + right * r.curb;
                 if at.distance(cam) > 450.0 {
                     continue;
                 }
@@ -608,6 +711,58 @@ impl Life {
                 );
             draws.push((self.rod, Instance::new(rod)));
         }
+        // Porters carry crates out along the long piers to the boats, and walk back for
+        // more, by day.
+        if night < 0.6 {
+            for (k, (shore, end)) in self.piers.iter().enumerate() {
+                if shore.distance(cam) > 450.0 {
+                    continue;
+                }
+                let dir = (*end - *shore).normalize_or(Vec3::Z);
+                let side = Vec3::new(-dir.z, 0.0, dir.x);
+                let len = shore.distance(*end);
+                for i in 0..3u32 {
+                    let s = k as u32 * 37 + i;
+                    let u = (time * 1.2 / len + hash(s) * 2.0) % 2.0;
+                    let (t, out) = if u < 1.0 { (u, true) } else { (2.0 - u, false) };
+                    let at = shore.lerp(*end, t) + side * (i as f32 - 1.0) * 1.6;
+                    let face = if out { dir } else { -dir };
+                    let m = Mat4::from_rotation_translation(
+                        Quat::from_rotation_y(face.x.atan2(face.z)),
+                        at,
+                    );
+                    let shirt = linear(SHIRTS[(hash(s + 1) * 8.0) as usize % 8]);
+                    draws.push((self.body, Instance::tinted(m, shirt.extend(1.0))));
+                    draws.push((self.heads[(s % 3) as usize], Instance::new(m)));
+                    if out {
+                        let held = m * Mat4::from_translation(Vec3::new(0.0, 1.05, 0.35));
+                        draws.push((self.crate_box, Instance::new(held)));
+                    }
+                }
+            }
+        }
+        // Each lighthouse keeper takes a slow turn round the gallery by day, stopping now
+        // and then to look out to sea.
+        if night < 0.6 {
+            for (k, (mid, r)) in self.keepers.iter().enumerate() {
+                if mid.distance(cam) > 450.0 {
+                    continue;
+                }
+                let t = time * 0.05 + k as f32 * 1.7;
+                let a = t + (t * 3.0).sin() * 0.3;
+                let at = *mid + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
+                let walk = Vec3::new(-a.sin(), 0.0, a.cos());
+                let out = Vec3::new(a.cos(), 0.0, a.sin());
+                let look = if (t * 3.0).cos() > 0.6 { out } else { walk };
+                let m = Mat4::from_rotation_translation(
+                    Quat::from_rotation_y(look.x.atan2(look.z)),
+                    at,
+                );
+                let shirt = linear(Rgb(0x2E4A7A));
+                draws.push((self.body, Instance::tinted(m, shirt.extend(1.0))));
+                draws.push((self.heads[k % 3], Instance::new(m)));
+            }
+        }
         // Fewer people about at night.
         for (i, w) in self.walkers.iter().enumerate() {
             let s = i as u32 * 31;
@@ -624,7 +779,8 @@ impl Life {
             };
             let ease = t.clamp(0.0, 1.0);
             let p = w.a.lerp(w.b, ease);
-            let y = world.support(p.x, p.y, terrain.height(p.x, p.y) + 0.8);
+            let top = w.under.unwrap_or_else(|| terrain.height(p.x, p.y) + 0.8);
+            let y = world.support(p.x, p.y, top);
             let bob = (time * 9.0 + s as f32).sin().abs() * 0.07;
             let m = Mat4::from_scale_rotation_translation(
                 Vec3::splat(0.95 + hash(s + 2) * 0.15),
@@ -634,13 +790,35 @@ impl Life {
             let shirt = linear(SHIRTS[(hash(s + 3) * 8.0) as usize % 8]);
             draws.push((self.body, Instance::tinted(m, shirt.extend(1.0))));
             draws.push((self.heads[w.kind as usize % 3], Instance::new(m)));
+            // Underground, many carry a lantern, swinging as they go.
+            if w.under.is_some() && hash(s + 9) < 0.5 {
+                let swing = (time * 4.5 + s as f32).sin() * 0.06;
+                let hand = m * Mat4::from_translation(Vec3::new(0.32, 0.72 + swing, 0.12));
+                let face = Quat::from_rotation_arc(
+                    Vec3::Y,
+                    (cam - hand.w_axis.truncate()).normalize_or(Vec3::Y),
+                );
+                let glow = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.35, 1.0, 0.35),
+                    face,
+                    hand.w_axis.truncate(),
+                );
+                fx.push((
+                    self.steam,
+                    Instance::tinted(glow, Vec4::new(1.0, 0.75, 0.4, 0.9)),
+                ));
+            }
             // Some walk their dog, which trots alongside and noses about.
             if hash(s + 7) < 0.3 {
                 let dir = toward.normalize_or(Vec2::Y);
                 let side = Vec2::new(-dir.y, dir.x);
                 let sniff = (time * 0.7 + s as f32).sin();
                 let q = p + side * (0.9 + sniff * 0.3) + dir * (0.6 + sniff * 0.4);
-                let dy = world.support(q.x, q.y, terrain.height(q.x, q.y) + 0.8);
+                let dy = world.support(
+                    q.x,
+                    q.y,
+                    w.under.unwrap_or_else(|| terrain.height(q.x, q.y) + 0.8),
+                );
                 let trot = (time * 14.0 + s as f32).sin().abs() * 0.05;
                 let m = Mat4::from_scale_rotation_translation(
                     Vec3::ONE,
@@ -706,20 +884,14 @@ impl Life {
                 fx.push((self.flame, Instance::new(m)));
             }
         }
-        // Fairground wheels turn slowly, their cars hanging level.
-        use zawnabout_sim::landmark::{FERRIS_HUB, FERRIS_R, SWING_PIVOT, SWING_ROPE};
-        let gondolas = [
-            Rgb(0xE0564A),
-            Rgb(0x4A90C8),
-            Rgb(0xF2C14E),
-            Rgb(0x6BBF7A),
-            Rgb(0xE88AB0),
-        ];
+        // Fairground wheels turn slowly on the sim's clock. Their cars are vehicles, which
+        // can be landed on and ridden, so the wheel keeps time with them.
+        use zawnabout_sim::landmark::{FERRIS_HUB, FERRIS_R, FERRIS_SPIN, SWING_PIVOT, SWING_ROPE};
         for (k, f) in self.wheels.iter().enumerate() {
             if f.w_axis.truncate().distance(cam) > 3000.0 {
                 continue;
             }
-            let spin = time * 0.18 + k as f32;
+            let spin = sim_time * FERRIS_SPIN + k as f32;
             let hub = *f * Mat4::from_translation(FERRIS_HUB);
             draws.push((
                 self.wheel,
@@ -727,13 +899,6 @@ impl Life {
                     hub * Mat4::from_rotation_z(spin) * Mat4::from_scale(Vec3::splat(FERRIS_R)),
                 ),
             ));
-            for i in 0..10 {
-                let a = spin + i as f32 / 10.0 * TAU;
-                let pin = Vec3::new(a.cos(), a.sin(), 0.0) * FERRIS_R;
-                let m = hub * Mat4::from_translation(pin);
-                let tint = linear(gondolas[i % 5]).extend(1.0);
-                draws.push((self.gondola, Instance::tinted(m, tint)));
-            }
         }
         // Rope swings sway in the breeze, as if someone just jumped off.
         for (k, f) in self.swings.iter().enumerate() {
@@ -746,6 +911,65 @@ impl Life {
                 * Mat4::from_rotation_x(sway)
                 * Mat4::from_scale(Vec3::splat(SWING_ROPE));
             draws.push((self.seat, Instance::new(m)));
+        }
+        // Steam billows up off factory chimneys and cooling towers, drifting off on the wind.
+        for (k, (c, w)) in self.stacks.iter().enumerate() {
+            if c.distance(cam) > 3000.0 {
+                continue;
+            }
+            for i in 0..8u32 {
+                let s = k as u32 * 23 + i;
+                let u = (time * 0.05 + i as f32 / 8.0 + hash(s) * 0.1).fract();
+                let at = *c
+                    + Vec3::new(
+                        u * w * 3.0 + (time * 0.3 + i as f32).sin() * u * 2.0,
+                        u * w * 4.0 + 1.0,
+                        u * w * 1.2,
+                    );
+                let size = w * (1.0 + u * 1.8);
+                let face = Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y));
+                let m = Mat4::from_scale_rotation_translation(Vec3::new(size, 1.0, size), face, at);
+                let fade = (u * 6.0).min(1.0) * (1.0 - u) * 0.5;
+                fx.push((
+                    self.steam,
+                    Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, fade)),
+                ));
+            }
+        }
+        // Water pours down dam spillways, white and rushing, and mist rises off the foot.
+        for (k, (top, foot)) in self.spills.iter().enumerate() {
+            if top.distance(cam) > 2500.0 {
+                continue;
+            }
+            for i in 0..24u32 {
+                let s = k as u32 * 31 + i;
+                let u = (time * 0.35 + i as f32 / 24.0).fract();
+                // Falling faster as it goes, spreading as it falls.
+                let f = u * u;
+                let at = top.lerp(*foot, f)
+                    + Vec3::new(hash(s) - 0.5, 0.0, hash(s + 1) - 0.5) * (1.0 + f * 4.0);
+                let size = 2.2 + f * 3.0;
+                let face = Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y));
+                let m = Mat4::from_scale_rotation_translation(Vec3::new(size, 1.0, size), face, at);
+                fx.push((
+                    self.steam,
+                    Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, 0.7)),
+                ));
+            }
+            for i in 0..8u32 {
+                let s = k as u32 * 37 + i;
+                let u = (time * 0.1 + hash(s)).fract();
+                let a = hash(s + 1) * TAU;
+                let at = *foot + Vec3::new(a.cos() * 8.0 * u, 2.0 + u * 14.0, a.sin() * 8.0 * u);
+                let size = 5.0 + u * 8.0;
+                let face = Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y));
+                let m = Mat4::from_scale_rotation_translation(Vec3::new(size, 1.0, size), face, at);
+                let fade = (u * 5.0).min(1.0) * (1.0 - u) * 0.35;
+                fx.push((
+                    self.steam,
+                    Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, fade)),
+                ));
+            }
         }
         // Steam drifts up off hot springs.
         for (k, c) in self.springs.iter().enumerate() {

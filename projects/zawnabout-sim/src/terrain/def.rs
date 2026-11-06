@@ -40,6 +40,8 @@ pub struct WorldDef {
 pub struct Land {
     pub id: &'static str,
     pub base: f32,
+    /// The island's climate: 0 temperate, 1 lush, 2 dry, 3 cold.
+    pub climate: u8,
     pub pts: &'static [[f32; 2]],
     pub edges: &'static [u8],
 }
@@ -309,6 +311,11 @@ pub struct Road {
     pub rail: bool,
     /// A railway underground, with metro trains and stations in halls.
     pub subway: bool,
+    /// A tour line through caverns: one little train, an engine and open carriages full
+    /// of sightseers, on trestles wherever the floor drops away.
+    pub tour: bool,
+    /// A tour line that is a mine's: a little engine pulling ore carts of riders.
+    pub mine: bool,
     pub w: f32,
     pub pts: &'static [[f32; 3]],
 }

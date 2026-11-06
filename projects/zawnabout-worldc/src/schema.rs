@@ -77,7 +77,11 @@ pub fn spec(name: &str) -> Option<Spec> {
         "edge" | "sky" | "deep" => bare(1, &[]),
         "sea" => bare(0, &[("level", 'n', true), ("floor", 'n', true)]),
         "spawn" => bare(0, &[("island", 's', true), XZ[0], XZ[1]]),
-        "island" => s(&[("file", 's', true), XZ[0], XZ[1]], &[], Pts::None),
+        "island" => s(
+            &[("file", 's', true), XZ[0], XZ[1], ("climate", 's', false)],
+            &[],
+            Pts::None,
+        ),
         "land" => Spec {
             id_optional: true,
             ..s(
@@ -182,7 +186,12 @@ pub fn spec(name: &str) -> Option<Spec> {
             Pts::None,
         ),
         "passage" => s(
-            &[("w", 'n', true), ("tight", 'b', false)],
+            &[
+                ("w", 'n', true),
+                ("tight", 'b', false),
+                ("decor", 's', false),
+                ("glow", 'n', false),
+            ],
             &["beacon"],
             Pts::D3(&[]),
         ),
@@ -193,6 +202,7 @@ pub fn spec(name: &str) -> Option<Spec> {
                 ("hidden", 'b', false),
                 ("light", 'b', false),
                 ("tight", 'b', false),
+                ("decor", 's', false),
             ],
             &[],
             Pts::D3(&[]),
@@ -248,12 +258,16 @@ pub fn spec(name: &str) -> Option<Spec> {
             &["runway"],
             Pts::None,
         ),
-        "road" => s(&[("w", 'n', true)], &[], Pts::Any(&["sharp"])),
+        "road" => s(&[("w", 'n', true)], &[], Pts::Any(&["sharp", "tunnel"])),
         "runway" => s(&[("w", 'n', true)], &[], Pts::D2(&[])),
         "railway" => s(
-            &[("subway", 'b', false)],
+            &[
+                ("subway", 'b', false),
+                ("tour", 'b', false),
+                ("mine", 'b', false),
+            ],
             &["station"],
-            Pts::Any(&["sharp"]),
+            Pts::Any(&["sharp", "tunnel"]),
         ),
         "station" => s(XZ.as_slice(), &[], Pts::None),
         "route" => s(&[("kind", 's', true)], &[], Pts::Any(&["sharp"])),

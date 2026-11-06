@@ -1,0 +1,23 @@
+# Walking over a drawbridge's lowered leaves stays on foot all the way across. The
+# leaves are down from about 17 s to 42 s.
+wait 17
+place -1116 7 -4220 90
+wait 2
+expect ground
+hold pitch 0.6
+wait 1
+expect ground
+wait 1
+expect ground
+wait 1
+expect ground
+wait 1
+expect ground
+wait 1
+expect ground
+wait 1
+expect ground
+release all
+wait 1
+expect ground
+expect near -1080 5 -4220 8

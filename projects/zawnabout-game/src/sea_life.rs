@@ -12,6 +12,9 @@ use zawnabout_sim::shape::hash;
 use crate::models;
 use crate::render::{Instance, MeshId, Renderer};
 
+/// How long a whale's breach lasts, as a share of its 60 s round.
+const BREACH: f32 = 0.09;
+
 /// A spot on the water and its surface height.
 #[derive(Clone, Copy)]
 struct Spot {
@@ -170,22 +173,26 @@ impl SeaLife {
             }
         }
         // Whales: a long roll at the surface with a blow or two, a dive showing the tail,
-        // and every few rounds a breach right out of the water.
+        // then two slow breaches right out of the water further along the same line, so a
+        // blow seen from afar is worth flying to.
         for (k, w) in self.whales.iter().enumerate() {
             if !near(w.at, 3500.0) {
                 continue;
             }
             let s = k as u32 * 71;
-            let period = 46.0;
+            let period = 60.0;
             let cycle = time / period + hash(s);
             let phase = cycle.fract();
             let round = cycle.floor() as u32;
             let a = hash(s + round) * TAU;
             let dir = Vec2::new(a.cos(), a.sin());
             let start =
-                w.at + Vec2::new(hash(s + round * 3) - 0.5, hash(s + round * 5) - 0.5) * 300.0;
+                w.at + Vec2::new(hash(s + round * 3) - 0.5, hash(s + round * 5) - 0.5) * 120.0;
             let heading = dir.x.atan2(dir.y);
-            let breach = round % 3 == 1;
+            let breach = [0.5f32, 0.7]
+                .iter()
+                .enumerate()
+                .find(|(_, b)| (**b..**b + BREACH).contains(&phase));
             if phase < 0.35 {
                 let u = phase / 0.35;
                 let p = start + dir * u * 60.0;
@@ -220,10 +227,10 @@ impl SeaLife {
                     Vec3::new(p.x, w.level - 1.5 - u * 9.0, p.y),
                 );
                 draws.push((self.whale, Instance::new(m)));
-            } else if breach && (0.6..0.68).contains(&phase) {
-                let u = (phase - 0.6) / 0.08;
-                let p = start + dir * (90.0 + u * 20.0);
-                let y = w.level - 9.0 + (u * PI).sin() * 17.0;
+            } else if let Some((i, b)) = breach {
+                let u = (phase - b) / BREACH;
+                let p = start + dir * (90.0 + i as f32 * 50.0 + u * 22.0);
+                let y = w.level - 9.0 + (u * PI).sin() * 19.0;
                 let m = Mat4::from_scale_rotation_translation(
                     Vec3::ONE,
                     Quat::from_rotation_y(heading)

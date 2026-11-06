@@ -160,6 +160,13 @@ pub struct World {
     pub traffic: Traffic,
     /// Suspension bridges' cables, for looks. Their towers are buildings.
     pub bridges: Vec<crate::bridge::Suspension>,
+    /// Power lines: each the buildings of its pylons, in order along it.
+    pub power_lines: Vec<Vec<usize>>,
+    /// Pools of water in landmarks (water parks, fountains, ponds): their tops are water
+    /// to swim in.
+    pub pools: Vec<Shape>,
+    /// Drawbridges, by building index: their lifting leaves are decks to walk on.
+    pub drawbridges: Vec<usize>,
     grid: Vec<Vec<u32>>,
     grid_n: usize,
 }
@@ -186,6 +193,9 @@ impl World {
             beacons: Vec::new(),
             traffic: Traffic::default(),
             bridges: Vec::new(),
+            power_lines: Vec::new(),
+            pools: Vec::new(),
+            drawbridges: Vec::new(),
             grid: Vec::new(),
             grid_n: 0,
         };
@@ -193,14 +203,32 @@ impl World {
         world.buildings = town::place(&world.terrain, seed);
         world.landmarks();
         world.stations();
+        world.bus_stops();
+        world.billboards();
         world.bridges();
         world.clear_landmarks();
         world.yard_trees();
         world.wild_props();
         world.place_caves();
         world.lifts();
+        world.power_lines();
         world.build_colliders();
-        world.traffic = Traffic::new(&world.terrain);
+        let places: Vec<Vec2> = world
+            .buildings
+            .iter()
+            .map(|b| Vec2::new(b.pos.x, b.pos.z))
+            .collect();
+        let bus_stops: Vec<Vec2> = world
+            .buildings
+            .iter()
+            .filter(|b| b.kind == Kind::BusStop)
+            .map(|b| Vec2::new(b.pos.x, b.pos.z))
+            .collect();
+        world.traffic = Traffic::new(&world.terrain, &places, &bus_stops);
+        world.pools = world.buildings.iter().flat_map(|b| b.pools()).collect();
+        world.drawbridges = (0..world.buildings.len())
+            .filter(|&i| world.buildings[i].kind == Kind::Drawbridge)
+            .collect();
         world.traffic.update(0.0);
         for m in def.marks.iter().filter(|m| m.kind == "perch") {
             let (x, z) = (m.pos[0], m.pos[2]);
@@ -238,6 +266,19 @@ impl World {
     fn yard_trees(&mut self) {
         let mut rng = Rng::new(self.seed ^ 0x7A2D);
         let mut placed = Vec::new();
+        // Never in a garden pool, nor so close its leaves hang over the water.
+        let pools: Vec<&Building> = self
+            .buildings
+            .iter()
+            .filter(|b| b.kind == Kind::YardPool)
+            .collect();
+        let wet = |at: Vec2| {
+            pools.iter().any(|p| {
+                let d = at - Vec2::new(p.pos.x, p.pos.z);
+                d.dot(p.axis).abs() < p.size.x * 0.5 + 3.0
+                    && d.dot(p.front()).abs() < p.size.z * 0.5 + 3.0
+            })
+        };
         for b in &self.buildings {
             let leafy = matches!(
                 b.style,
@@ -257,6 +298,9 @@ impl World {
             let at = at + side;
             let s = rng.range(1.1, 1.7);
             let v = (rng.next_u64() % 3) as u8;
+            if wet(at) {
+                continue;
+            }
             if let Some(h) = self.dry_spot(at.x, at.y, 0.75) {
                 placed.push((Vec3::new(at.x, h - 0.3, at.y), s, v));
             }
@@ -282,8 +326,15 @@ impl World {
                 continue;
             };
             let (x, z) = (m.pos[0], m.pos[2]);
+            // Given a height deep under the ground, it stands on the cavern floor there,
+            // and is drawn with the cave insides.
+            // Carvings stand at a cliff's face with their backs in the rock, never inside.
+            let carved = matches!(kind, Kind::Faces | Kind::Warden);
+            let under = !m.ground && !carved && self.terrain.height(x, z) > m.pos[1] + 20.0;
             let y = if m.ground {
                 self.terrain.height(x, z)
+            } else if under {
+                self.terrain.support(x, z, m.pos[1] + 5.0)
             } else {
                 m.pos[1]
             };
@@ -296,7 +347,12 @@ impl World {
             let b = Building {
                 id: self.buildings.len() as u32,
                 kind,
-                style: Style::Plain,
+                // Subway stairs climb out to the street, so they draw from outside too.
+                style: if under && kind != Kind::MetroStairs {
+                    Style::Cavern
+                } else {
+                    Style::Plain
+                },
                 tech: crate::terrain::Tech::Modern,
                 pos: Vec3::new(x, y, z),
                 axis,
@@ -365,6 +421,127 @@ impl World {
     /// undergrowth in the woods. Keeps clear of buildings and roads.
     /// A station beside the track at every railway `station` mark, its platform on the
     /// mark's side.
+    /// Bus stops along every road through a town, one every few hundred meters, at the
+    /// curb on the right facing the road, clear of the buildings.
+    /// Billboards along the big roads out of town, every so often, one side then the other,
+    /// set back off the verge and turned to face the traffic.
+    fn billboards(&mut self) {
+        const EVERY: f32 = 650.0;
+        let def = self.terrain.def;
+        let mut boards = Vec::new();
+        for (ri, r) in def.roads.iter().enumerate() {
+            if r.rail || r.runway || r.w < 12.0 {
+                continue;
+            }
+            let prof = self.terrain.road_points(ri);
+            let mut next = EVERY * 0.5;
+            let mut run = 0.0;
+            for (w, &p) in r.pts.windows(2).zip(prof) {
+                let (a, b) = (Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]));
+                run += a.distance(b);
+                if run < next || p.bridge || p.tunnel {
+                    continue;
+                }
+                let dir = (b - a).normalize_or(Vec2::X);
+                let side = if boards.len() % 2 == 0 { 1.0 } else { -1.0 };
+                let out = Vec2::new(-dir.y, dir.x) * side;
+                let at = a + out * (r.w * 0.5 + 9.0);
+                let ground = self.terrain.height(at.x, at.y);
+                let clear = self.terrain.road_spot(at.x, at.y, 9.0).is_none()
+                    && ground > 2.0
+                    && (ground - p.y).abs() < 6.0
+                    && self.buildings.iter().all(|o| {
+                        Vec2::new(o.pos.x, o.pos.z).distance(at)
+                            > 10.0 + o.size.x.max(o.size.z) * 0.5
+                    });
+                if clear {
+                    next = run + EVERY;
+                    // Its front, local +z, toward the road.
+                    let face = -out;
+                    boards.push((at, Vec2::new(face.y, -face.x), ground));
+                }
+            }
+        }
+        for (k, (at, axis, y)) in boards.into_iter().enumerate() {
+            let seed = k as u32 * 7 + 3;
+            let pieces = crate::landmark::pieces(Kind::Billboard, seed, "");
+            self.buildings.push(Building {
+                id: self.buildings.len() as u32,
+                kind: Kind::Billboard,
+                style: Style::Plain,
+                tech: crate::terrain::Tech::Modern,
+                pos: Vec3::new(at.x, y, at.y),
+                axis,
+                size: crate::landmark::extent(&pieces),
+                roof: 0.0,
+                stilts: 0.0,
+                seed,
+                site: None,
+                text: "",
+            });
+        }
+    }
+
+    fn bus_stops(&mut self) {
+        const EVERY: f32 = 420.0;
+        let def = self.terrain.def;
+        let mut stops = Vec::new();
+        for (ri, r) in def.roads.iter().enumerate() {
+            if r.rail || r.runway {
+                continue;
+            }
+            let prof = self.terrain.road_points(ri);
+            let mut next = EVERY * 0.5;
+            let mut run = 0.0;
+            for (w, &p) in r.pts.windows(2).zip(prof) {
+                let (a, b) = (Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]));
+                run += a.distance(b);
+                if run < next {
+                    continue;
+                }
+                next = run + EVERY;
+                let town = self
+                    .terrain
+                    .cover(a.x, a.y)
+                    .is_some_and(|c| c.kind == CoverKind::Town);
+                if !town || p.bridge || p.tunnel {
+                    continue;
+                }
+                let dir = (b - a).normalize_or(Vec2::X);
+                let right = Vec2::new(-dir.y, dir.x);
+                let at = a + right * (r.w * 0.5 + 2.4);
+                // Its open front faces the road.
+                let face = -right;
+                // Clear of every road, not only its own, and of the buildings.
+                let clear = self.terrain.road_spot(at.x, at.y, 1.5).is_none()
+                    && self.buildings.iter().all(|o| {
+                        Vec2::new(o.pos.x, o.pos.z).distance(at)
+                            > 4.0 + o.size.x.max(o.size.z) * 0.5
+                    });
+                if clear {
+                    stops.push((at, Vec2::new(face.y, -face.x), p.y));
+                }
+            }
+        }
+        let pieces = crate::landmark::pieces(Kind::BusStop, 0, "");
+        for (at, axis, y) in stops {
+            self.buildings.push(Building {
+                id: self.buildings.len() as u32,
+                kind: Kind::BusStop,
+                style: Style::Plain,
+                tech: crate::terrain::Tech::Modern,
+                pos: Vec3::new(at.x, y.max(self.terrain.height(at.x, at.y)), at.y),
+                axis,
+                size: crate::landmark::extent(&pieces),
+                roof: 0.0,
+                stilts: 0.0,
+                seed: 0,
+                site: None,
+                text: "",
+            });
+        }
+    }
+
     fn stations(&mut self) {
         let def = self.terrain.def;
         for m in def.marks.iter().filter(|m| m.kind == "station") {
@@ -372,11 +549,31 @@ impl World {
             let Some((i, k)) = nearest_rail(def, at) else {
                 continue;
             };
-            let (a, b) = (def.roads[i].pts[k], def.roads[i].pts[k + 1]);
-            let track = Vec2::new(a[0], a[1]);
-            let mut axis = (Vec2::new(b[0], b[1]) - track).normalize_or(Vec2::X);
+            let line = def.roads[i].pts;
+            let pt = |j: usize| Vec2::new(line[j][0], line[j][1]);
+            let mut track = pt(k);
+            // Square to the track's chord over the platform's length, so a curve bends
+            // away under it evenly.
+            let reach = |step: isize| {
+                let (mut j, mut run) = (k as isize, 0.0);
+                while run < PLATFORM && j + step >= 0 && ((j + step) as usize) < line.len() {
+                    run += pt(j as usize).distance(pt((j + step) as usize));
+                    j += step;
+                }
+                j as usize
+            };
+            let (back, ahead) = (reach(-1), reach(1));
+            let mut axis = (pt(ahead) - pt(back)).normalize_or(Vec2::X);
             if (at - track).dot(Vec2::new(-axis.y, axis.x)) < 0.0 {
                 axis = -axis;
+            }
+            // Out from the track by however far it bulges toward the platform.
+            if !def.roads[i].subway {
+                let front = Vec2::new(-axis.y, axis.x);
+                let bulge = (back..=ahead)
+                    .map(|j| (pt(j) - track).dot(front))
+                    .fold(0.0f32, f32::max);
+                track += front * bulge;
             }
             let y = self.terrain.road_points(i)[k].y;
             let (kind, name) = if def.roads[i].subway {
@@ -392,7 +589,12 @@ impl World {
             self.buildings.push(Building {
                 id: self.buildings.len() as u32,
                 kind,
-                style: Style::Plain,
+                // Underground, it draws with the cave insides.
+                style: if self.terrain.height(track.x, track.y) > y + 20.0 {
+                    Style::Cavern
+                } else {
+                    Style::Plain
+                },
                 tech: crate::terrain::Tech::Modern,
                 pos: Vec3::new(track.x, y, track.y),
                 axis,
@@ -434,6 +636,46 @@ impl World {
     }
 
     /// Pylons along every lift and a station at each end.
+    /// Pylons along every power line, about every 160 m and at each end, standing square
+    /// to the line on the ground.
+    fn power_lines(&mut self) {
+        const SPACING: f32 = 160.0;
+        let def = self.terrain.def;
+        for r in def.routes.iter().filter(|r| r.kind == "power") {
+            let pts: Vec<Vec2> = r.pts.iter().map(|p| Vec2::new(p[0], p[1])).collect();
+            let mut along = vec![0.0f32];
+            for w in pts.windows(2) {
+                along.push(along[along.len() - 1] + w[0].distance(w[1]));
+            }
+            let len = along[along.len() - 1];
+            let n = (len / SPACING).ceil().max(1.0) as u32;
+            let mut line = Vec::new();
+            for k in 0..=n {
+                let s = len * k as f32 / n as f32;
+                let i = along.partition_point(|a| *a <= s).clamp(1, pts.len() - 1);
+                let u = ((s - along[i - 1]) / (along[i] - along[i - 1]).max(1e-3)).clamp(0.0, 1.0);
+                let at = pts[i - 1].lerp(pts[i], u);
+                let dir = (pts[i] - pts[i - 1]).normalize_or(Vec2::X);
+                line.push(self.buildings.len());
+                self.buildings.push(Building {
+                    id: self.buildings.len() as u32,
+                    kind: Kind::Pylon,
+                    style: Style::Plain,
+                    tech: crate::terrain::Tech::Modern,
+                    pos: Vec3::new(at.x, self.terrain.height(at.x, at.y), at.y),
+                    axis: dir,
+                    size: Vec3::new(2.0, crate::landmark::PYLON_TALL, 11.0),
+                    roof: 0.0,
+                    stilts: 0.0,
+                    seed: k,
+                    site: None,
+                    text: "",
+                });
+            }
+            self.power_lines.push(line);
+        }
+    }
+
     fn lifts(&mut self) {
         let def = self.terrain.def;
         for r in def.routes {
@@ -510,6 +752,8 @@ impl World {
             .buildings
             .iter()
             .filter(|b| crate::landmark::KINDS.iter().any(|(_, k)| *k == b.kind))
+            // Subway stairs run under the town, their entrance clears the way up top.
+            .filter(|b| b.kind != Kind::MetroStairs)
             .map(|b| {
                 (
                     Vec2::new(b.pos.x, b.pos.z),
@@ -538,6 +782,7 @@ impl World {
             .buildings
             .iter()
             .filter(|b| crate::landmark::KINDS.iter().any(|(_, k)| *k == b.kind))
+            .filter(|b| b.kind != Kind::MetroStairs)
             .filter(|b| b.size.x.max(b.size.z) > 20.0)
             .map(|b| {
                 (
@@ -670,12 +915,19 @@ impl World {
 
     /// Cave decor, then beacons and ruins from the world files.
     fn place_caves(&mut self) {
+        // Nothing grows on a road through a tunnel, nor hangs over its portal.
+        let on_road = |t: &Terrain, p: Vec3, margin: f32| t.road_spot(p.x, p.z, margin).is_some();
         for (kind, pos, s, v) in cave::decorate(&self.terrain, self.seed) {
-            self.push(kind, pos, s, v);
+            // Clear by the prop's own girth too: a giant stalagmite is wide at its foot.
+            if !on_road(&self.terrain, pos, 3.0 + s * 1.6) {
+                self.push(kind, pos, s, v);
+            }
         }
         let turned = cave::mouths(&self.terrain, self.seed)
             .into_iter()
-            .chain(cave::brackets(&self.terrain, self.seed));
+            .chain(cave::brackets(&self.terrain, self.seed))
+            .filter(|t| !on_road(&self.terrain, t.1, 14.0))
+            .collect::<Vec<_>>();
         for (kind, pos, s, v, yaw) in turned {
             self.push(kind, pos, s, v);
             if let Some(p) = self.props.last_mut() {
@@ -868,11 +1120,13 @@ impl World {
                 | PropKind::Brackets => {}
             }
         }
-        // Bridge decks hold you up and stop you, one box per stretch of deck.
+        // Bridge decks hold you up and stop you, one box per stretch of deck, and so do
+        // the road and track beds in tunnels, which lie over the tube's round floor.
         for (ri, road) in self.terrain.def.roads.iter().enumerate() {
             let prof = self.terrain.road_points(ri);
             for i in 0..road.pts.len().saturating_sub(1) {
-                if !(prof[i].bridge && prof[i + 1].bridge) {
+                let held = |k: usize| prof[k].bridge || prof[k].tunnel;
+                if !(held(i) && held(i + 1)) {
                     continue;
                 }
                 let a = Vec2::new(road.pts[i][0], road.pts[i][1]);
@@ -947,6 +1201,15 @@ impl World {
     /// Height of the highest standable surface at `(x, z)` that is not above `below`.
     /// Water counts as a surface for now, so a dragon can rest on it.
     pub fn support(&self, x: f32, z: f32, below: f32) -> f32 {
+        self.support_of(x, z, below, true)
+    }
+
+    /// As [`World::support`], but only what stands still, for the camera.
+    pub fn support_still(&self, x: f32, z: f32, below: f32) -> f32 {
+        self.support_of(x, z, below, false)
+    }
+
+    fn support_of(&self, x: f32, z: f32, below: f32, vehicles: bool) -> f32 {
         let ground = self.terrain.support(x, z, below);
         let mut best = ground;
         // Under rock, only cave water counts: the sea or a river overhead is no floor.
@@ -960,7 +1223,18 @@ impl World {
         {
             best = w;
         }
-        for shape in self.near(x, z).map(|c| c.shape).chain(self.moving(x, z)) {
+        if let Some(h) = self.leaf_at(x, z)
+            && h <= below
+            && h > best
+        {
+            best = h;
+        }
+        for shape in self
+            .near(x, z)
+            .map(|c| c.shape)
+            .chain(self.moving(x, z).filter(|_| vehicles))
+            .chain(self.pools_at(x, z))
+        {
             if let Some(h) = shape.support(x, z)
                 && h <= below
                 && h > best
@@ -969,6 +1243,65 @@ impl World {
             }
         }
         best
+    }
+
+    /// Whether a surface at `y` over `(x, z)` is water: the sea, a lake, a river or a
+    /// cave pool, and not a deck or the ground.
+    pub fn afloat(&self, x: f32, z: f32, y: f32) -> bool {
+        let ground = self.terrain.support(x, z, y + 0.05);
+        if ground >= y - 0.05 {
+            return false;
+        }
+        let water = if ground < self.terrain.height(x, z) - 1.0 {
+            self.terrain.cave_water(x, z, ground)
+        } else {
+            self.terrain.water(x, z, ground)
+        };
+        if self
+            .pools_at(x, z)
+            .any(|s| s.support(x, z).is_some_and(|h| (h - y).abs() < 0.05))
+        {
+            return true;
+        }
+        let Some(w) = water else {
+            return false;
+        };
+        (w - y).abs() < 0.05
+            && !self
+                .near(x, z)
+                .map(|c| c.shape)
+                .chain(self.moving(x, z))
+                .any(|s| s.support(x, z).is_some_and(|h| (h - y).abs() < 0.05))
+    }
+
+    /// The top of a drawbridge leaf over `(x, z)`, if one is there: level across the gap
+    /// when down, a ramp up toward the middle while it lifts.
+    pub fn leaf_at(&self, x: f32, z: f32) -> Option<f32> {
+        use crate::landmark::{DRAW_DECK, DRAW_HINGE};
+        self.drawbridges.iter().find_map(|&i| {
+            let b = &self.buildings[i];
+            let d = Vec2::new(x - b.pos.x, z - b.pos.z);
+            let (lx, lz) = (d.dot(b.axis), d.dot(b.front()));
+            if lx.abs() > DRAW_HINGE || lz.abs() > 2.5 {
+                return None;
+            }
+            let lift = self.traffic.draw_lift(Vec2::new(b.pos.x, b.pos.z));
+            let from_hinge = DRAW_HINGE - lx.abs();
+            (from_hinge <= DRAW_HINGE * lift.cos())
+                .then(|| b.pos.y + DRAW_DECK + from_hinge * lift.tan())
+        })
+    }
+
+    /// Landmark pools that might reach `(x, z)`.
+    fn pools_at(&self, x: f32, z: f32) -> impl Iterator<Item = Shape> + '_ {
+        let p = Vec2::new(x, z);
+        self.pools
+            .iter()
+            .filter(move |s| {
+                let (c, r) = s.footprint();
+                c.distance(p) <= r
+            })
+            .copied()
     }
 
     /// Solid vehicles that might touch `(x, z)`.
@@ -990,6 +1323,21 @@ impl World {
             .iter()
             .filter_map(|s| s.support(x, z))
             .reduce(f32::max)
+    }
+
+    /// As [`World::carrier`], but staying with vehicle `keep` while it still holds
+    /// someone up, so two vehicles passing never swap a rider between them.
+    pub fn carrier_keeping(&self, keep: Option<usize>, x: f32, z: f32, feet: f32) -> Option<usize> {
+        keep.filter(|&i| {
+            i < self.traffic.vehicles.len()
+                && self
+                    .traffic
+                    .shapes(i)
+                    .iter()
+                    .filter_map(|s| s.support(x, z))
+                    .any(|h| (h - feet).abs() < 0.8)
+        })
+        .or_else(|| self.carrier(x, z, feet))
     }
 
     pub fn carrier(&self, x: f32, z: f32, feet: f32) -> Option<usize> {
@@ -1075,7 +1423,17 @@ impl World {
 
     /// Pushes a sphere out of the ground and every prop it overlaps. Returns the
     /// corrected center and the summed outward normal (zero when nothing was hit).
-    pub fn push_out(&self, mut p: Vec3, r: f32) -> (Vec3, Vec3) {
+    pub fn push_out(&self, p: Vec3, r: f32) -> (Vec3, Vec3) {
+        self.push_out_of(p, r, true)
+    }
+
+    /// As [`World::push_out`], but only out of what stands still, for the camera: moving
+    /// vehicles are only known tick by tick, and following them makes the view shake.
+    pub fn push_out_still(&self, p: Vec3, r: f32) -> (Vec3, Vec3) {
+        self.push_out_of(p, r, false)
+    }
+
+    fn push_out_of(&self, mut p: Vec3, r: f32, vehicles: bool) -> (Vec3, Vec3) {
         let mut normal = Vec3::ZERO;
         if let Some((n, depth)) = self.terrain.push_out(p, r) {
             p += n * depth;
@@ -1084,7 +1442,7 @@ impl World {
         let shapes: Vec<Shape> = self
             .near(p.x, p.z)
             .map(|c| c.shape)
-            .chain(self.moving(p.x, p.z))
+            .chain(self.moving(p.x, p.z).filter(|_| vehicles))
             .collect();
         for shape in shapes {
             if let Some((n, depth)) = shape.push_out(p, r) {
@@ -1243,6 +1601,9 @@ impl World {
         }
     }
 }
+
+/// Half a station platform's length (m), as [`crate::landmark`] builds it.
+const PLATFORM: f32 = 42.0;
 
 /// The railway point nearest `at`: which railway and which of its points. Stations stand
 /// beside it, and trains halt there.

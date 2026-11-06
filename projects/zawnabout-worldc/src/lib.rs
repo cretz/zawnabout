@@ -34,6 +34,8 @@ pub fn compile(dir: &Path) -> Result<String, String> {
 struct Land {
     id: String,
     base: f64,
+    /// The island's climate: 0 temperate, 1 lush, 2 dry, 3 cold.
+    climate: u8,
     pts: Vec<[f64; 2]>,
     edges: Vec<u8>,
 }
@@ -126,6 +128,8 @@ struct Road {
     runway: bool,
     rail: bool,
     subway: bool,
+    tour: bool,
+    mine: bool,
     w: f64,
     pts: Vec<[f64; 3]>,
 }
@@ -197,6 +201,8 @@ struct Ctx<'a> {
     cavern: Option<(f64, f64)>,
     /// The river a branch sits in.
     river: Option<usize>,
+    /// The island's climate, for its land (see `Land`).
+    climate: u8,
 }
 
 #[derive(Default)]
@@ -287,6 +293,7 @@ impl Compiler {
             under: false,
             cavern: None,
             river: None,
+            climate: 0,
         };
         let mut found = false;
         for node in doc.nodes() {
@@ -303,6 +310,17 @@ impl Compiler {
                     let file = self.str(node, "file").unwrap_or_default();
                     let off = [self.num(node, "x"), self.num(node, "z")];
                     self.islands.push((id.clone(), off));
+                    let climate = self.word(
+                        &ctx,
+                        node,
+                        "climate",
+                        &["temperate", "lush", "dry", "cold"],
+                        "temperate",
+                    );
+                    let climate = ["temperate", "lush", "dry", "cold"]
+                        .iter()
+                        .position(|c| *c == climate)
+                        .unwrap_or(0) as u8;
                     if let Some((isrc, idoc)) = self.parse(dir, &file) {
                         let ictx = Ctx {
                             file: &file,
@@ -312,6 +330,7 @@ impl Compiler {
                             under: false,
                             cavern: None,
                             river: None,
+                            climate,
                         };
                         self.nodes(&ictx, idoc.nodes());
                     }
@@ -541,6 +560,7 @@ impl Compiler {
                 y,
                 z: z + ctx.off[1],
                 sharp: self.flag(kid, "sharp"),
+                tunnel: self.flag(kid, "tunnel"),
                 edge: self.str(kid, "edge"),
                 h: self.opt(kid, "h"),
                 depth: self.opt(kid, "depth"),
@@ -633,6 +653,7 @@ impl Compiler {
                 self.lands.push(Land {
                     id,
                     base: self.num(node, "base"),
+                    climate: ctx.climate,
                     edges: from.iter().map(|i| kinds[*i]).collect(),
                     pts: dense,
                 });
@@ -908,11 +929,47 @@ impl Compiler {
                         "park",
                         "station",
                         "metro-gate",
+                        "metro-stairs",
+                        "restaurant",
+                        "drawbridge",
+                        "gallery",
+                        "skatepark",
+                        "helipad",
+                        "clocktower",
                         "span-tower",
                         "market",
+                        "shroomfarm",
+                        "mine",
+                        "cafe",
+                        "library",
+                        "museum",
+                        "cinema",
+                        "weir",
+                        "penstock",
+                        "hydro",
+                        "racetrack",
+                        "aquarium",
+                        "university",
+                        "police",
+                        "gasstation",
+                        "amphitheater",
+                        "solarfarm",
+                        "golf",
                         "observatory",
                         "lookout",
                         "surfshack",
+                        "castaway",
+                        "balloonfield",
+                        "seals",
+                        "carnival",
+                        "cemetery",
+                        "factory",
+                        "powerstation",
+                        "oilrig",
+                        "billboard",
+                        "dam",
+                        "faces",
+                        "warden",
                         "ropebridge",
                         "hospital",
                         "firestation",
@@ -977,14 +1034,30 @@ impl Compiler {
                 // Water pouring from a crack in the roof: a mark midway up its cavern,
                 // carrying its width. The client finds the roof and the floor.
                 let (y0, y1) = ctx.cavern.unwrap_or((0.0, 0.0));
+                let (x, z, w) = (
+                    self.num(node, "x") + ctx.off[0],
+                    self.num(node, "z") + ctx.off[1],
+                    self.num(node, "w"),
+                );
+                // The crack it pours from: a narrow shaft up into the rock over the roof,
+                // so the water comes out of a dark slot and not a bare ceiling.
+                self.voids.push(Void {
+                    id: format!("{id}#crack"),
+                    shape: "tube",
+                    center: [0.0; 3],
+                    half: [0.0; 3],
+                    rot: 0.0,
+                    a: [x, (y0 + y1) * 0.5, z],
+                    b: [x, y1 + 45.0, z],
+                    r: (w * 0.7).max(4.0),
+                    glow: 0.2,
+                    decor: "bare",
+                    light: false,
+                });
                 self.marks.push(Mark {
                     id,
-                    kind: format!("spout:{}", self.num(node, "w")),
-                    pos: [
-                        self.num(node, "x") + ctx.off[0],
-                        (y0 + y1) * 0.5,
-                        self.num(node, "z") + ctx.off[1],
-                    ],
+                    kind: format!("spout:{w}"),
+                    pos: [x, (y0 + y1) * 0.5, z],
                     ground: false,
                 });
             }
@@ -1058,6 +1131,9 @@ impl Compiler {
                     return;
                 }
                 let r = self.num(node, "w") * 0.5;
+                // A passage or mouth can be a built tunnel: tiled walls, lit brighter.
+                let decor = self.word(ctx, node, "decor", &["bare", "tiled"], "bare");
+                let glow = self.opt(node, "glow").unwrap_or(0.3);
                 // Smooth on x and z (the first two coordinates), so reorder to x z y.
                 let xzy: Vec<([f64; 3], bool)> =
                     src.iter().map(|(p, s)| ([p[0], p[2], p[1]], *s)).collect();
@@ -1072,8 +1148,8 @@ impl Compiler {
                         a: [w[0][0], w[0][2], w[0][1]],
                         b: [w[1][0], w[1][2], w[1][1]],
                         r,
-                        glow: 0.3,
-                        decor: "bare",
+                        glow,
+                        decor,
                         light: name == "mouth" && self.flag(node, "light"),
                     });
                 }
@@ -1176,12 +1252,68 @@ impl Compiler {
                     j = end;
                 }
                 let rail = name == "railway";
+                let w = if rail { 6.0 } else { self.num(node, "w") };
+                // Stretches between two points marked `tunnel` are bored through the hill:
+                // a tiled, lit tube laid along the road's own smoothed line, so the two
+                // never part.
+                let bored = |seg: usize| pts[seg % count].tunnel && pts[(seg + 1) % count].tunnel;
+                if pts.iter().any(|p| p.tunnel && p.y.is_none()) {
+                    self.err(ctx, node, "tunnel points need a height");
+                }
+                // Mirrors `zawnabout_sim::terrain::bore`.
+                let (r, rise) = ((w * 0.5 + 5.0).max(10.0), (w * 0.5 + 5.0).max(10.0) - 3.0);
+                let mut k = 0;
+                while k + 1 < dense.len() {
+                    if !bored(segs.get(k).copied().unwrap_or(count - 1)) {
+                        k += 1;
+                        continue;
+                    }
+                    let mut end = k + 1;
+                    while end + 1 < dense.len()
+                        && bored(segs.get(end).copied().unwrap_or(count - 1))
+                    {
+                        end += 1;
+                    }
+                    // A little past each end, so the portals open cleanly.
+                    let at = |i: usize| [dense[i][0], dense[i][2] + rise, dense[i][1]];
+                    let mut tube: Vec<[f64; 3]> = (k..=end).map(at).collect();
+                    let reach = |a: [f64; 3], b: [f64; 3]| {
+                        let d = [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                        let l = (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-6);
+                        [a[0] + d[0] / l * 30.0, a[1], a[2] + d[2] / l * 30.0]
+                    };
+                    let n = tube.len();
+                    if n >= 2 {
+                        let (head, tail) =
+                            (reach(tube[0], tube[1]), reach(tube[n - 1], tube[n - 2]));
+                        tube.insert(0, head);
+                        tube.push(tail);
+                    }
+                    for (i, s) in tube.windows(2).enumerate() {
+                        self.voids.push(Void {
+                            id: format!("{id}#tunnel{k}.{i}"),
+                            shape: "tube",
+                            center: [0.0; 3],
+                            half: [0.0; 3],
+                            rot: 0.0,
+                            a: s[0],
+                            b: s[1],
+                            r,
+                            glow: 0.8,
+                            decor: "tiled",
+                            light: false,
+                        });
+                    }
+                    k = end;
+                }
                 self.roads.push(Road {
                     id: id.clone(),
                     runway: name == "runway",
                     rail,
                     subway: rail && self.flag(node, "subway"),
-                    w: if rail { 6.0 } else { self.num(node, "w") },
+                    tour: rail && (self.flag(node, "tour") || self.flag(node, "mine")),
+                    mine: rail && self.flag(node, "mine"),
+                    w,
                     pts: dense,
                 });
                 // A railway's stations.
@@ -1206,6 +1338,13 @@ impl Compiler {
                         "balloon",
                         "chairlift",
                         "gondola",
+                        "punt",
+                        "trawler",
+                        "power",
+                        "heli",
+                        "speedboat",
+                        "motoryacht",
+                        "supply",
                     ],
                     "ferry",
                 );
@@ -1367,9 +1506,10 @@ impl Compiler {
             let edges: Vec<String> = l.edges.iter().map(|e| e.to_string()).collect();
             let _ = writeln!(
                 s,
-                "Land {{ id: {:?}, base: {}, pts: &[{}], edges: &[{}] }},",
+                "Land {{ id: {:?}, base: {}, climate: {}, pts: &[{}], edges: &[{}] }},",
                 l.id,
                 f(l.base),
+                l.climate,
                 p2(&l.pts),
                 edges.join(",")
             );
@@ -1602,11 +1742,13 @@ impl Compiler {
         for r in &self.roads {
             let _ = writeln!(
                 s,
-                "Road {{ id: {:?}, runway: {}, rail: {}, subway: {}, w: {}, pts: &[{}] }},",
+                "Road {{ id: {:?}, runway: {}, rail: {}, subway: {}, tour: {}, mine: {}, w: {}, pts: &[{}] }},",
                 r.id,
                 r.runway,
                 r.rail,
                 r.subway,
+                r.tour,
+                r.mine,
                 f(r.w),
                 p3(&r.pts)
             );
@@ -1632,6 +1774,8 @@ struct Point {
     y: Option<f64>,
     z: f64,
     sharp: bool,
+    /// On a road, the stretch from here to the next point so marked runs in a tunnel.
+    tunnel: bool,
     edge: Option<String>,
     h: Option<f64>,
     depth: Option<f64>,

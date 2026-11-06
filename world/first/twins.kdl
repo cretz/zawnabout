@@ -61,7 +61,6 @@ ridge elder-ridge width=500 {
     p -150 -250 h=200
 }
 mountain elder-peak x=-750 z=-350 h=600 r=380 shape=crag stretch=1.4 rot=-10 {
-    site elder-faces kind=carving x=-700 z=-700
     perch elder-summit x=-750 z=-360
 }
 hill younger-hill x=700 z=-300 h=120 r=300 stretch=1.8 rot=-40
@@ -127,6 +126,20 @@ dugout strait-hole x=300 y=12 z=-330 facing=north r=20 {
     note "Just above the waves on younger's north shore."
 }
 
+landmark elder-mine kind=mine x=-650 y=-330 z=-150 rot=200 {
+    note "The stone folk still mine crystal in the elder deep."
+}
+
+landmark elder-gallery kind=gallery x=-700 y=170 z=-420 rot=10 text="243 143" {
+    note "A walkway round the elder hall's walls, high up among the carvings, with stairs up from the floor."
+}
+landmark elder-market kind=market x=-760 y=170 z=-470 rot=-10 {
+    note "Stone folk selling crystal, bread and lamp oil among the old columns."
+}
+landmark elder-cafe kind=cafe x=-560 y=170 z=-330 rot=170 {
+    note "Tea by lantern light in the elder hall."
+}
+
 // Elder halls. Isolated. Carved by the old stone folk long ago.
 
 caves elder-halls {
@@ -137,7 +150,6 @@ caves elder-halls {
         ruin elder-columns kind=columns x=-780 y=170 z=-360
         ruin elder-statue kind=statue x=-620 y=170 z=-470
         ruin elder-wall kind=wall x=-540 y=170 z=-400
-        ruin elder-steps kind=stair x=-700 y=170 z=-330
         ruin elder-columns-2 kind=columns x=-640 y=170 z=-520
     }
     cavern elder-deep x=-700 y=-220 z=-250 w=900 h=300 d=700 rot=-10 shape=hall glow=0.25 decor=crystal {
@@ -160,4 +172,77 @@ caves elder-halls {
         p -700 220 -440
         p -740 650 -460
     }
+}
+
+// The elder mine line: ore carts of miners and visitors behind a little engine, round
+// the edge of the elder deep on trestles where the floor drops, out past the crystal mine
+// and back. Laid by scratch/scripts/caveline.py over the deep's floor.
+railway elder-line mine=#true {
+    note "Ride the mine carts round the elder deep. Land on one and hold on."
+    p -729 -355.5 -565
+    p -693 -356.6 -565
+    p -658 -356.9 -564
+    p -625 -355.9 -563
+    p -593 -354.9 -560
+    p -564 -354.0 -555
+    p -529 -354.2 -548
+    p -494 -355.3 -538
+    p -462 -356.3 -526
+    p -433 -357.3 -511
+    p -407 -356.9 -495
+    p -376 -355.7 -469
+    p -348 -354.3 -435
+    p -326 -353.0 -396
+    p -315 -352.1 -367
+    p -307 -351.5 -336
+    p -301 -352.5 -303
+    p -299 -353.6 -267
+    p -298 -354.6 -234
+    p -299 -355.5 -203
+    p -303 -356.6 -162
+    p -310 -357.0 -125
+    p -322 -357.9 -94
+    p -348 -359.4 -54
+    p -394 -358.5 -26
+    p -432 -357.4 -19
+    p -465 -357.8 -20
+    p -500 -358.8 -23
+    p -535 -359.9 -25
+    p -569 -360.9 -25
+    p -604 -360.6 -24
+    p -640 -361.7 -22
+    p -675 -362.7 -19
+    p -710 -363.8 -14
+    p -745 -364.9 -8
+    p -781 -364.6 -0
+    p -816 -363.5 8
+    p -852 -362.4 18
+    p -885 -361.4 23
+    p -916 -360.4 22
+    p -968 -358.7 -1
+    p -990 -357.8 -22
+    p -1009 -356.8 -50
+    p -1026 -355.6 -84
+    p -1039 -356.1 -125
+    p -1047 -356.2 -155
+    p -1053 -355.5 -189
+    p -1058 -356.6 -225
+    p -1062 -357.8 -265
+    p -1062 -358.9 -302
+    p -1060 -359.9 -336
+    p -1054 -360.7 -368
+    p -1044 -359.8 -398
+    p -1024 -358.4 -438
+    p -997 -357.1 -472
+    p -967 -355.9 -498
+    p -940 -355.0 -515
+    p -910 -354.0 -529
+    p -877 -352.9 -541
+    p -841 -352.1 -551
+    p -805 -353.2 -558
+    p -774 -354.2 -562
+    p -740 -355.2 -564
+    p -729 -355.5 -565
+    station elder-yard x=-500 z=-565
+    station elder-crossing x=-1045 z=-250
 }
