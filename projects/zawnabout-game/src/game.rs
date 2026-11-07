@@ -6,6 +6,7 @@ use std::fmt::Write;
 use glam::{Vec2, Vec3};
 use zawnabout_sim::{DT, Dragon, EntityId, Mode, ParamDef, Params, Sim};
 
+use crate::book::{Do, HoardView, View};
 use crate::camera::{Camera, CameraParams, Target};
 use crate::feedback::{Feedback, FreeCam, Pin, json_str};
 use crate::fx::Fx;
@@ -69,6 +70,56 @@ pub struct Marker {
     pub destination: bool,
 }
 
+/// Something for the host to do for the game.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    /// Gameplay changed: write [`Game::save_text`] to the save slot.
+    Save,
+    /// Sound, pausing or the journal's page changed: keep [`Game::prefs_text`].
+    Prefs,
+    /// The keys changed: keep [`Bindings::to_text`].
+    Keys,
+    /// Offer [`Game::save_text`] as a file to keep.
+    Export,
+    /// Ask for a save file and hand it to [`Game::load_save`].
+    Import,
+    /// Open the game's source code page, [`crate::book::SOURCE`].
+    Source,
+}
+
+/// Someone to talk to, close by the dragon standing on the ground.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Listener {
+    /// A named local, by index.
+    Local(usize, Vec3),
+    /// A townsperson walking by, with the number that is theirs.
+    Folk(Vec3, u32),
+    /// Someone a finished set brought, by their number among its effects.
+    Guest(usize, Vec3),
+}
+
+impl Listener {
+    /// Where their bubble floats.
+    pub fn bubble(&self) -> Vec3 {
+        let (Listener::Local(_, p) | Listener::Folk(p, _) | Listener::Guest(_, p)) = self;
+        *p + Vec3::Y * 2.6
+    }
+}
+
+/// How near the dragon must stand to talk to someone.
+pub const TALK_REACH: f32 = 9.0;
+
+/// A postcard waiting for its picture: the game shows the view from a postcard camera
+/// for a frame with nothing over it, and the host hands that frame back.
+#[derive(Clone, Debug)]
+pub struct Snap {
+    pub card: usize,
+    /// The camera to put back after.
+    camera: Camera,
+    /// Frames waited, to give up on a host that never sends one.
+    waited: u32,
+}
+
 struct Trace {
     every: f32,
     since: f32,
@@ -103,6 +154,69 @@ pub struct Game {
     trace: Option<Trace>,
     /// Fire and sparks, client only.
     pub fx: Fx,
+    /// Gameplay on top of the islands. None when it is compiled out or switched off.
+    pub play: Option<crate::play::Play>,
+    /// Played by touch, so help shows the touch controls.
+    pub touch: bool,
+    /// Leaving the window opens the journal, which pauses.
+    pub pause_away: bool,
+    /// The day held at one hour, set in the journal. None lets it pass.
+    pub hold_hour: Option<f32>,
+    /// Things for the host to do, taken each frame.
+    pub asks: Vec<Ask>,
+    /// Gamepad buttons held as of the last poll, to spot presses.
+    pad_was: Vec<bool>,
+    /// Postcards waiting for their picture, the first being taken now.
+    pub snaps: Vec<Snap>,
+    /// The townsperson nearest the dragon, found while drawing them: where, and who.
+    pub near_folk: std::cell::Cell<Option<(Vec3, u32)>>,
+    /// Anyone else drawn nearby, as of the last frame: fishers on the piers, shoppers at
+    /// a market, people on a boat's deck. Who is a number from where they are.
+    pub near_drawn: std::cell::Cell<Option<(Vec3, u32)>>,
+    /// Townsfolk talked to so far, so lines change.
+    chats: u32,
+    /// How far to look for the nearest townsperson. Scripts widen it to find someone.
+    pub folk_search: f32,
+    /// A townsperson's small ask on the card showing now, to take on if accepted.
+    chore_offer: Option<crate::play::Chore>,
+    /// The passenger's chatter: seconds till they next say something, and what they
+    /// have already pointed out this ride.
+    chatter: f32,
+    pointed: Vec<Vec3>,
+    /// Lines waiting to show at the bottom, one after another: who or what, and the line.
+    toasts: Vec<(String, String)>,
+    /// How big the map in the atlas is, once drawn, for the journal's map page.
+    pub map_px: std::cell::Cell<f32>,
+    /// What the passenger is pointing at, and for how many seconds more.
+    pub point_at: Option<(Vec3, f32)>,
+    /// Passengers who hopped off in the air, floating down under their umbrellas.
+    pub floaters: Vec<Floater>,
+}
+
+/// A passenger floating down under an umbrella: where they let go, how long ago, and
+/// how they look.
+#[derive(Clone, Debug)]
+pub struct Floater {
+    pub from: Vec3,
+    pub age: f32,
+    pub look: u32,
+    /// Where they touch down.
+    pub ground: f32,
+}
+
+impl Floater {
+    /// How fast they drift down (m/s).
+    pub const SINK: f32 = 3.5;
+
+    /// Where they are now, and whether they have landed yet.
+    pub fn at(&self) -> (Vec3, bool) {
+        let y = self.from.y - self.age * Self::SINK;
+        let drift = Vec3::new((self.age * 0.7).sin() * 1.5, 0.0, self.age * 0.6);
+        (
+            Vec3::new(self.from.x, y.max(self.ground), self.from.z) + drift,
+            y <= self.ground,
+        )
+    }
 }
 
 fn list<P: Params>(p: &P, out: &mut Vec<(String, f32, ParamDef)>) {
@@ -118,6 +232,7 @@ fn list<P: Params>(p: &P, out: &mut Vec<(String, f32, ParamDef)>) {
 impl Game {
     pub fn new(seed: u64) -> Self {
         let mut sim = Sim::new(seed);
+        let play = crate::play::start(&sim.world);
         // Face north, toward the mountains.
         let spawn = sim.world.terrain.spawn();
         let player = sim.spawn_dragon(spawn.x, spawn.y, std::f32::consts::PI);
@@ -147,6 +262,24 @@ impl Game {
             acc: 0.0,
             trace: None,
             fx: Fx::default(),
+            play,
+            touch: false,
+            pause_away: true,
+            hold_hour: None,
+            asks: Vec::new(),
+            pad_was: Vec::new(),
+            snaps: Vec::new(),
+            near_folk: std::cell::Cell::new(None),
+            near_drawn: std::cell::Cell::new(None),
+            chats: 0,
+            folk_search: TALK_REACH,
+            chore_offer: None,
+            chatter: 4.0,
+            pointed: Vec::new(),
+            toasts: Vec::new(),
+            map_px: std::cell::Cell::new(0.0),
+            point_at: None,
+            floaters: Vec::new(),
         };
         game.update_camera(0.0);
         game
@@ -171,7 +304,9 @@ impl Game {
             };
         }
         let secs = (self.sim.tick as f64 * DT as f64) as f32;
-        let hour = clock(cycle(l.start_hour) + secs / l.day_length);
+        let hour = self
+            .hold_hour
+            .unwrap_or_else(|| clock(cycle(l.start_hour) + secs / l.day_length));
         // Up in the east at six, highest at noon, down in the west at six.
         let turn = (hour - 6.0) / 24.0 * std::f32::consts::TAU;
         let elev = turn.sin() * 62f32.to_radians();
@@ -214,13 +349,14 @@ impl Game {
         self.look_keys = [false; 4];
     }
 
-    /// Offers a key press, and the text it types, to the HUD first: its panels, changing
-    /// keys, and notes mode (N) with its list and the note being written.
-    pub fn hud_key(&mut self, code: &str, text: Option<&str>) -> HudKey {
-        if !self.hud.on {
-            return HudKey::Pass;
-        }
+    /// Offers a key press, and the text it types, to the game's own screens first: a
+    /// card, the journal, the big map, and notes mode (N) with its list and the note
+    /// being written. Pass means the key is for flying.
+    pub fn ui_key(&mut self, code: &str, text: Option<&str>) -> HudKey {
         if self.feedback.active {
+            if !self.hud.on {
+                return HudKey::Pass;
+            }
             let used = match self.hud.notes_key(code, text) {
                 NotesKey::Leave => {
                     self.set_feedback(false);
@@ -236,11 +372,990 @@ impl Game {
             self.sync_pins();
             return used;
         }
-        if code == "KeyN" && !self.hud.open() {
+        if self.hud.open() {
+            return self.hud.key(code);
+        }
+        let hoard = self.hoard_view();
+        let view = View {
+            hoard: hoard.as_ref(),
+            binds: &self.bindings,
+            muted: self.muted,
+            pause_away: self.pause_away,
+            hold_hour: self.hold_hour,
+            touch: self.touch,
+            hud: self.hud.on,
+            map: self.map_view(),
+        };
+        let was = self.hud.book.showing();
+        if let Some(dos) = self.hud.book.key(code, &view) {
+            self.apply(dos, was);
+            return HudKey::Used;
+        }
+        if matches!(code, "Enter" | "NumpadEnter" | "KeyT") && self.talk() {
+            return HudKey::Used;
+        }
+        if !self.hud.on {
+            return HudKey::Pass;
+        }
+        if code == "KeyN" {
             self.set_feedback(true);
             return HudKey::Used;
         }
-        self.hud.key(code, &mut self.bindings)
+        self.hud.key(code)
+    }
+
+    /// Whether beacon `id` burns.
+    fn lit(&self) -> impl Fn(&str) -> bool + '_ {
+        |id: &str| self.sim.beacon(id).is_some_and(|(_, lit)| lit)
+    }
+
+    /// Who the dragon could talk to now: someone close by while it stands on the ground.
+    /// None with gameplay off, flying, or with the journal or a card up.
+    pub fn listener(&self) -> Option<Listener> {
+        let play = self.play.as_ref()?;
+        let d = self.player_dragon();
+        if d.mode != Mode::Ground || self.halted() || self.feedback.active {
+            return None;
+        }
+        if let Some((i, p)) = crate::play::nearest_local(play, d.pos, TALK_REACH) {
+            return Some(Listener::Local(i, p));
+        }
+        if let Some((k, p)) = crate::play::guest_near(play, d.pos, TALK_REACH) {
+            return Some(Listener::Guest(k, p));
+        }
+        let dist = |(p, _): &(Vec3, u32)| (p.x - d.pos.x).hypot(p.z - d.pos.z);
+        let (p, seed) = [self.near_folk.get(), self.near_drawn.get()]
+            .into_iter()
+            .flatten()
+            .filter(|f| dist(f) < TALK_REACH)
+            .min_by(|a, b| dist(a).total_cmp(&dist(b)))?;
+        Some(Listener::Folk(p, seed))
+    }
+
+    /// Whether the one to talk to has a favor to ask or be thanked for.
+    pub fn listener_asks(&self) -> bool {
+        match (self.listener(), &self.play) {
+            (Some(Listener::Local(i, _)), Some(play)) => crate::play::asks(play, i, &self.lit()),
+            (Some(Listener::Folk(p, seed)), Some(play)) => crate::play::folk_asks(play, seed, p),
+            _ => false,
+        }
+    }
+
+    /// Talks to whoever is close: their card comes up. False when nobody is.
+    pub fn talk(&mut self) -> bool {
+        let Some(who) = self.listener() else {
+            return self.ask_rider();
+        };
+        let card = match who {
+            Listener::Local(i, _) => {
+                let sim = &self.sim;
+                let lit = |id: &str| sim.beacon(id).is_some_and(|(_, lit)| lit);
+                let Some(play) = self.play.as_mut() else {
+                    return false;
+                };
+                let card = crate::play::talk_card(play, i, &lit);
+                if crate::play::take_changed(play) {
+                    self.asks.push(Ask::Save);
+                }
+                card
+            }
+            Listener::Guest(k, _) => {
+                let Some(card) = self
+                    .play
+                    .as_ref()
+                    .and_then(|p| crate::play::guest_card(p, k))
+                else {
+                    return false;
+                };
+                card
+            }
+            Listener::Folk(p, seed) => {
+                let world = &self.sim.world;
+                // Somewhere a dragon can walk up to: on the ground, not up on a roof or
+                // in the water, so a dropped thing can always be found.
+                let rest = |x: f32, z: f32| {
+                    let at =
+                        |x: f32, z: f32| Vec3::new(x, world.support_still(x, z, p.y + 30.0), z);
+                    (0..24)
+                        .map(|k| {
+                            let a = k as f32 * 2.4;
+                            let r = k as f32 * 1.2;
+                            at(x + a.cos() * r, z + a.sin() * r)
+                        })
+                        .find(|q| {
+                            !world.afloat(q.x, q.z, q.y)
+                                && !world.in_building(*q - Vec3::Y * 0.5)
+                                && !world.in_building(*q + Vec3::Y)
+                                && (q.y - p.y).abs() < 6.0
+                        })
+                        .unwrap_or_else(|| at(x, z))
+                };
+                let Some(play) = self.play.as_mut() else {
+                    return false;
+                };
+                if let Some((card, offer)) =
+                    crate::play::chore_card(play, seed, p, &rest, crate::talk::name(seed))
+                {
+                    self.chore_offer = offer;
+                    self.hud.book.cards.push(card);
+                    self.release_keys();
+                    return true;
+                }
+                let sky = self.sky();
+                let Some(play) = self.play.as_ref() else {
+                    return false;
+                };
+                let scene = crate::talk::Scene {
+                    hour: sky.hour,
+                    rain: false,
+                    under: self.sim.world.terrain.daylight(p + Vec3::Y) < 0.5,
+                    kind: crate::play::kindness(play),
+                    rumor: crate::play::rumor(play, seed / 31 + self.chats),
+                    dare: crate::play::dare(play, seed / 7 + self.chats),
+                    dark: crate::play::dark_here(play, p),
+                    lair: crate::play::lair_tip(play, seed),
+                };
+                self.chats += 1;
+                crate::book::Card {
+                    title: crate::talk::name(seed).into(),
+                    body: crate::talk::line(seed, self.chats, &scene),
+                    foot: String::new(),
+                    kind: crate::book::CardKind::Say,
+                }
+            }
+        };
+        self.hud.book.cards.push(card);
+        self.release_keys();
+        true
+    }
+
+    /// Asks the passenger, if there is one, where they would like to go: show the way,
+    /// hop off, or keep flying.
+    pub fn ask_rider(&mut self) -> bool {
+        let Some(rider) = self.play.as_ref().and_then(crate::play::rider) else {
+            return false;
+        };
+        let landed = self.player_dragon().mode == Mode::Ground;
+        let wants = match rider.wants.strip_prefix("The ") {
+            Some(rest) => format!("the {rest}"),
+            None => rider.wants.clone(),
+        };
+        let about = rider.about;
+        let body = format!(
+            "I'd love to see {wants}! {about} Just follow the red arrow. {}",
+            if landed {
+                "Or I can hop off right here, if you like."
+            } else {
+                "Or I can hop off right here. I brought my umbrella!"
+            }
+        );
+        self.hud.book.cards.push(crate::book::Card {
+            title: rider.name,
+            body,
+            foot: String::new(),
+            kind: crate::book::CardKind::Rider,
+        });
+        self.release_keys();
+        true
+    }
+
+    /// Where `p` shows on the screen last drawn, in pixels, and whether it is in view.
+    /// Behind the camera it is flipped, so an arrow still points the right way round.
+    fn to_screen(&self, p: Vec3) -> (Vec2, bool) {
+        let size = self.hud.book.screen().max(Vec2::ONE);
+        let clip = self.camera.view_proj(size.x / size.y) * p.extend(1.0);
+        let w = clip.w.abs().max(1e-3);
+        let mut n = Vec2::new(clip.x / w, clip.y / w);
+        if clip.w < 0.0 {
+            n = -n * 10.0;
+        }
+        let at = Vec2::new((n.x * 0.5 + 0.5) * size.x, (0.5 - n.y * 0.5) * size.y);
+        let seen = clip.w > 0.0 && at.cmpge(Vec2::ZERO).all() && at.cmple(size).all();
+        (at, seen)
+    }
+
+    /// The passenger's bubble, button and pointing, where they show this frame.
+    fn update_rider_bits(&mut self, dt: f32) {
+        if let Some((_, left)) = &mut self.hud.say {
+            *left -= dt;
+            if *left <= 0.0 {
+                self.hud.say = None;
+            }
+        }
+        if let Some((_, left)) = &mut self.point_at {
+            *left -= dt;
+            if *left <= 0.0 {
+                self.point_at = None;
+            }
+        }
+        let riding = self.play.as_ref().and_then(crate::play::rider).is_some();
+        if !riding {
+            self.hud.say = None;
+            self.point_at = None;
+        }
+        if self.halted() {
+            self.hud.goal = None;
+        }
+        let head = self
+            .visual(self.player)
+            .map_or(self.player_dragon().pos, |v| v.interpolated(self.alpha()).0)
+            + Vec3::Y * 1.9;
+        self.hud.rider_at = riding
+            .then(|| self.to_screen(head))
+            .filter(|(_, seen)| *seen)
+            .map(|(at, _)| at);
+        self.hud.point = self
+            .point_at
+            .map(|(p, _)| self.to_screen(p + Vec3::Y * 1.5));
+        let me = self.player_dragon().pos;
+        self.hud.goal = self
+            .play
+            .as_ref()
+            .and_then(crate::play::goal)
+            .filter(|g| g.at.distance(me) > g.r)
+            .map(|g| {
+                let (mut at, seen) = self.to_screen(g.at + Vec3::Y * 2.0);
+                if !seen {
+                    // Which way to turn, worked out from the camera, so a spot behind
+                    // points down and round rather than wherever its flipped image falls.
+                    let cam = &self.camera;
+                    let fwd = (cam.look - cam.pos).normalize_or(Vec3::Z);
+                    let right = fwd.cross(Vec3::Y).normalize_or(Vec3::X);
+                    let up = right.cross(fwd);
+                    let to = g.at - cam.pos;
+                    let (x, y, z) = (to.dot(right), to.dot(up), to.dot(fwd));
+                    let mut dir = glam::Vec2::new(x, -y);
+                    if z < 0.0 {
+                        dir.y = dir.y.abs().max(x.abs() * 0.5 + 1.0);
+                    }
+                    at = self.hud.book.screen() * 0.5 + dir.normalize_or(glam::Vec2::Y) * 10000.0;
+                }
+                let far = me.distance(g.at);
+                let far = if far < 1000.0 {
+                    format!("{:.0} m", (far / 10.0).round() * 10.0)
+                } else {
+                    format!("{:.1} km", far / 1000.0)
+                };
+                (at, seen, format!("{}  {far}", g.name))
+            });
+        let world = &self.sim.world;
+        for f in &mut self.floaters {
+            f.age += dt;
+            if f.ground == f32::MIN {
+                f.ground = world.support_still(f.from.x, f.from.z, f.from.y);
+            }
+        }
+        self.floaters.retain(|f| {
+            let (_, down) = f.at();
+            !down || f.age < (f.from.y - f.ground) / Floater::SINK + 4.0
+        });
+    }
+
+    /// Whether a click or tap at a fraction of the screen falls on the passenger's
+    /// button.
+    fn on_rider_button(&self, nx: f32, ny: f32) -> bool {
+        let size = self.hud.book.screen();
+        self.hud
+            .rider_button(size)
+            .is_some_and(|(c, r)| (Vec2::new(nx, ny) * size).distance(c) < r * 1.3)
+    }
+
+    /// Where the talk bubble shows on screen, as a fraction of it, and how far round it
+    /// a click still counts.
+    pub fn bubble_on_screen(&self) -> Option<(Vec2, f32)> {
+        let who = self.listener()?;
+        let size = self.hud.book.screen();
+        let aspect = size.x / size.y.max(1.0);
+        let clip = self.camera.view_proj(aspect) * who.bubble().extend(1.0);
+        if clip.w <= 0.0 {
+            return None;
+        }
+        let at = Vec2::new(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+        Some((at, (1.6 / clip.w).max(0.04)))
+    }
+
+    /// Queues lines to show, a newer one about the same thing taking the older one's
+    /// place, and only the last few kept so nothing shows long after it happened.
+    fn toast_all(&mut self, lines: Vec<(String, String)>) {
+        for (who, text) in lines {
+            self.toasts.retain(|(w, _)| *w != who);
+            self.toasts.push((who, text));
+        }
+        let over = self.toasts.len().saturating_sub(3);
+        self.toasts.drain(..over);
+    }
+
+    /// A passenger chats as you fly: their sharp eyes spot glints you might miss, they
+    /// point out beautiful places, and now and then just enjoy the ride. Never pauses.
+    fn chatter(&mut self, dt: f32) {
+        if let Some((_, _, left)) = &mut self.hud.toast {
+            *left -= dt;
+            if *left <= 0.0 {
+                self.hud.toast = None;
+            }
+        }
+        if self.hud.toast.is_none() && !self.toasts.is_empty() {
+            let (who, text) = self.toasts.remove(0);
+            self.hud.toast = Some((who, text, 5.0));
+            self.chatter = self.chatter.max(3.0);
+            return;
+        }
+        let Some(play) = &self.play else { return };
+        let Some(rider) = crate::play::rider(play) else {
+            return;
+        };
+        let d = self.player_dragon().clone();
+        self.chatter -= dt;
+        if self.chatter > 0.0 || self.hud.say.is_some() {
+            return;
+        }
+        let mut said: Option<String> = None;
+        let mut point: Option<Vec3> = None;
+        // Sharp eyes: a glint within reach of a good look.
+        let mut shinies = Vec::new();
+        crate::play::shinies(play, &mut shinies);
+        if let Some(s) = shinies
+            .iter()
+            .filter(|s| s.kind != "coins" && s.pos.distance(d.pos) < 220.0)
+            .find(|s| !self.pointed.contains(&s.pos))
+        {
+            self.pointed.push(s.pos);
+            point = Some(s.pos);
+            said = Some(
+                if s.pos.y < d.pos.y - 10.0 {
+                    "Look! Something's glinting down there! I'll point."
+                } else {
+                    "Ooh, something shiny, just over there! See where I'm pointing?"
+                }
+                .into(),
+            );
+        }
+        let goal = crate::play::goal(play);
+        if said.is_none()
+            && let Some(g) = &goal
+            && d.mode == Mode::Air
+            && ((self.time * 3.0) as u32).is_multiple_of(2)
+        {
+            // Which way to go, said the way a passenger would.
+            let fwd = glam::Vec2::new(d.heading.sin(), d.heading.cos());
+            let right = glam::Vec2::new(-fwd.y, fwd.x);
+            let to = glam::Vec2::new(g.at.x - d.pos.x, g.at.z - d.pos.z);
+            let (ahead, side) = (to.dot(fwd), to.dot(right));
+            said = Some(if to.length() < 150.0 {
+                format!("That's {}, right down there! Let's land!", g.name)
+            } else if ahead > side.abs() * 2.5 {
+                "Straight ahead! Keep going!".into()
+            } else if ahead < 0.0 && side.abs() < -ahead {
+                "Oops, it's behind us! Let's turn round.".into()
+            } else if side > 0.0 {
+                "It's off to the right, I think!".into()
+            } else {
+                "It's off to the left, I think!".into()
+            });
+        }
+        if said.is_none()
+            && goal.is_none()
+            && let Some((name, at)) = crate::play::spot_near(play, d.pos, 450.0)
+            && !self.pointed.contains(&at)
+        {
+            self.pointed.push(at);
+            point = Some(at);
+            said = Some(format!("Oh, look! It's {name}, over there!"));
+        }
+        if said.is_none() && d.mode == Mode::Air {
+            const RIDE: [&str; 8] = [
+                "Wheee!",
+                "Look how tiny the houses are!",
+                "I can see my house from here!",
+                "Not so fast! No, wait, faster!",
+                "The wind smells like the sea up here.",
+                "I'm never walking anywhere again.",
+                "Can we do that bit again?",
+                "Hello, clouds!",
+            ];
+            let k = (self.time * 7.0) as usize % RIDE.len();
+            said = Some(if d.speed() > 45.0 { "Whoooa!" } else { RIDE[k] }.into());
+        }
+        if let Some(text) = said {
+            let _ = rider;
+            self.hud.say = Some((text, 5.0));
+            if let Some(p) = point {
+                self.point_at = Some((p, 8.0));
+            }
+            self.chatter = 9.0 + (self.time as f32 * 3.1).sin().abs() * 6.0;
+        } else {
+            self.chatter = 2.0;
+        }
+    }
+
+    /// Whether a click or tap at a fraction of the screen falls on the talk bubble.
+    fn on_bubble(&self, nx: f32, ny: f32) -> bool {
+        let Some((at, r)) = self.bubble_on_screen() else {
+            return false;
+        };
+        let size = self.hud.book.screen();
+        let aspect = size.x / size.y.max(1.0);
+        Vec2::new((at.x - nx) * aspect, at.y - ny).length() < r
+    }
+
+    /// The hoard as the journal shows it, none with gameplay off.
+    /// What the journal's map page needs: the map, the world and where the dragon is.
+    pub fn map_view(&self) -> crate::book::MapView {
+        let d = self.player_dragon();
+        crate::book::MapView {
+            px: self.map_px.get(),
+            bounds: self.sim.world.terrain.def.bounds,
+            me: Vec2::new(d.pos.x, d.pos.z),
+            heading: d.heading,
+        }
+    }
+
+    pub fn hoard_view(&self) -> Option<HoardView> {
+        let world = &self.sim.world;
+        let beacon = |id: &str| world.beacons.iter().find(|b| b.id == id).map(|b| b.flame);
+        self.play.as_ref().map(|p| crate::play::view(p, &beacon))
+    }
+
+    /// Whether the world waits: paused, the journal, a card or the big map is up, or a
+    /// postcard is being taken.
+    pub fn halted(&self) -> bool {
+        self.paused || self.hud.book.showing() || self.hud.open() || !self.snaps.is_empty()
+    }
+
+    /// Whether this frame is a postcard's view, for the host to hand back with
+    /// [`Game::take_snap`]. Nothing is drawn over it.
+    pub fn wants_snap(&self) -> bool {
+        !self.snaps.is_empty()
+    }
+
+    /// Points the camera for a postcard: up behind the dragon, looking out past it the
+    /// way it faces, so the place fills the picture with the dragon small in it.
+    fn snap_camera(&mut self) {
+        // The best view of the place itself, at this time of day and in this weather.
+        if let Some(snap) = self.snaps.first()
+            && let Some(play) = self.play.as_ref()
+            && let Some((at, r)) = crate::play::card_spot(play, snap.card)
+            && let Some((pos, look)) = self.best_view(at, r, crate::play::card_low(play, snap.card))
+        {
+            self.camera.pos = pos;
+            self.camera.look = look;
+            self.camera.roll = 0.0;
+            self.camera.fov = 62.0;
+            return;
+        }
+        let d = self.player_dragon().clone();
+        let mut dir = self.camera.look - self.camera.pos;
+        dir.y = 0.0;
+        let dir = dir
+            .try_normalize()
+            .unwrap_or(Vec3::new(d.heading.sin(), 0.0, d.heading.cos()));
+        let mut pos = d.pos - dir * 15.0 + Vec3::Y * 6.0;
+        let floor = self.sim.world.support_still(pos.x, pos.z, pos.y + 4.0) + 3.0;
+        pos.y = pos.y.max(floor);
+        self.camera.pos = pos;
+        self.camera.look = d.pos + dir * 80.0 + Vec3::Y * 2.0;
+        self.camera.roll = 0.0;
+        self.camera.fov = 62.0;
+    }
+
+    /// Where to stand to see the place at `at`, about `r` across, at its best: a little
+    /// way off and up, with nothing in the way, the light from behind if it can be, and
+    /// open air under the camera. None when no way round is clear.
+    fn best_view(&self, at: Vec3, r: f32, low: bool) -> Option<(Vec3, Vec3)> {
+        let world = &self.sim.world;
+        let terrain = &world.terrain;
+        // A falls is seen from its pool: aim halfway down the drop from its foot.
+        let (at, r) = match crate::water::falls_feet(terrain)
+            .into_iter()
+            .map(|(foot, _)| foot)
+            .filter(|f| low && f.y < at.y - 20.0)
+            .min_by(|a, b| {
+                let d = |p: &Vec3| Vec2::new(p.x - at.x, p.z - at.z).length();
+                d(a).total_cmp(&d(b))
+            })
+            .filter(|f| Vec2::new(f.x - at.x, f.z - at.z).length() < 500.0)
+        {
+            Some(foot) => (
+                Vec3::new(foot.x, (foot.y + at.y) * 0.5, foot.z),
+                r.max((at.y - foot.y) * 0.9),
+            ),
+            None => (at, r),
+        };
+        let under = terrain.daylight(at + Vec3::Y * 2.0) < 0.5;
+        let subject = at + Vec3::Y * (r * 0.08).clamp(2.0, 8.0);
+        let far = if under {
+            (r * 1.1).clamp(25.0, 80.0)
+        } else {
+            (r * 1.45).clamp(35.0, 180.0)
+        };
+        // Which way the ground falls away from the place: out in front of a falls.
+        let n = terrain.normal(at.x, at.z);
+        let downhill = Vec3::new(n.x, 0.0, n.z).normalize_or_zero();
+        let sun = self.sky().light_dir;
+        let sun_flat = Vec3::new(sun.x, 0.0, sun.z).normalize_or_zero();
+        let (room, gap) = if under { (2.0, 0.6) } else { (4.0, 1.5) };
+        let clear = |from: Vec3, to: Vec3| {
+            let n = 28;
+            (1..n).all(|k| {
+                let p = from.lerp(to, k as f32 / n as f32);
+                // The last stretch is the place itself.
+                p.distance(to) < r.min(25.0) || terrain.sdf(p) > gap
+            })
+        };
+        let want = if low { -0.2 } else { 0.24 };
+        let mut best: Option<(f32, Vec3)> = None;
+        // Further off first, closer in where caves or crags close round.
+        let rises: &[f32] = if low {
+            &[-0.2, -0.35, -0.08, 0.1]
+        } else {
+            &[0.32, 0.18, 0.5, 0.08]
+        };
+        for (e, dist) in rises
+            .iter()
+            .copied()
+            .flat_map(|e| [(e, far), (e, far * 0.6), (e, far * 0.35)])
+        {
+            let e = if under { e * 0.5 } else { e };
+            for k in 0..20 {
+                let a = k as f32 / 20.0 * std::f32::consts::TAU;
+                let out = Vec3::new(a.sin(), 0.0, a.cos());
+                let cam = subject + out * dist * e.cos() + Vec3::Y * dist * e.sin();
+                if terrain.sdf(cam) < room
+                    || terrain.water(cam.x, cam.z, cam.y).is_some()
+                    || !clear(cam, subject)
+                {
+                    continue;
+                }
+                // The sun over the shoulder lights the place; looking into it washes out.
+                let light = out.dot(sun_flat);
+                let front = if low { out.dot(downhill) * 1.2 } else { 0.0 };
+                let score = light * 0.6 + front - (e - want).abs() - (1.0 - dist / far) * 0.5
+                    + if world.solid_at(cam) { -5.0 } else { 0.0 };
+                if best.is_none_or(|(s, _)| score > s) {
+                    best = Some((score, cam));
+                }
+            }
+            if best.is_some_and(|(s, _)| s > 0.1) {
+                break;
+            }
+        }
+        best.map(|(_, cam)| (cam, subject))
+    }
+
+    /// The postcard's picture: a frame of `w` by `h` RGBA pixels from the postcard
+    /// camera. The camera goes back, and the card shows with the picture on it.
+    pub fn take_snap(&mut self, rgba: &[u8], w: usize, h: usize) {
+        if self.snaps.is_empty() {
+            return;
+        }
+        let snap = self.snaps.remove(0);
+        if let Some(play) = &mut self.play {
+            crate::play::set_pic(play, snap.card, rgba, w, h);
+        }
+        self.finish_snap(snap);
+    }
+
+    fn finish_snap(&mut self, snap: Snap) {
+        self.camera = snap.camera;
+        if let Some(play) = &self.play {
+            self.hud
+                .book
+                .cards
+                .push(crate::play::postcard_card(play, snap.card));
+        }
+        self.asks.push(Ask::Save);
+        if !self.snaps.is_empty() {
+            self.snap_camera();
+        }
+    }
+
+    /// Opens the journal where it was left, which pauses the game.
+    pub fn open_book(&mut self) {
+        let hoard = self.hoard_view();
+        let view = View {
+            hoard: hoard.as_ref(),
+            binds: &self.bindings,
+            muted: self.muted,
+            pause_away: self.pause_away,
+            hold_hour: self.hold_hour,
+            touch: self.touch,
+            hud: self.hud.on,
+            map: self.map_view(),
+        };
+        self.hud.book.show(&view);
+        self.release_keys();
+        self.asks.push(Ask::Save);
+    }
+
+    /// Does what the journal asked. `was` says whether it was showing before.
+    fn apply(&mut self, dos: Vec<Do>, was: bool) {
+        for d in dos {
+            match d {
+                Do::Close | Do::Turned => {}
+                Do::Source => self.asks.push(Ask::Source),
+                Do::Decline(i) => {
+                    if let Some(play) = &mut self.play {
+                        crate::play::decline(play, i);
+                    }
+                }
+                Do::TakeChore => {
+                    if let (Some(play), Some(ch)) = (&mut self.play, self.chore_offer.take()) {
+                        crate::play::take_chore(play, ch);
+                        self.pointed.clear();
+                        self.chatter = 3.0;
+                    }
+                }
+                Do::RiderMap => {
+                    self.open_book();
+                    let hoard = self.hoard_view();
+                    let view = View {
+                        hoard: hoard.as_ref(),
+                        binds: &self.bindings,
+                        muted: self.muted,
+                        pause_away: self.pause_away,
+                        hold_hour: self.hold_hour,
+                        touch: self.touch,
+                        hud: self.hud.on,
+                        map: self.map_view(),
+                    };
+                    self.hud.book.show_me("favors", &view);
+                }
+                Do::HopOff => {
+                    let rider = self.play.as_ref().and_then(crate::play::rider);
+                    if let (Some(play), Some(rider)) = (&mut self.play, rider) {
+                        crate::play::hop_off(play);
+                        self.asks.push(Ask::Save);
+                        let d = self.sim.dragon(self.player).expect("player dragon exists");
+                        let flying = d.mode == Mode::Air;
+                        if flying {
+                            self.floaters.push(Floater {
+                                from: d.pos + Vec3::Y * 1.2,
+                                age: 0.0,
+                                look: rider.look,
+                                ground: f32::MIN,
+                            });
+                        }
+                        self.toast_all(vec![(
+                            rider.name,
+                            if flying {
+                                "Wheee! Good thing I brought my umbrella. Thanks for the lift!"
+                            } else {
+                                "Thanks for the lift! I'll find my own way from here."
+                            }
+                            .into(),
+                        )]);
+                    }
+                }
+                Do::Accept(i) => {
+                    if let Some(play) = &mut self.play {
+                        crate::play::accept(play, i);
+                        self.asks.push(Ask::Save);
+                        self.pointed.clear();
+                        self.chatter = 3.0;
+                    }
+                }
+                Do::Begin(s) => {
+                    if let Some(play) = &mut self.play {
+                        crate::play::begin(play, s);
+                        self.asks.push(Ask::Save);
+                    }
+                }
+                Do::SetAside => {
+                    if let Some(play) = &mut self.play {
+                        crate::play::set_aside(play);
+                        self.asks.push(Ask::Save);
+                    }
+                }
+                Do::GiveBack(i) => {
+                    if let Some(play) = &mut self.play {
+                        let card = crate::play::give_back(play, i);
+                        self.hud.book.cards.push(card);
+                        self.asks.push(Ask::Save);
+                    }
+                }
+                Do::Sound => {
+                    self.muted = !self.muted;
+                    self.asks.push(Ask::Prefs);
+                }
+                Do::PauseAway => {
+                    self.pause_away = !self.pause_away;
+                    self.asks.push(Ask::Prefs);
+                }
+                Do::TimeOfDay => {
+                    let hours = crate::book::HOLD_HOURS;
+                    let next = match self.hold_hour {
+                        None => Some(hours[0].1),
+                        Some(h) => hours
+                            .iter()
+                            .position(|t| t.1 == h)
+                            .and_then(|k| hours.get(k + 1))
+                            .map(|t| t.1),
+                    };
+                    self.hold(next);
+                    self.asks.push(Ask::Prefs);
+                }
+                Do::Export => self.asks.push(Ask::Export),
+                Do::Import => self.asks.push(Ask::Import),
+                Do::ResetKeys => {
+                    self.bindings = Bindings::default();
+                    self.asks.push(Ask::Keys);
+                }
+                Do::Bind(action, code) => {
+                    self.bindings.rebind(action, &code);
+                    self.asks.push(Ask::Keys);
+                }
+                Do::Claim(i) => {
+                    if let Some(play) = &mut self.play {
+                        crate::play::claim(play, i);
+                        self.asks.push(Ask::Save);
+                    }
+                }
+            }
+        }
+        // Keys held when the journal opened or closed must not stick. A pause keeps the
+        // game, so it carries on from here next time.
+        if was != self.hud.book.showing() {
+            self.release_keys();
+            self.asks.push(Ask::Prefs);
+            self.asks.push(Ask::Save);
+        }
+    }
+
+    /// A click or tap on the game's own screens, at a fraction of the screen. False when
+    /// it is for the world, such as tap to land.
+    pub fn ui_click(&mut self, nx: f32, ny: f32) -> bool {
+        if self.feedback.active || self.hud.open() {
+            return false;
+        }
+        let hoard = self.hoard_view();
+        let view = View {
+            hoard: hoard.as_ref(),
+            binds: &self.bindings,
+            muted: self.muted,
+            pause_away: self.pause_away,
+            hold_hour: self.hold_hour,
+            touch: self.touch,
+            hud: self.hud.on,
+            map: self.map_view(),
+        };
+        let was = self.hud.book.showing();
+        match self.hud.book.click(Vec2::new(nx, ny), &view) {
+            Some(dos) => {
+                self.apply(dos, was);
+                true
+            }
+            None if self.on_rider_button(nx, ny) => self.ask_rider(),
+            None => self.on_bubble(nx, ny) && self.talk(),
+        }
+    }
+
+    /// The pointer moved, at a fraction of the screen.
+    pub fn ui_hover(&mut self, nx: f32, ny: f32) {
+        self.hud.book.hover(Vec2::new(nx, ny));
+    }
+
+    /// Gamepad axes and buttons, W3C standard order. Start opens and closes the journal,
+    /// and while it or a card is up the pad works it instead of flying.
+    pub fn gamepad(&mut self, axes: &[f32], buttons: &[f32]) {
+        let down: Vec<bool> = buttons.iter().map(|b| *b > 0.5).collect();
+        let pressed: Vec<usize> = (0..down.len())
+            .filter(|i| down[*i] && !self.pad_was.get(*i).copied().unwrap_or(false))
+            .collect();
+        self.pad_was = down;
+        let ui = self.hud.book.showing();
+        let card = !self.hud.book.cards.is_empty();
+        for b in pressed {
+            // Y talks to whoever is close.
+            if b == 3 && !ui && self.talk() {
+                continue;
+            }
+            let code = match b {
+                9 if card => "Enter",
+                9 => "Escape",
+                0 if ui => "Enter",
+                1 if ui => "Escape",
+                4 if ui => "PageUp",
+                5 if ui => "PageDown",
+                12 if ui => "ArrowUp",
+                13 if ui => "ArrowDown",
+                14 if ui => "ArrowLeft",
+                15 if ui => "ArrowRight",
+                _ => continue,
+            };
+            self.ui_key(code, None);
+        }
+        if ui || self.hud.book.showing() {
+            self.input.gamepad(&[], &[]);
+        } else {
+            self.input.gamepad(axes, buttons);
+        }
+    }
+
+    /// Sound, pausing, the time of day and the journal's page, one setting a line.
+    pub fn prefs_text(&self) -> String {
+        format!(
+            "sound {}\npauseaway {}\ntime {}\npage {}\n",
+            if self.muted { "off" } else { "on" },
+            if self.pause_away { "on" } else { "off" },
+            self.hold_hour
+                .map_or("passing".to_string(), |h| format!("{h}")),
+            self.hud.book.page.name()
+        )
+    }
+
+    /// Holds the day at `hour`, or with none lets it pass again from where it is.
+    pub fn hold(&mut self, hour: Option<f32>) {
+        if hour.is_none()
+            && let Some(h) = self.hold_hour
+        {
+            let secs = (self.sim.tick as f64 * DT as f64) as f32;
+            let len = self.look.day_length.max(1.0);
+            self.look.start_hour = clock(cycle(h) - secs / len);
+        }
+        self.hold_hour = hour;
+    }
+
+    pub fn set_prefs_text(&mut self, text: &str) {
+        for line in text.lines() {
+            match line.split_whitespace().collect::<Vec<_>>()[..] {
+                ["sound", v] => self.muted = v == "off",
+                ["pauseaway", v] => self.pause_away = v != "off",
+                ["time", v] => self.hold(v.parse().ok()),
+                ["page", v] => {
+                    if let Some(p) = crate::book::Page::from_name(v) {
+                        self.hud.book.page = p;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// The game as a save file, none with gameplay off.
+    pub fn save_text(&self) -> Option<String> {
+        let play = self.play.as_ref()?;
+        Some(crate::play::save(play) + &self.where_text())
+    }
+
+    /// Where the game was left, as the save's `[where]` section: the dragon's place and
+    /// heading, whether it stood, the clock (which sets the time of day and the
+    /// weather), and any cards not yet read.
+    fn where_text(&self) -> String {
+        let d = self.player_dragon();
+        let clean = |s: &str| s.replace(['|', '\n'], " ");
+        let mut out = format!(
+            "[where]\nat {:.2} {:.2} {:.2} {:.3} {}\ntime {:.1}\n",
+            d.pos.x,
+            d.pos.y,
+            d.pos.z,
+            d.heading,
+            (d.mode == Mode::Ground) as u8,
+            self.time
+        );
+        for c in &self.hud.book.cards {
+            let kind = match c.kind {
+                crate::book::CardKind::Find => "find".to_string(),
+                crate::book::CardKind::Say => "say".to_string(),
+                crate::book::CardKind::Carry => "carry".to_string(),
+                crate::book::CardKind::Postcard(Some(i)) => format!("postcard {i}"),
+                _ => continue,
+            };
+            out += &format!(
+                "card {kind}|{}|{}|{}\n",
+                clean(&c.title),
+                clean(&c.body),
+                clean(&c.foot)
+            );
+        }
+        out
+    }
+
+    /// Replaces the game with a save file's, and carries on where it was left: in the
+    /// same spot at the same time of day, with any unread cards. A race is off, and a
+    /// passenger has gone home to wait for another ride.
+    pub fn load_save(&mut self, text: &str) -> Result<(), String> {
+        let (game, place) = match text.find("[where]") {
+            Some(i) => {
+                let rest = &text[i + "[where]".len()..];
+                let end = rest.find("\n[").map_or(rest.len(), |e| e + 1);
+                (
+                    format!("{}{}", &text[..i], &rest[end..]),
+                    Some(rest[..end].to_string()),
+                )
+            }
+            None => (text.to_string(), None),
+        };
+        let play = self.play.as_mut().ok_or("gameplay is off")?;
+        crate::play::load(play, &game)?;
+        crate::play::hop_off(play);
+        if let Some(place) = place {
+            self.resume(&place);
+        }
+        Ok(())
+    }
+
+    /// Puts the game back as a save's `[where]` section left it.
+    fn resume(&mut self, text: &str) {
+        for line in text.lines() {
+            let mut w = line.split_whitespace();
+            match w.next() {
+                Some("at") => {
+                    let v: Vec<f32> = w.filter_map(|s| s.parse().ok()).collect();
+                    if let [x, y, z, heading, stood] = v[..] {
+                        self.place_player(Vec3::new(x, y, z), heading, stood > 0.5);
+                    }
+                }
+                Some("time") => {
+                    if let Some(t) = w.next().and_then(|s| s.parse().ok()) {
+                        self.time = t;
+                    }
+                }
+                Some("card") => {
+                    let rest = line["card ".len()..].to_string();
+                    let mut parts = rest.split('|');
+                    let (Some(kind), Some(title), Some(body), Some(foot)) =
+                        (parts.next(), parts.next(), parts.next(), parts.next())
+                    else {
+                        continue;
+                    };
+                    let kind = match kind.split_once(' ') {
+                        Some(("postcard", i)) => match i.parse() {
+                            Ok(i) => crate::book::CardKind::Postcard(Some(i)),
+                            Err(_) => continue,
+                        },
+                        _ => match kind {
+                            "find" => crate::book::CardKind::Find,
+                            "carry" => crate::book::CardKind::Carry,
+                            _ => crate::book::CardKind::Say,
+                        },
+                    };
+                    self.hud.book.cards.push(crate::book::Card {
+                        title: title.into(),
+                        body: body.into(),
+                        foot: foot.into(),
+                        kind,
+                    });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Puts the dragon exactly at `pos` facing `heading`, standing or gliding on.
+    fn place_player(&mut self, pos: Vec3, heading: f32, stood: bool) {
+        let player = self.player;
+        let d = self.sim.dragon_mut(player).expect("player dragon exists");
+        *d = Dragon::new(player, pos, heading);
+        if !stood {
+            d.mode = Mode::Air;
+            d.vel = Vec3::new(heading.sin(), 0.0, heading.cos()) * 14.0;
+        }
+        let d = d.clone();
+        if let Some((_, v)) = self.visuals.iter_mut().find(|(id, _)| *id == player) {
+            v.snap(&d);
+        }
+        self.camera.reset();
+        self.update_camera(0.0);
     }
 
     pub fn key(&mut self, code: &str, down: bool, repeat: bool) {
@@ -248,6 +1363,7 @@ impl Game {
         if code == "KeyU" {
             if down && !repeat {
                 self.muted = !self.muted;
+                self.asks.push(Ask::Prefs);
             }
             return;
         }
@@ -269,6 +1385,14 @@ impl Game {
 
     /// Advances by real elapsed time in fixed ticks.
     pub fn advance(&mut self, dt: f32) {
+        // A host that never sends the postcard's picture: carry on without one.
+        if let Some(snap) = self.snaps.first_mut() {
+            snap.waited += 1;
+            if snap.waited > 30 {
+                let snap = self.snaps.remove(0);
+                self.finish_snap(snap);
+            }
+        }
         if self.feedback.active {
             // The world stays frozen. Only the free camera moves.
             let dt = dt.clamp(0.0, 0.25);
@@ -280,7 +1404,7 @@ impl Game {
             self.sync_free_cam();
             return;
         }
-        if self.paused {
+        if self.halted() {
             return;
         }
         let dt = dt.clamp(0.0, 0.25);
@@ -289,8 +1413,19 @@ impl Game {
         while self.acc >= DT {
             self.acc -= DT;
             self.tick();
+            // A card that just came up stops the world where it is.
+            if self.halted() {
+                self.acc = 0.0;
+                break;
+            }
         }
+        // A postcard's camera, just pointed, stays put for its picture.
+        if !self.snaps.is_empty() {
+            return;
+        }
+        self.chatter(dt);
         self.update_camera(dt);
+        self.update_rider_bits(dt);
     }
 
     fn tick(&mut self) {
@@ -298,6 +1433,44 @@ impl Game {
         input.land_at = self.land_request.take();
         self.sim.step(&[(self.player, input)]);
         self.fx.tick(&self.sim, DT);
+        if let Some(play) = &mut self.play {
+            let me = self.sim.dragon(self.player).expect("player dragon exists");
+            let time = self.sim.tick as f32 * DT;
+            let breath = self.sim.flight.breath_range;
+            let news = crate::play::tick(play, me, &self.sim.world, time, breath);
+            let mut lines = news.toasts;
+            if news.cheer
+                && let Some(rider) = crate::play::rider(play)
+            {
+                const CHEER: [&str; 4] = [
+                    "Again! Again!",
+                    "That was amazing!",
+                    "Woohoo! Did you see that?",
+                    "My tummy's still up there!",
+                ];
+                let k = self.sim.tick as usize % CHEER.len();
+                lines.push((rider.name, CHEER[k].into()));
+            }
+            if crate::play::take_changed(play) {
+                self.asks.push(Ask::Save);
+            }
+            self.toast_all(lines);
+            if !news.cards.is_empty() || !news.snaps.is_empty() {
+                self.hud.book.cards.extend(news.cards);
+                self.release_keys();
+            }
+            for card in news.snaps {
+                let first = self.snaps.is_empty();
+                self.snaps.push(Snap {
+                    card,
+                    camera: self.camera.clone(),
+                    waited: 0,
+                });
+                if first {
+                    self.snap_camera();
+                }
+            }
+        }
         for d in &self.sim.dragons {
             match self.visuals.iter_mut().find(|(id, _)| *id == d.id) {
                 Some((_, v)) => v.tick(d, &self.sim.flight, &self.sim.world, DT),
@@ -341,7 +1514,7 @@ impl Game {
         // short way.
         let pi = std::f32::consts::PI;
         f.x = (f.x - dx * 0.006 + pi).rem_euclid(2.0 * pi) - pi;
-        f.y = (f.y - dy * 0.004).clamp(-0.6, 1.1);
+        f.y = (f.y - dy * 0.004).clamp(-1.3, 1.1);
         self.look_hold = 1.0;
     }
 
@@ -352,9 +1525,14 @@ impl Game {
             // About a quarter turn a second, as a steady drag would.
             self.look_drag(axis(left, right) * 260.0 * dt, axis(down, up) * 260.0 * dt);
         }
+        // Standing still on the ground, a look round stays put until you move.
+        let still = {
+            let d = self.player_dragon();
+            d.mode == zawnabout_sim::Mode::Ground && d.vel.length() < 0.5
+        };
         if self.look_hold > 0.0 {
             self.look_hold -= dt;
-        } else {
+        } else if !still {
             self.camera.free_look *= (-2.5 * dt).exp();
         }
         let d = self.player_dragon();
@@ -780,12 +1958,56 @@ impl Game {
                 .map_err(|e| e.to_string())
         };
         Ok(match words {
+            ["not", rest @ ..] => !self.check(rest)?,
             ["landed"] => {
                 d.mode == Mode::Ground && d.swoop.is_none() && self.land_request.is_none()
             }
             ["ground"] => d.mode == Mode::Ground,
             ["air"] => d.mode == Mode::Air,
             ["near", ..] => feet.distance(Vec3::new(num(1)?, num(2)?, num(3)?)) <= num(4)?,
+            ["found", id] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::is_found(play, id).ok_or("no such find")?
+            }
+            ["lair", id] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::lair_id(play) == Some(*id)
+            }
+            ["card"] => !self.hud.book.cards.is_empty(),
+            ["can-talk"] => self.listener().is_some(),
+            ["riding"] => self.play.as_ref().and_then(crate::play::rider).is_some(),
+            // guide: the way to where what the dragon carries is going shows.
+            ["guide"] => self.hud.goal.is_some(),
+            ["say"] => self.hud.say.is_some(),
+            ["toast"] => self.hud.toast.is_some(),
+            // flown ID: a stunt done, a course flown or a race won.
+            ["flown", id] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::flown(play, id).ok_or("no such stunt, course or race")?
+            }
+            ["racing"] => self.play.as_ref().is_some_and(crate::play::racing),
+            // story-done ID: story ID is told.
+            ["story-done", id] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::story_done(play, id).ok_or("no such story")?
+            }
+            // dark: the lights are out where the dragon is.
+            ["dark"] => {
+                self.play
+                    .as_ref()
+                    .and_then(|p| crate::play::dark_here(p, d.pos))
+                    == Some(true)
+            }
+            // gate ID N: course ID's gate N is passed.
+            ["gate", id, _] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::gate_passed(play, id, num(2)? as usize).ok_or("no such gate")?
+            }
+            ["helped", id] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::helped(play, id).ok_or("no such local")?
+            }
+            ["halted"] => self.halted(),
             ["on-perch", id] => {
                 let p = self
                     .sim
@@ -1164,15 +2386,167 @@ impl Game {
                 self.hud.on = *on == "on";
                 Ok(String::new())
             }
-            ["hud-key", code] => {
-                self.hud_key(code, None);
+            ["hud-key", code] | ["ui-key", code] => {
+                self.ui_key(code, None);
                 Ok(String::new())
             }
+            // ui-click nx ny: clicks the game's own screens at a fraction of the screen.
+            ["ui-click", ..] => Ok(format!("{}", self.ui_click(num(1)?, num(2)?))),
             // hud-type words: types into the note being written.
             ["hud-type", ..] => {
                 let text = line.split_once(' ').map(|(_, t)| t).unwrap_or("");
-                self.hud_key("", Some(text));
+                self.ui_key("", Some(text));
                 Ok(String::new())
+            }
+            ["book", "open"] => {
+                self.open_book();
+                Ok(String::new())
+            }
+            ["book", "close"] => {
+                self.hud.book.open = false;
+                Ok(String::new())
+            }
+            ["book", page] => {
+                let p = crate::book::Page::from_name(page).ok_or("no such page")?;
+                self.hud.book.page = p;
+                self.open_book();
+                Ok(String::new())
+            }
+            ["touch", on] => {
+                self.touch = *on == "on";
+                Ok(String::new())
+            }
+            // play on|off: gameplay on top of the islands, or the islands alone.
+            ["play", "off"] => {
+                self.play = None;
+                self.hud.book.cards.clear();
+                Ok(String::new())
+            }
+            ["play", "on"] => {
+                if self.play.is_none() {
+                    self.play = crate::play::start(&self.sim.world);
+                }
+                Ok(if self.play.is_some() {
+                    String::new()
+                } else {
+                    "gameplay is compiled out".into()
+                })
+            }
+            ["play", "reset"] => {
+                let play = self.play.as_mut().ok_or("gameplay is off")?;
+                crate::play::reset(play);
+                Ok(String::new())
+            }
+            ["play"] => Ok(match &self.play {
+                Some(p) => crate::play::status(p),
+                None => "gameplay off".into(),
+            }),
+            ["finds"] => Ok(self
+                .play
+                .as_ref()
+                .map_or("gameplay off".into(), crate::play::list)),
+            // folk-search R: looks this far for the nearest townsperson, for goto-folk.
+            ["folk-search", _] => {
+                self.folk_search = num(1)?;
+                Ok(String::new())
+            }
+            // goto-folk: stands the dragon right by the townsperson found.
+            ["goto-folk"] => {
+                let (p, _) = self.near_folk.get().ok_or("nobody found nearby")?;
+                let d = self.player_dragon().pos;
+                let away = Vec3::new(d.x - p.x, 0.0, d.z - p.z).normalize_or(Vec3::X) * 4.0;
+                self.stand_at(p + away);
+                Ok(format!("folk at ({:.1},{:.1},{:.1})", p.x, p.y, p.z))
+            }
+            ["rider-bits"] => Ok(format!(
+                "at {:?} say {:?} point {:?} screen {:?} folk {:?} drawn {:?}",
+                self.hud.rider_at,
+                self.hud.say,
+                self.hud.point,
+                self.hud.book.screen(),
+                self.near_folk.get(),
+                self.near_drawn.get()
+            )),
+            // best-view ID: where a postcard's picture would be taken from.
+            ["best-view", id] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                let i = crate::play::card_index(play, id).ok_or("no such postcard")?;
+                let (at, r) = crate::play::card_spot(play, i).ok_or("no spot")?;
+                let low = crate::play::card_low(play, i);
+                Ok(format!("{:?}", self.best_view(at, r, low)))
+            }
+            ["ask-rider"] => {
+                if self.ask_rider() {
+                    Ok("asked".into())
+                } else {
+                    Err("nobody riding".into())
+                }
+            }
+            ["bubble"] => {
+                let (at, _) = self.bubble_on_screen().ok_or("no bubble")?;
+                Ok(format!("bubble {:.4} {:.4}", at.x, at.y))
+            }
+            ["play-save"] => self
+                .save_text()
+                .ok_or_else(|| "gameplay is off".to_string()),
+            // goto-find ID [AWAY]: stands the dragon AWAY meters (8 unless given) back
+            // from a find or a lair, facing it. 0 stands right on it.
+            ["goto-find", id, ..] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                let at = crate::play::find(play, id)
+                    .or_else(|| crate::play::lair_at(play, id))
+                    .ok_or("no such find or lair")?;
+                let away = if words.len() > 2 { num(2)? } else { 8.0 };
+                let heading = self.player_dragon().heading;
+                self.stand_at(at - Vec3::new(heading.sin(), 0.0, heading.cos()) * away);
+                Ok(self.state())
+            }
+            // try-gate ID [N]: flying at a stunt's gate (or course ID's gate N), a little
+            // way back, headed through it.
+            ["try-gate", id, ..] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                let n = if words.len() > 2 { num(2)? as usize } else { 0 };
+                let (at, dir) = crate::play::gate_way(play, &self.sim.world, id, n)
+                    .ok_or("no such gate, or no clear way through")?;
+                let player = self.player;
+                let d = self.sim.dragon_mut(player).expect("player dragon exists");
+                *d = Dragon::new(player, at - dir * 6.0, dir.x.atan2(dir.z));
+                d.mode = Mode::Air;
+                d.vel = dir * 25.0;
+                let d = d.clone();
+                if let Some((_, v)) = self.visuals.iter_mut().find(|(id, _)| *id == player) {
+                    v.snap(&d);
+                }
+                self.camera.reset();
+                self.update_camera(0.0);
+                Ok(format!("through ({:.1},{:.1},{:.1})", at.x, at.y, at.z))
+            }
+            // story ID start|stop: starts story ID, or sets it aside.
+            ["story", id, what] => {
+                let play = self.play.as_mut().ok_or("gameplay is off")?;
+                let s = crate::play::story_index(play, id).ok_or("no such story")?;
+                if *what == "start" {
+                    crate::play::begin(play, s);
+                } else {
+                    crate::play::set_aside(play);
+                }
+                Ok(String::new())
+            }
+            // goto-lamp K: standing beside lamp K of the story under way, facing it.
+            ["goto-lamp", _] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                let at = crate::play::lamp_at(play, num(1)? as usize).ok_or("no such lamp")?;
+                let heading = self.player_dragon().heading;
+                self.stand_at(at - Vec3::new(heading.sin(), 0.0, heading.cos()) * 4.0);
+                Ok(self.state())
+            }
+            // goto-race ID start|end: standing at a race's start or finish.
+            ["goto-race", id, end] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                let (x, z) =
+                    crate::play::race_spot(play, id, *end == "end").ok_or("no such race")?;
+                self.stand_at(Vec3::new(x, 5000.0, z));
+                Ok(self.state())
             }
             // note-pick nx ny: starts a note at a spot on a 16:9 screen, in notes mode.
             ["note-pick", ..] => {
@@ -1258,6 +2632,26 @@ impl Game {
             }
             _ => Err(format!("unknown command: {line}")),
         }
+    }
+
+    /// Stands the dragon on the first surface below `at`, keeping its heading.
+    fn stand_at(&mut self, at: Vec3) {
+        let heading = self.player_dragon().heading;
+        let ground = self.sim.world.support(at.x, at.z, at.y + 3.0);
+        let flight = self.sim.flight.clone();
+        let player = self.player;
+        let d = self.sim.dragon_mut(player).expect("player dragon exists");
+        *d = Dragon::new(
+            player,
+            Vec3::new(at.x, ground + flight.stand_height, at.z),
+            heading,
+        );
+        let d = d.clone();
+        if let Some((_, v)) = self.visuals.iter_mut().find(|(id, _)| *id == player) {
+            v.snap(&d);
+        }
+        self.camera.reset();
+        self.update_camera(0.0);
     }
 
     /// Moves the player. `pos.y` is height above the ground, and anything above zero

@@ -63,38 +63,6 @@ h1 {
   letter-spacing: 0.5px;
 }
 
-.lead {
-  margin: 0 0 18px;
-  font-size: 18px;
-}
-
-.hint {
-  margin: 18px 0 0;
-  font-size: 15px;
-  opacity: 0.7;
-  animation: bob 2.2s ease-in-out infinite;
-}
-
-@keyframes bob {
-  50% {
-    transform: translateY(-3px);
-  }
-}
-
-#controls {
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 8px 16px;
-  justify-content: center;
-  text-align: left;
-  font-size: 16px;
-}
-
-#controls .keys {
-  text-align: right;
-  font-weight: 700;
-}
-
 kbd {
   display: inline-block;
   min-width: 1.7em;
@@ -603,10 +571,6 @@ body:has(#minimap.atlas) #map-close {
   white-space: nowrap;
 }
 
-body:has(#minimap.atlas) #keys-card {
-  display: none;
-}
-
 .legend-hint {
   margin: 6px 0 0;
   font-size: 13px;
@@ -664,99 +628,9 @@ body:has(#minimap.atlas) #travel {
   }
 }
 
-/* The keys for keyboard players, folded down to its button when not wanted. */
-#keys-card {
-  position: fixed;
-  z-index: 2;
-  top: calc(max(14px, env(safe-area-inset-top)) + 54px);
-  right: max(14px, env(safe-area-inset-right));
-  padding: 10px 12px;
-  border-radius: 16px;
-  background: rgba(255, 248, 236, 0.88);
-  box-shadow: var(--shadow);
-  font-size: 12px;
-  max-width: 230px;
-}
-
-#keys-card.folded {
-  padding: 0;
-  background: none;
-  box-shadow: none;
-}
-
-#keys-toggle {
-  display: block;
-  margin-left: auto;
-  border: none;
-  border-radius: 10px;
-  padding: 5px 10px;
-  background: var(--coral);
-  color: var(--cream);
-  font-weight: 700;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-#keys-list {
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 4px 10px;
-  margin-top: 8px;
-}
-
-#keys-list .keys {
-  text-align: right;
-  font-weight: 700;
-}
-
-#keys-list kbd {
-  font-size: 11px;
-  padding: 0 5px;
-  min-width: 1.4em;
-}
-
-#keys-card.folded #keys-list {
+/* While the journal or a card is up, the game's own screen has the whole page. */
+body.halted #touch,
+body.halted .round,
+body.halted #minimap {
   display: none;
-}
-
-.setting {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 14px;
-  font-size: 14px;
-  cursor: pointer;
-}
-
-.setting input {
-  accent-color: var(--coral);
-}
-
-#rebind {
-  display: block;
-  text-align: left;
-  margin-top: 10px;
-}
-
-#rebind summary {
-  cursor: pointer;
-}
-
-#rebind-list {
-  display: grid;
-  grid-template-columns: auto auto;
-  gap: 6px 14px;
-  align-items: center;
-  margin: 10px 0;
-}
-
-#rebind-list button,
-#rebind-reset {
-  font: inherit;
-  font-size: 13px;
-  padding: 3px 10px;
-  border: 1px solid #d8c7b4;
-  border-radius: 8px;
-  background: #fffaf3;
-  cursor: pointer;
 }

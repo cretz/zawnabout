@@ -790,6 +790,122 @@ fn spiral(out: &mut Vec<Piece>) {
     }
 }
 
+/// The islands' old serpent god, carved into a niche cut in a sea cliff, facing out
+/// (+z): a great horned head with a pearl in its jaws, its coils curling round it. The
+/// cliff's face is at z = 0 and the niche goes back some 20 m, so all of it stays inside
+/// the face, carved in rather than stuck on. Its eyes are `SERPENT_MID` up from the
+/// origin (grown a third, see `pieces`).
+fn serpent(out: &mut Vec<Piece>) {
+    let h = SERPENT_MID;
+    let k = 1.35;
+    let at = |x: f32, y: f32, z: f32| Vec3::new(x * k, h + y * k, z * k);
+    // The head: a broad skull, a long snout and a heavy jaw.
+    out.push(ball(at(0.0, 0.0, -16.0), 10.0 * k, Mat::Rock));
+    out.push(bx(
+        at(0.0, -7.0, -9.0),
+        Vec3::new(5.5, 7.0, 7.0) * k,
+        Mat::Rock,
+    ));
+    out.push(bx(
+        at(0.0, -12.0, -10.0),
+        Vec3::new(4.8, 3.5, 6.0) * k,
+        Mat::Rock,
+    ));
+    // Brows over deep eyes, nostrils at the snout's end.
+    for s in [-1.0f32, 1.0] {
+        out.push(bx(
+            at(s * 5.5, 2.5, -10.0),
+            Vec3::new(3.2, 1.6, 2.6) * k,
+            Mat::Rock,
+        ));
+        out.push(soft(ball(at(s * 5.2, 1.6, -7.6), 1.7 * k, Mat::Dark)));
+        out.push(soft(ball(at(s * 2.4, -3.0, -2.2), 0.9 * k, Mat::Dark)));
+        // Horns sweeping up, and fangs down from the upper jaw.
+        out.push(round(
+            at(s * 6.5, 6.0, -19.0),
+            13.0 * k,
+            2.2 * k,
+            0.3,
+            Mat::Rock,
+        ));
+        out.push(round(
+            at(s * 3.0, -9.5, -3.4),
+            2.6 * k,
+            0.15,
+            0.8 * k,
+            Mat::Rock,
+        ));
+        // Whiskers trailing off the snout along the rock.
+        out.push(turned(
+            at(s * 7.5, -8.0, -6.0),
+            Vec3::new(4.5, 0.6, 0.6) * k,
+            s * 0.5,
+            Mat::Rock,
+        ));
+        // A frill of fins down each side of the head.
+        for f in 0..3 {
+            out.push(turned(
+                at(s * (10.0 + f as f32 * 1.5), -2.0 - f as f32 * 5.0, -17.0),
+                Vec3::new(1.0, 5.0, 3.5) * k,
+                s * 0.5,
+                Mat::Rock,
+            ));
+        }
+        // Its coils, curling out round the head and down into the ledge.
+        for c in 0..20 {
+            let t = c as f32 / 19.0;
+            let a = 1.4 + t * 3.6;
+            let r = 13.0 + t * 7.0;
+            out.push(ball(
+                at(s * a.sin() * r, a.cos() * r - 8.0, -19.0 + t * 2.0),
+                (4.4 - t * 1.6) * k,
+                Mat::Rock,
+            ));
+        }
+    }
+    // The pearl in its jaws, glowing at night for the ships.
+    out.push(soft(ball(at(0.0, -9.5, -1.8), 1.8 * k, Mat::Lamp)));
+}
+
+/// How high the serpent's eyes are over its origin, in its own frame.
+const SERPENT_MID: f32 = 73.0;
+
+/// A small effigy of the serpent god in a town square: the god coiled on a round stone
+/// plinth, head raised, a pearl in its jaws.
+fn effigy(out: &mut Vec<Piece>) {
+    out.push(round(Vec3::ZERO, 1.6, 3.2, 3.0, Mat::Stone));
+    let mut last = Vec3::ZERO;
+    for k in 0..18 {
+        let t = k as f32 / 17.0;
+        let a = t * 1.8 * std::f32::consts::TAU;
+        let r = 1.8 - t * 0.9;
+        let at = Vec3::new(a.cos() * r, 1.9 + t * 3.2, a.sin() * r);
+        out.push(ball(at, 0.75 - t * 0.3, Mat::Copper));
+        last = at;
+    }
+    let head = last + Vec3::new(0.4, 1.4, 0.9);
+    out.push(ball(head, 0.75, Mat::Copper));
+    out.push(bx(
+        head + Vec3::new(0.0, -0.4, 0.7),
+        Vec3::new(0.38, 0.55, 0.6),
+        Mat::Copper,
+    ));
+    for s in [-1.0f32, 1.0] {
+        out.push(round(
+            head + Vec3::new(s * 0.4, 0.4, -0.3),
+            1.0,
+            0.18,
+            0.02,
+            Mat::Copper,
+        ));
+    }
+    out.push(soft(ball(
+        head + Vec3::new(0.0, -0.3, 1.35),
+        0.3,
+        Mat::Lamp,
+    )));
+}
+
 /// How high a spiral carving's middle is over its origin, in its own frame.
 const SPIRAL_MID: f32 = 112.0;
 
@@ -1484,28 +1600,41 @@ fn balloon_field(out: &mut Vec<Piece>) {
             )));
         }
     }
-    // Balloons being filled: the envelope lying on its side, swelling up off the grass,
-    // its basket tipped over at its mouth and a fan blowing in.
-    for (k, (x, z, a)) in [
-        (-40.0f32, -30.0f32, 0.3f32),
-        (-15.0, 35.0, -0.5),
-        (45.0, 30.0, 2.6),
+    // Balloons getting ready: tethered upright over their baskets, one already full and
+    // two still filling, rounder at the top and narrowing to the burner, ropes pegged out.
+    for (k, (x, z, full)) in [
+        (-40.0f32, -30.0f32, 1.0f32),
+        (-15.0, 35.0, 0.75),
+        (45.0, 30.0, 0.6),
     ]
     .into_iter()
     .enumerate()
     {
         let at = Vec3::new(x, 0.0, z);
-        let dir = Vec3::new(a.cos(), 0.0, -a.sin());
-        for (off, r) in [(0.0f32, 5.0f32), (4.0, 6.0), (8.0, 5.6), (11.5, 4.4)] {
-            out.push(ball(
-                at + dir * off + Vec3::Y * (r * 0.7),
-                r,
-                Mat::Canvas([0u8, 1, 4][k]),
-            ));
+        let r = 7.5 * full;
+        let neck = 2.4 + 2.0 * full;
+        let top = Vec3::Y * (neck + 2.4 + r * 0.9);
+        out.push(ball(at + top, r, Mat::Canvas([0u8, 1, 4][k])));
+        out.push(soft(round(
+            at + Vec3::Y * 2.4,
+            neck + r * 0.45,
+            1.0,
+            r * 0.92,
+            Mat::Canvas([3u8, 5, 2][k]),
+        )));
+        out.push(bx(at, Vec3::new(0.8, 1.1, 0.8), Mat::Hay));
+        out.push(soft(bx(
+            at + Vec3::Y * 1.7,
+            Vec3::new(0.5, 0.3, 0.5),
+            Mat::Metal,
+        )));
+        for (dx, dz) in [(1.0f32, 1.0f32), (-1.0, 1.0), (1.0, -1.0), (-1.0, -1.0)] {
+            out.push(soft(bx(
+                at + Vec3::new(dx * 6.0, 0.0, dz * 6.0),
+                Vec3::new(0.15, 0.5, 0.15),
+                Mat::Wood,
+            )));
         }
-        let basket = at - dir * 7.0;
-        out.push(turned(basket, Vec3::new(0.7, 1.1, 0.7), a, Mat::Hay));
-        out.push(soft(round(basket - dir * 3.0, 1.6, 1.0, 1.0, Mat::Dark)));
     }
     // Baskets standing ready, a burner frame over each.
     for (x, z) in [(55.0f32, -35.0f32), (59.0, -31.0), (52.0, -28.0)] {
@@ -5518,6 +5647,41 @@ pub fn pieces(kind: Kind, seed: u32, text: &str) -> Vec<Piece> {
     let r = |k: u32| hash(seed.wrapping_mul(31).wrapping_add(k));
     let mut out = Vec::new();
     match kind {
+        Kind::Stones if text == "eye" => {
+            // A ring of tall stones round the eye, the shaft down to the lagoon vault, so
+            // it reads as a place people made welcome and not just a hole: each with a
+            // lantern on top to see it by, and a flat stone to stand on at each quarter.
+            let n = 16;
+            for i in 0..n {
+                let a = i as f32 / n as f32 * std::f32::consts::TAU;
+                let at = Vec3::new(a.cos() * 34.0, -8.0, a.sin() * 34.0);
+                out.push(Piece {
+                    form: Form::Box {
+                        at,
+                        half: Vec3::new(1.0, 15.0, 1.6),
+                        yaw: -a,
+                        roof: 0.0,
+                    },
+                    mat: Mat::Stone,
+                    solid: true,
+                });
+                if i % 2 == 0 {
+                    out.push(soft(bx(
+                        at + Vec3::Y * 15.0,
+                        Vec3::new(0.7, 1.2, 0.7),
+                        Mat::Lamp,
+                    )));
+                    out.push(bx(at + Vec3::Y * 16.2, Vec3::new(1.0, 0.4, 1.0), Mat::Dark));
+                }
+                if i % 4 == 0 {
+                    out.push(bx(
+                        Vec3::new(a.cos() * 40.0, -6.0, a.sin() * 40.0),
+                        Vec3::new(3.0, 8.0, 3.0),
+                        Mat::Stone,
+                    ));
+                }
+            }
+        }
         Kind::Stones => {
             // A ring of standing stones, some pairs capped, and a flat stone in the middle.
             let n = 10;
@@ -7017,6 +7181,8 @@ pub fn pieces(kind: Kind, seed: u32, text: &str) -> Vec<Piece> {
             zoo_entrance(&mut out, 66.0);
         }
         Kind::Faces if text == "spiral" => spiral(&mut out),
+        Kind::Faces if text == "serpent" => serpent(&mut out),
+        Kind::Statue if text == "effigy" => effigy(&mut out),
         Kind::Faces => faces(&mut out),
         Kind::Warden => warden(&mut out, text == "lamp"),
         Kind::Statue => {
@@ -7524,8 +7690,53 @@ pub fn pieces(kind: Kind, seed: u32, text: &str) -> Vec<Piece> {
             };
         }
     }
+    // Broad flat paving on the ground reaches down into it, so on a slope it stands
+    // on a plinth instead of floating over the downhill side.
+    // A plinth only for looks: roads and walls still meet the paving itself.
+    // Each sits a hair lower than the last, so two never share a face.
+    let plinths: Vec<Piece> = out
+        .iter()
+        .filter_map(|p| match p.form {
+            Form::Box {
+                at,
+                half,
+                yaw,
+                roof: _,
+            } if at.y.abs() < 0.5
+                && half.y < 0.6
+                && half.x.min(half.z) > 2.5
+                && !matches!(
+                    p.mat,
+                    Mat::Water | Mat::Hidden | Mat::Asphalt | Mat::Concrete
+                ) =>
+            {
+                Some(soft(Piece {
+                    form: Form::Box {
+                        at: at - Vec3::Y * PLINTH,
+                        half: Vec3::new(half.x - 0.01, PLINTH - 0.03, half.z - 0.01),
+                        yaw,
+                        roof: 0.0,
+                    },
+                    mat: p.mat,
+                    solid: false,
+                }))
+            }
+            _ => None,
+        })
+        .enumerate()
+        .map(|(k, mut p)| {
+            if let Form::Box { at, .. } = &mut p.form {
+                at.y -= k as f32 * 0.013;
+            }
+            p
+        })
+        .collect();
+    out.extend(plinths);
     out
 }
+
+/// How far broad ground paving reaches down under a landmark's foot.
+const PLINTH: f32 = 6.0;
 
 /// How big a landmark is, from its pieces: width along x, height, depth along z.
 /// Half the width and depth of the ground a landmark covers, in its own frame.

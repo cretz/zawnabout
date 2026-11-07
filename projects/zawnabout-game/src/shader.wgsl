@@ -19,7 +19,23 @@ struct Globals {
     lights: array<vec4f, 16>,
     // Per big cloud: middle (x, z), radius, base height, for the shadows they cast.
     clouds: array<vec4f, 16>,
+    // Where a story has put the lights out: middle (x, z) and reach, zero for none.
+    dark: array<vec4f, 8>,
+    // Toward the middle of the rainbow's circle.
+    bow: vec4f,
 };
+
+// 1 where lights burn as usual, 0 where a story has put them out.
+fn lights_on(p: vec2f) -> f32 {
+    var on = 1.0;
+    for (var k = 0u; k < 8u; k++) {
+        let d = g.dark[k];
+        if d.z > 0.0 && distance(p, d.xy) < d.z {
+            on = 0.0;
+        }
+    }
+    return on;
+}
 
 @group(0) @binding(0) var<uniform> g: Globals;
 
@@ -74,7 +90,7 @@ fn sky(dir: vec3f) -> vec3f {
 // it, red outside and violet in. Only in the sky itself, not in reflections.
 fn rainbow(dir: vec3f) -> vec3f {
     let bow = g.sky_horizon.w;
-    let theta = acos(clamp(dot(dir, -g.sun_dir.xyz), -1.0, 1.0));
+    let theta = acos(clamp(dot(dir, g.bow.xyz), -1.0, 1.0));
     let t = (theta - 0.7) / 0.045;
     let band = smoothstep(-0.15, 0.1, t) * (1.0 - smoothstep(0.9, 1.15, t));
     let hue = vec3f(smoothstep(0.35, 1.0, t), 1.0 - abs(t - 0.5) * 1.8, 1.0 - smoothstep(0.0, 0.55, t));
@@ -203,7 +219,8 @@ fn facing(normal: vec3f, front: bool) -> vec3f {
 fn fs_lit(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec4f {
     // Lamps and lit windows glow on their own.
     if i.thin < -0.75 {
-        return vec4f(haze(i.color.rgb * 1.5, i.world), 1.0);
+        let glow = mix(1.0, mix(0.45, 1.5, lights_on(i.world.xz)), g.misc.y);
+        return vec4f(haze(i.color.rgb * mix(1.5, glow, g.misc.y), i.world), 1.0);
     }
     // Windows that light up at night, most of them, in warm colors.
     if i.thin < -0.25 {
@@ -211,7 +228,7 @@ fn fs_lit(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec4f 
         let col = shade(i.color.rgb, facing(i.normal, front), i.world, day, 0.0);
         let h = hash2(floor(i.world.xz * 0.16) + vec2f(floor(i.world.y * 0.3), 0.0));
         let warm = mix(vec3f(1.0, 0.78, 0.42), vec3f(1.0, 0.9, 0.65), h);
-        let on = step(0.6, h) * g.misc.y;
+        let on = step(0.6, h) * g.misc.y * lights_on(i.world.xz);
         return vec4f(mix(col, haze(warm * (0.55 + 0.45 * h), i.world), on), 1.0);
     }
     // Vertex alpha is how much daylight reaches here. Deep in caves a soft glow takes over.

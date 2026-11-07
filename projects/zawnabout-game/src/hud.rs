@@ -1,7 +1,7 @@
-//! The heads-up display drawn by the game itself, so every build has it: a minimap in the
-//! corner, the big map on M, the help panel on H, which also changes the keys, and notes
-//! mode on N with its list of notes and the note being written.
-//! The web page has its own page chrome and leaves this off.
+//! The heads-up display drawn by the game itself: the journal (see `book`) everywhere,
+//! and where the host has no page chrome of its own, a minimap in the corner, the big
+//! map on M, and notes mode on N with its list of notes and the note being written.
+//! The web page has its own map and notes and leaves those off.
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec2;
@@ -9,11 +9,49 @@ use glam::Vec2;
 use crate::input::{Action, Bindings};
 use crate::notes::Note;
 
-/// The atlas the HUD draws from: the world map in the top `MAP` square, then a row of
-/// font cells under it, a white cell first for plain colored shapes.
-pub const ATLAS: (u32, u32) = (1024, 1032);
+/// The atlas the HUD draws from: the world map in the top `MAP` square, a white cell
+/// under it for plain colored shapes, the font from `FONT_TOP`, then postcard pictures
+/// from `CARDS_TOP`, `CARDS_ROW` to a row, then treasure pictures from `THUMBS_TOP`.
+pub const ATLAS: (u32, u32) = (1024, THUMBS_TOP + 3 * crate::thumbs::THUMB);
 pub const MAP: u32 = 1024;
 const CELL: u32 = 8;
+pub const FONT_TOP: u32 = MAP + CELL;
+pub const CARDS_TOP: u32 = 1640;
+pub const CARDS_ROW: u32 = 6;
+/// A postcard picture's cell, with a little room round it.
+pub const CARD_CELL: (u32, u32) = (164, 94);
+/// Rows of postcard pictures.
+pub const CARD_ROWS: u32 = 16;
+pub const THUMBS_TOP: u32 = CARDS_TOP + CARD_ROWS * CARD_CELL.1;
+
+/// Where treasure kind `i`'s picture sits in the atlas: its top left corner.
+pub fn thumb_slot(i: usize) -> (u32, u32) {
+    let (i, t) = (i as u32, crate::thumbs::THUMB);
+    let row = ATLAS.0 / t;
+    ((i % row) * t, THUMBS_TOP + (i / row) * t)
+}
+
+/// Draws every treasure's picture into the atlas.
+pub fn thumbs_into(atlas: &mut [u8]) {
+    let (w, t) = (ATLAS.0 as usize, crate::thumbs::THUMB as usize);
+    for (i, kind) in crate::treasure::KINDS.iter().enumerate() {
+        let px = crate::thumbs::draw(&crate::treasure::treasure(kind));
+        let (x0, y0) = thumb_slot(i);
+        for y in 0..t {
+            let k = ((y0 as usize + y) * w + x0 as usize) * 4;
+            atlas[k..k + t * 4].copy_from_slice(&px[y * t * 4..(y + 1) * t * 4]);
+        }
+    }
+}
+
+/// Where postcard `i`'s picture sits in the atlas: its top left corner.
+pub fn card_slot(i: usize) -> (u32, u32) {
+    let i = i as u32;
+    (
+        (i % CARDS_ROW) * CARD_CELL.0 + 2,
+        CARDS_TOP + (i / CARDS_ROW) * CARD_CELL.1 + 2,
+    )
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -25,145 +63,37 @@ pub struct HudVertex {
     pub color: [f32; 4],
 }
 
-/// 5 by 7 letters, top row first, the leftmost pixel the high bit. Anything else is a
-/// space.
-fn glyph(c: char) -> [u8; 7] {
-    match c {
-        'A' => [14, 17, 17, 31, 17, 17, 17],
-        'B' => [30, 17, 17, 30, 17, 17, 30],
-        'C' => [14, 17, 16, 16, 16, 17, 14],
-        'D' => [30, 17, 17, 17, 17, 17, 30],
-        'E' => [31, 16, 16, 30, 16, 16, 31],
-        'F' => [31, 16, 16, 30, 16, 16, 16],
-        'G' => [14, 17, 16, 23, 17, 17, 15],
-        'H' => [17, 17, 17, 31, 17, 17, 17],
-        'I' => [14, 4, 4, 4, 4, 4, 14],
-        'J' => [7, 2, 2, 2, 2, 18, 12],
-        'K' => [17, 18, 20, 24, 20, 18, 17],
-        'L' => [16, 16, 16, 16, 16, 16, 31],
-        'M' => [17, 27, 21, 21, 17, 17, 17],
-        'N' => [17, 17, 25, 21, 19, 17, 17],
-        'O' => [14, 17, 17, 17, 17, 17, 14],
-        'P' => [30, 17, 17, 30, 16, 16, 16],
-        'Q' => [14, 17, 17, 17, 21, 18, 13],
-        'R' => [30, 17, 17, 30, 20, 18, 17],
-        'S' => [15, 16, 16, 14, 1, 1, 30],
-        'T' => [31, 4, 4, 4, 4, 4, 4],
-        'U' => [17, 17, 17, 17, 17, 17, 14],
-        'V' => [17, 17, 17, 17, 17, 10, 4],
-        'W' => [17, 17, 17, 21, 21, 21, 10],
-        'X' => [17, 17, 10, 4, 10, 17, 17],
-        'Y' => [17, 17, 17, 10, 4, 4, 4],
-        'Z' => [31, 1, 2, 4, 8, 16, 31],
-        '0' => [14, 17, 19, 21, 25, 17, 14],
-        '1' => [4, 12, 4, 4, 4, 4, 14],
-        '2' => [14, 17, 1, 2, 4, 8, 31],
-        '3' => [31, 2, 4, 2, 1, 17, 14],
-        '4' => [2, 6, 10, 18, 31, 2, 2],
-        '5' => [31, 16, 30, 1, 1, 17, 14],
-        '6' => [6, 8, 16, 30, 17, 17, 14],
-        '7' => [31, 1, 2, 4, 8, 8, 8],
-        '8' => [14, 17, 17, 14, 17, 17, 14],
-        '9' => [14, 17, 17, 15, 1, 2, 12],
-        '!' => [4, 4, 4, 4, 4, 0, 4],
-        '\'' => [4, 4, 8, 0, 0, 0, 0],
-        '(' => [2, 4, 8, 8, 8, 4, 2],
-        ')' => [8, 4, 2, 2, 2, 4, 8],
-        '+' => [0, 4, 4, 31, 4, 4, 0],
-        ',' => [0, 0, 0, 0, 12, 4, 8],
-        '-' => [0, 0, 0, 31, 0, 0, 0],
-        '.' => [0, 0, 0, 0, 0, 12, 12],
-        '/' => [0, 1, 2, 4, 8, 16, 0],
-        ':' => [0, 12, 12, 0, 12, 12, 0],
-        '<' => [2, 4, 8, 16, 8, 4, 2],
-        '=' => [0, 0, 31, 0, 31, 0, 0],
-        '>' => [8, 4, 2, 1, 2, 4, 8],
-        '?' => [14, 17, 1, 2, 4, 0, 4],
-        '_' => [0, 0, 0, 0, 0, 0, 31],
-        '"' => [10, 10, 0, 0, 0, 0, 0],
-        '#' => [10, 10, 31, 10, 31, 10, 10],
-        '%' => [24, 25, 2, 4, 8, 19, 3],
-        '&' => [12, 18, 20, 8, 21, 18, 13],
-        '*' => [0, 4, 21, 14, 21, 4, 0],
-        ';' => [0, 12, 12, 0, 12, 4, 8],
-        '@' => [14, 17, 23, 21, 23, 16, 15],
-        '[' => [14, 8, 8, 8, 8, 8, 14],
-        ']' => [14, 2, 2, 2, 2, 2, 14],
-        'a' => [0, 0, 14, 1, 15, 17, 15],
-        'b' => [16, 16, 22, 25, 17, 17, 30],
-        'c' => [0, 0, 14, 16, 16, 17, 14],
-        'd' => [1, 1, 13, 19, 17, 17, 15],
-        'e' => [0, 0, 14, 17, 31, 16, 14],
-        'f' => [6, 9, 8, 28, 8, 8, 8],
-        'g' => [0, 15, 17, 17, 15, 1, 14],
-        'h' => [16, 16, 22, 25, 17, 17, 17],
-        'i' => [4, 0, 12, 4, 4, 4, 14],
-        'j' => [2, 0, 6, 2, 2, 18, 12],
-        'k' => [16, 16, 18, 20, 24, 20, 18],
-        'l' => [12, 4, 4, 4, 4, 4, 14],
-        'm' => [0, 0, 26, 21, 21, 17, 17],
-        'n' => [0, 0, 22, 25, 17, 17, 17],
-        'o' => [0, 0, 14, 17, 17, 17, 14],
-        'p' => [0, 30, 17, 17, 30, 16, 16],
-        'q' => [0, 15, 17, 17, 15, 1, 1],
-        'r' => [0, 0, 22, 25, 16, 16, 16],
-        's' => [0, 0, 15, 16, 14, 1, 30],
-        't' => [8, 8, 28, 8, 8, 9, 6],
-        'u' => [0, 0, 17, 17, 17, 19, 13],
-        'v' => [0, 0, 17, 17, 17, 10, 4],
-        'w' => [0, 0, 17, 17, 21, 21, 10],
-        'x' => [0, 0, 17, 10, 4, 10, 17],
-        'y' => [0, 17, 17, 15, 1, 17, 14],
-        'z' => [0, 0, 31, 2, 4, 8, 31],
-        _ => [0; 7],
-    }
-}
-
-/// The characters with cells in the atlas, in order after the white cell.
-const CHARS: &str =
-    " !'()+,-./0123456789:<=>?ABCDEFGHIJKLMNOPQRSTUVWXYZ_\"#%&*;@[]abcdefghijklmnopqrstuvwxyz";
-
-/// Draws the white cell and the font into the atlas rows under the map.
+/// Draws the white cell and the font into the atlas under the map.
 pub fn font_into(atlas: &mut [u8]) {
     let w = ATLAS.0 as usize;
-    let mut put = |x: usize, y: usize| {
-        let k = ((MAP as usize + y) * w + x) * 4;
-        atlas[k..k + 4].copy_from_slice(&[255; 4]);
-    };
     for y in 0..CELL as usize {
         for x in 0..CELL as usize {
-            put(x, y);
+            let k = ((MAP as usize + y) * w + x) * 4;
+            atlas[k..k + 4].copy_from_slice(&[255; 4]);
         }
     }
-    for (i, c) in CHARS.chars().enumerate() {
-        let x0 = (i + 1) * CELL as usize;
-        // Letters with tails hang a row lower, into the cell's spare bottom row.
-        let drop = "gjpqy".contains(c) as usize;
-        for (row, bits) in glyph(c).iter().enumerate() {
-            for col in 0..5 {
-                if bits & (16 >> col) != 0 {
-                    put(x0 + col + 1, row + drop);
-                }
-            }
-        }
+    let f = crate::font::get();
+    let base = f.top as usize * w;
+    for (i, a) in f.rows.iter().enumerate() {
+        atlas[(base + i) * 4..(base + i) * 4 + 4].copy_from_slice(&[255, 255, 255, *a]);
     }
 }
 
 /// sRGB hex to linear color with alpha.
-fn rgba(hex: u32, a: f32) -> [f32; 4] {
+pub(crate) fn rgba(hex: u32, a: f32) -> [f32; 4] {
     let ch = |s: u32| ((hex >> s) & 255) as f32 / 255.0;
     let lin = |v: f32| v.powf(2.2);
     [lin(ch(16)), lin(ch(8)), lin(ch(0)), a]
 }
 
 /// Builds the HUD's triangles in pixels, top left origin, turned to clip space at the end.
-struct Draw {
-    out: Vec<HudVertex>,
-    size: Vec2,
+pub(crate) struct Draw {
+    pub out: Vec<HudVertex>,
+    pub size: Vec2,
 }
 
 impl Draw {
-    fn vert(&mut self, p: Vec2, uv: Vec2, color: [f32; 4]) {
+    pub(crate) fn vert(&mut self, p: Vec2, uv: Vec2, color: [f32; 4]) {
         self.out.push(HudVertex {
             pos: [p.x / self.size.x * 2.0 - 1.0, 1.0 - p.y / self.size.y * 2.0],
             uv: [uv.x / ATLAS.0 as f32, uv.y / ATLAS.1 as f32],
@@ -171,7 +101,7 @@ impl Draw {
         });
     }
 
-    fn quad(&mut self, p0: Vec2, p1: Vec2, uv0: Vec2, uv1: Vec2, color: [f32; 4]) {
+    pub(crate) fn quad(&mut self, p0: Vec2, p1: Vec2, uv0: Vec2, uv1: Vec2, color: [f32; 4]) {
         let (a, b, c, d) = (
             (p0, uv0),
             (Vec2::new(p1.x, p0.y), Vec2::new(uv1.x, uv0.y)),
@@ -184,43 +114,43 @@ impl Draw {
     }
 
     /// A plain colored box.
-    fn rect(&mut self, p0: Vec2, p1: Vec2, color: [f32; 4]) {
+    pub(crate) fn rect(&mut self, p0: Vec2, p1: Vec2, color: [f32; 4]) {
         let white = Vec2::new(4.0, MAP as f32 + 4.0);
         self.quad(p0, p1, white, white, color);
     }
 
-    fn tri(&mut self, a: Vec2, b: Vec2, c: Vec2, color: [f32; 4]) {
+    pub(crate) fn tri(&mut self, a: Vec2, b: Vec2, c: Vec2, color: [f32; 4]) {
         let white = Vec2::new(4.0, MAP as f32 + 4.0);
         for p in [a, b, c] {
             self.vert(p, white, color);
         }
     }
 
-    /// Text in the HUD font, `scale` pixels to a font pixel. Returns its width.
-    fn text(&mut self, at: Vec2, scale: f32, s: &str, color: [f32; 4]) -> f32 {
+    /// Text with its top at `at`, `scale` tenths of a pixel to the em. Returns its width.
+    pub(crate) fn text(&mut self, at: Vec2, scale: f32, s: &str, color: [f32; 4]) -> f32 {
+        self.write(at, scale * 10.0, s, color)
+    }
+
+    /// Text with its top at `at`, `px` to the em. Returns its width.
+    pub(crate) fn write(&mut self, at: Vec2, px: f32, s: &str, color: [f32; 4]) -> f32 {
+        let (face, k) = crate::font::get().face(px);
+        let base = at.y + px * 0.9;
         let mut x = at.x;
         for c in s.chars() {
-            let i = CHARS
-                .find(c)
-                .or_else(|| CHARS.find(c.to_ascii_uppercase()))
-                .unwrap_or(0) as f32;
-            if i > 0.0 {
-                let u0 = Vec2::new((i + 1.0) * CELL as f32, MAP as f32);
-                self.quad(
-                    Vec2::new(x, at.y),
-                    Vec2::new(x + CELL as f32 * scale, at.y + CELL as f32 * scale),
-                    u0,
-                    u0 + Vec2::splat(CELL as f32),
-                    color,
-                );
+            let g = face.glyph(c);
+            if g.size.0 > 0.0 {
+                let p0 = Vec2::new(x + g.offset.0 * k, base + g.offset.1 * k);
+                let uv0 = Vec2::new(g.uv.0, g.uv.1);
+                let size = Vec2::new(g.size.0, g.size.1);
+                self.quad(p0, p0 + size * k, uv0, uv0 + size, color);
             }
-            x += 6.0 * scale;
+            x += g.advance * k;
         }
         x - at.x
     }
 
     /// An arrow pointing along `dir` (screen, y down), for where the dragon heads.
-    fn arrow(&mut self, at: Vec2, dir: Vec2, size: f32) {
+    pub(crate) fn arrow(&mut self, at: Vec2, dir: Vec2, size: f32) {
         let side = Vec2::new(-dir.y, dir.x);
         let (tip, back) = (at + dir * size, at - dir * size * 0.7);
         let (l, r) = (back + side * size * 0.7, back - side * size * 0.7);
@@ -238,15 +168,22 @@ impl Draw {
 /// What the HUD shows and is in the middle of.
 #[derive(Clone, Debug, Default)]
 pub struct Hud {
-    /// Drawn at all. The web page has its own and leaves this off.
+    /// The map, minimap and notes are drawn. The web page has its own and leaves this off.
     pub on: bool,
-    pub help: bool,
     pub map: bool,
-    /// The action picked in the help panel, and whether the next key goes to it.
-    pick: usize,
-    waiting: bool,
-    /// The keys changed, so the host should save them.
-    pub changed: bool,
+    /// The journal, drawn whether or not `on` is.
+    pub book: crate::book::Book,
+    /// A line shown at the bottom, who or what said it, and how many seconds it stays.
+    pub toast: Option<(String, String, f32)>,
+    /// What the passenger just said, in a bubble beside them, and how long it stays.
+    pub say: Option<(String, f32)>,
+    /// Where the passenger's head is on screen, in pixels, while one rides.
+    pub rider_at: Option<Vec2>,
+    /// Something the passenger points at, on screen in pixels, and whether it is in view.
+    pub point: Option<(Vec2, bool)>,
+    /// Where what the dragon carries is going: on screen in pixels, whether it is in
+    /// view, and its name with how far it is. Shown the whole way there.
+    pub goal: Option<(Vec2, bool, String)>,
     /// Notes mode's list, oldest first, and where the host keeps them.
     pub notes: Vec<Note>,
     pub notes_where: String,
@@ -321,35 +258,22 @@ pub fn key_label(code: &str) -> String {
         .or_else(|| code.strip_prefix("Digit"))
         .unwrap_or(code);
     match s {
-        "ArrowUp" => "UP ARROW".into(),
-        "ArrowDown" => "DOWN ARROW".into(),
-        "ArrowLeft" => "LEFT ARROW".into(),
-        "ArrowRight" => "RIGHT ARROW".into(),
-        "ShiftLeft" | "ShiftRight" => "SHIFT".into(),
-        "ControlLeft" | "ControlRight" => "CTRL".into(),
-        "AltLeft" | "AltRight" => "ALT".into(),
-        _ => s.to_uppercase(),
-    }
-}
-
-/// What each action does, for the help panel.
-fn action_label(a: Action) -> &'static str {
-    match a {
-        Action::PitchUp => "NOSE UP",
-        Action::PitchDown => "NOSE DOWN",
-        Action::TurnLeft => "TURN LEFT",
-        Action::TurnRight => "TURN RIGHT",
-        Action::Flap => "FLAP",
-        Action::Tuck => "DIVE",
-        Action::Brake => "BRAKE, LAND, HOVER",
-        Action::Breath => "BREATHE FIRE",
+        "ArrowUp" => "Up arrow".into(),
+        "ArrowDown" => "Down arrow".into(),
+        "ArrowLeft" => "Left arrow".into(),
+        "ArrowRight" => "Right arrow".into(),
+        "ShiftLeft" | "ShiftRight" => "Shift".into(),
+        "ControlLeft" | "ControlRight" => "Ctrl".into(),
+        "AltLeft" | "AltRight" => "Alt".into(),
+        _ if s.chars().count() == 1 => s.to_uppercase(),
+        _ => s.to_string(),
     }
 }
 
 impl Hud {
-    /// Whether a panel covers the game, which pauses it.
+    /// Whether the big map covers the game, which pauses it.
     pub fn open(&self) -> bool {
-        self.help || self.map
+        self.map
     }
 
     /// Replaces the listed notes, keeping the same one picked where it can.
@@ -416,46 +340,15 @@ impl Hud {
         NotesKey::Used
     }
 
-    /// Offers a key press to the HUD first.
-    pub fn key(&mut self, code: &str, binds: &mut Bindings) -> HudKey {
+    /// Offers a key press to the map.
+    pub fn key(&mut self, code: &str) -> HudKey {
         if !self.on {
             return HudKey::Pass;
         }
-        if self.waiting {
-            // The HUD's own keys and pause stay as they are.
-            if matches!(code, "KeyH" | "KeyM" | "KeyP") {
-                return HudKey::Used;
-            }
-            self.waiting = false;
-            if code != "Escape" {
-                binds.rebind(Action::ALL[self.pick], code);
-                self.changed = true;
-            }
-            return HudKey::Used;
-        }
         match code {
-            "KeyH" => {
-                self.help = !self.help;
-                self.map = false;
-            }
-            "KeyM" => {
-                self.map = !self.map;
-                self.help = false;
-            }
-            "Escape" if self.open() => {
-                self.help = false;
-                self.map = false;
-            }
-            "ArrowUp" if self.help => {
-                self.pick = (self.pick + Action::ALL.len() - 1) % Action::ALL.len();
-            }
-            "ArrowDown" if self.help => self.pick = (self.pick + 1) % Action::ALL.len(),
-            "Enter" | "NumpadEnter" if self.help => self.waiting = true,
-            "KeyR" if self.help => {
-                *binds = Bindings::default();
-                self.changed = true;
-            }
-            _ if self.open() => {}
+            "KeyM" => self.map = !self.map,
+            "Escape" if self.map => self.map = false,
+            _ if self.map => {}
             _ => return HudKey::Pass,
         }
         HudKey::Used
@@ -470,17 +363,22 @@ impl Hud {
         at: Vec2,
         heading: f32,
         bounds: [f32; 4],
-        binds: &Bindings,
         map_ready: bool,
         notes: bool,
-        paused: bool,
-        muted: bool,
+        view: &crate::book::View,
     ) -> Vec<HudVertex> {
         let mut d = Draw {
             out: Vec::new(),
             size: Vec2::new(size.0 as f32, size.1 as f32),
         };
         if !self.on {
+            if !notes {
+                if !self.book.showing() {
+                    self.rider_onto(&mut d);
+                }
+                self.toast_onto(&mut d);
+                self.book.draw(&mut d, view);
+            }
             return d.out;
         }
         let (w, h) = (d.size.x, d.size.y);
@@ -489,12 +387,11 @@ impl Hud {
         let to_map = |p: Vec2| (p - Vec2::new(bounds[0], bounds[1])) / span * MAP as f32;
         let dir = Vec2::new(heading.sin(), heading.cos());
         let white = rgba(0xFFFFFF, 1.0);
-        let shade = rgba(0x1E1A16, 0.72);
         if notes {
             self.notes_panel(&mut d, ui);
             return d.out;
         }
-        if map_ready && !self.map {
+        if map_ready && !self.map && !self.book.showing() {
             // The minimap: 2.4 km round the dragon, north up.
             let side = (h * 0.3).clamp(120.0, 300.0);
             let p0 = Vec2::new(w - side - 16.0, h - side - 16.0);
@@ -536,101 +433,170 @@ impl Hud {
                 white,
             );
         }
-        if self.help {
-            let line = 11.0 * ui * 1.4;
-            let rows = Action::ALL.len() as f32 + 10.0;
-            let bw = (w * 0.9).min(48.0 * 6.0 * ui * 1.4 + 36.0);
-            let bh = rows * line + 30.0;
-            let p0 = Vec2::new((w - bw) * 0.5, (h - bh) * 0.5);
-            d.rect(p0, p0 + Vec2::new(bw, bh), shade);
-            let s = ui * 1.4;
-            let mut y = p0.y + 14.0;
-            let x = p0.x + 18.0;
-            d.text(Vec2::new(x, y), s * 1.3, "CONTROLS", rgba(0xF2C14E, 1.0));
-            y += line * 1.6;
-            for (i, a) in Action::ALL.into_iter().enumerate() {
-                if i == self.pick {
-                    d.rect(
-                        Vec2::new(x - 8.0, y - 3.0),
-                        Vec2::new(p0.x + bw - 10.0, y + line - 3.0),
-                        rgba(0xE0564A, 0.6),
-                    );
-                }
-                d.text(Vec2::new(x, y), s, action_label(a), white);
-                let mut keys: Vec<String> = Vec::new();
-                for (k, _) in binds.keys.iter().filter(|(_, b)| *b == a) {
-                    let label = key_label(k);
-                    if !keys.contains(&label) {
-                        keys.push(label);
-                    }
-                }
-                let shown = if self.waiting && i == self.pick {
-                    "PRESS A KEY...".to_string()
-                } else {
-                    keys.join("  ")
-                };
-                d.text(
-                    Vec2::new(x + 20.0 * 6.0 * s, y),
-                    s,
-                    &shown,
-                    rgba(0xFFE7B0, 1.0),
-                );
-                y += line;
-            }
-            y += line * 0.5;
-            for l in [
-                "I J K L OR RIGHT DRAG  LOOK ROUND",
-                "M  MAP      H  THIS HELP      N  NOTES",
-                "ESC OR P  PAUSE      U  SOUND ON/OFF",
-            ] {
-                d.text(Vec2::new(x, y), s, l, rgba(0xDDDDDD, 1.0));
-                y += line;
-            }
-            y += line * 0.5;
-            let tip = if self.waiting {
-                "PRESS THE NEW KEY, OR ESC TO KEEP THE OLD"
-            } else {
-                "UP DOWN PICK   ENTER CHANGE   R RESET ALL"
-            };
-            d.text(Vec2::new(x, y), s, tip, rgba(0xF2C14E, 1.0));
-        }
-        if paused && !self.open() {
-            let s = ui * 1.5;
-            let line = 11.0 * s;
-            let (bw, bh) = (34.0 * 6.0 * s + 40.0, line * 4.0 + 28.0);
-            let p0 = Vec2::new((w - bw) * 0.5, (h - bh) * 0.5);
-            d.rect(p0, p0 + Vec2::new(bw, bh), shade);
-            let x = p0.x + 20.0;
-            let mut y = p0.y + 16.0;
-            d.text(Vec2::new(x, y), s * 1.3, "PAUSED", rgba(0xF2C14E, 1.0));
-            y += line * 1.6;
-            let sound = if muted {
-                "U  SOUND: OFF"
-            } else {
-                "U  SOUND: ON"
-            };
-            d.text(Vec2::new(x, y), s, sound, white);
-            y += line;
-            d.text(
-                Vec2::new(x, y),
-                s,
-                "ESC OR P  FLY ON     H  HELP",
-                rgba(0xDDDDDD, 1.0),
-            );
-        }
-        if !self.open() {
+        if !self.open() && !self.book.showing() {
             d.text(
                 Vec2::new(16.0, h - 16.0 - 8.0 * ui),
                 ui,
-                "H HELP   M MAP   N NOTES",
-                rgba(0xFFFFFF, 0.8),
+                "Esc journal   M map   N notes",
+                rgba(0xFFFFFF, 0.85),
             );
+        }
+        if !self.open() {
+            if !self.book.showing() {
+                self.rider_onto(&mut d);
+            }
+            self.toast_onto(&mut d);
+            self.book.draw(&mut d, view);
         }
         d.out
     }
 }
 
 impl Hud {
+    /// The passenger's little round button, as a middle and radius in pixels.
+    pub fn rider_button(&self, size: Vec2) -> Option<(Vec2, f32)> {
+        let at = self.rider_at?;
+        let px = (size.y / 34.0).min(size.x / 34.0).clamp(11.0, 26.0);
+        let r = px * 1.1;
+        let c = at + Vec2::new(px * 2.6, px * 0.4);
+        let c = c.clamp(Vec2::splat(r + 4.0), size - (r + 4.0));
+        Some((c, r))
+    }
+
+    /// The passenger's own bits: their button, what they say in a bubble beside them,
+    /// and a marker on whatever they point at.
+    fn rider_onto(&self, d: &mut Draw) {
+        let size = d.size;
+        let px = (size.y / 34.0).min(size.x / 34.0).clamp(11.0, 26.0);
+        if let Some((c, r)) = self.rider_button(size) {
+            for (rad, col) in [(r + 2.0, rgba(0x4A3426, 0.6)), (r, rgba(0xFFF6E6, 0.95))] {
+                for k in 0..16 {
+                    let a0 = k as f32 / 16.0 * std::f32::consts::TAU;
+                    let a1 = (k + 1) as f32 / 16.0 * std::f32::consts::TAU;
+                    d.tri(
+                        c,
+                        c + Vec2::new(a0.cos(), a0.sin()) * rad,
+                        c + Vec2::new(a1.cos(), a1.sin()) * rad,
+                        col,
+                    );
+                }
+            }
+            for k in -1..=1 {
+                let p = c + Vec2::new(k as f32 * r * 0.42, 0.0);
+                d.rect(p - r * 0.12, p + r * 0.12, rgba(0xE0564A, 1.0));
+            }
+        }
+        if let (Some((text, left)), Some(at)) = (&self.say, self.rider_at) {
+            let fade = left.clamp(0.0, 1.0);
+            let f = crate::font::get();
+            let small = px * 0.85;
+            let most = (size.x * 0.42).clamp(px * 9.0, px * 16.0);
+            let lines: Vec<String> = f.wrap(small, text, most).into_iter().take(3).collect();
+            let tw = lines
+                .iter()
+                .map(|l| f.measure(small, l))
+                .fold(0.0, f32::max);
+            let bs = Vec2::new(tw + px * 1.2, lines.len() as f32 * small * 1.25 + px * 0.7);
+            // Above and to the left of their head, kept on screen.
+            let p0 = (at + Vec2::new(-bs.x - px * 0.6, -bs.y - px * 2.2))
+                .clamp(Vec2::splat(8.0), size - bs - 8.0);
+            let tip = at - Vec2::new(0.0, px * 0.6);
+            let foot = Vec2::new(
+                (tip.x - px * 0.3).clamp(p0.x + px, p0.x + bs.x - px * 1.6),
+                p0.y + bs.y,
+            );
+            d.tri(
+                foot,
+                foot + Vec2::new(px * 1.1, 0.0),
+                tip,
+                rgba(0xFFFDF6, 0.95 * fade),
+            );
+            d.rect(p0 - 1.5, p0 + bs + 1.5, rgba(0x4A3426, 0.35 * fade));
+            d.rect(p0, p0 + bs, rgba(0xFFFDF6, 0.95 * fade));
+            let mut y = p0.y + px * 0.35;
+            for l in &lines {
+                d.write(
+                    Vec2::new(p0.x + px * 0.6, y),
+                    small,
+                    l,
+                    rgba(0x4A3426, fade),
+                );
+                y += small * 1.25;
+            }
+        }
+        if let Some((p, seen, label)) = &self.goal {
+            let f = crate::font::get();
+            let small = px * 0.8;
+            let tw = f.measure(small, label);
+            let pad = Vec2::new(px * 0.45, px * 0.25);
+            let bs = Vec2::new(tw, small * 1.15) + pad * 2.0;
+            let coral = rgba(0xE0564A, 1.0);
+            let dark = rgba(0x2A1E14, 0.8);
+            let tag = |d: &mut Draw, p0: Vec2| {
+                let p0 = p0.clamp(Vec2::splat(6.0), size - bs - 6.0);
+                d.rect(p0 - 1.5, p0 + bs + 1.5, rgba(0x4A3426, 0.5));
+                d.rect(p0, p0 + bs, rgba(0xFFF6E6, 0.95));
+                d.write(p0 + pad, small, label, rgba(0x4A3426, 1.0));
+            };
+            if *seen {
+                // A pin standing over the spot, with its name and distance on top.
+                let tip = *p;
+                let head = tip - Vec2::new(0.0, px * 1.6);
+                for (grow, col) in [(1.3, dark), (1.0, coral)] {
+                    d.tri(
+                        tip + Vec2::new(0.0, (grow - 1.0) * px * 0.4),
+                        head + Vec2::new(-px * 0.55 * grow, 0.0),
+                        head + Vec2::new(px * 0.55 * grow, 0.0),
+                        col,
+                    );
+                    d.rect(head - px * 0.55 * grow, head + px * 0.55 * grow, col);
+                }
+                d.rect(head - px * 0.2, head + px * 0.2, rgba(0xFFF6E6, 1.0));
+                tag(d, head - Vec2::new(bs.x * 0.5, px * 0.8 + bs.y));
+            } else {
+                // Off screen: a big arrow at the edge the whole way, with the name by it.
+                let mid = size * 0.5;
+                let dir = (*p - mid).normalize_or(Vec2::Y);
+                let reach = (mid - px * 3.0) / dir.abs().max(Vec2::splat(1e-3));
+                let at = mid + dir * reach.x.min(reach.y);
+                d.arrow(at, dir, px * 1.3);
+                tag(d, at - dir * px * 2.6 - bs * 0.5);
+            }
+        }
+        if let Some((p, seen)) = self.point {
+            let gold = rgba(0xFFD54A, 1.0);
+            let dark = rgba(0x2A1E14, 0.8);
+            if seen {
+                // A little arrow bobbing over it.
+                let tip = p - Vec2::new(0.0, px * 1.2);
+                let top = tip - Vec2::new(0.0, px * 1.6);
+                for (grow, col) in [(1.35, dark), (1.0, gold)] {
+                    d.tri(
+                        tip + Vec2::new(0.0, (grow - 1.0) * px * 0.5),
+                        top + Vec2::new(-px * 0.8 * grow, 0.0),
+                        top + Vec2::new(px * 0.8 * grow, 0.0),
+                        col,
+                    );
+                }
+            } else {
+                // Off screen: an arrow at the edge, pointing the way.
+                let mid = size * 0.5;
+                let dir = (p - mid).normalize_or(Vec2::Y);
+                let reach = (mid - px * 2.5) / dir.abs().max(Vec2::splat(1e-3));
+                let at = mid + dir * reach.x.min(reach.y);
+                d.arrow(at, dir, px * 0.9);
+            }
+        }
+    }
+
+    fn toast_onto(&self, d: &mut Draw) {
+        if let Some((who, text, left)) = &self.toast
+            && !self.book.showing()
+        {
+            crate::book::draw_toast(d, who, text, left.clamp(0.0, 1.0));
+        }
+    }
+
     /// Notes mode: help along the top, the list down the right, and the note being
     /// written in the middle.
     fn notes_panel(&self, d: &mut Draw, ui: f32) {
@@ -849,14 +815,10 @@ mod tests {
             on: true,
             ..Default::default()
         };
-        assert_eq!(hud.key("KeyH", &mut c), HudKey::Used);
+        assert_eq!(hud.key("KeyM"), HudKey::Used);
         assert!(hud.open());
-        hud.key("Enter", &mut c);
-        hud.key("KeyZ", &mut c);
-        assert_eq!(c.key_action("KeyZ"), Some(Action::PitchUp));
-        assert!(hud.changed);
-        assert_eq!(hud.key("Escape", &mut c), HudKey::Used);
-        assert_eq!(hud.key("KeyW", &mut c), HudKey::Pass);
+        assert_eq!(hud.key("Escape"), HudKey::Used);
+        assert_eq!(hud.key("KeyW"), HudKey::Pass);
     }
 
     /// Writing a note queues it for saving, and deleting takes two presses.

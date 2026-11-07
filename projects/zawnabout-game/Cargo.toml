@@ -8,9 +8,16 @@ publish.workspace = true
 
 [dependencies]
 bytemuck = { workspace = true }
+fontdue = "0.9"
 glam = { workspace = true }
 wgpu = { workspace = true }
+zawnabout-play = { workspace = true, optional = true }
 zawnabout-sim = { workspace = true }
+
+[features]
+# Gameplay on top of the islands. Without it the game is the islands alone.
+default = ["play"]
+play = ["dep:zawnabout-play"]
 
 [lints]
 workspace = true

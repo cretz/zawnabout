@@ -5,11 +5,12 @@ use std::path::Path;
 fn main() {
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../world/first");
     println!("cargo:rerun-if-changed={}", dir.display());
+    // The gameplay file is the play crate's, not the world's.
     for entry in std::fs::read_dir(&dir).expect("world dir") {
-        println!(
-            "cargo:rerun-if-changed={}",
-            entry.expect("entry").path().display()
-        );
+        let path = entry.expect("entry").path();
+        if !path.ends_with("play.kdl") {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
     }
     let rust = zawnabout_worldc::compile(&dir).unwrap_or_else(|e| {
         // One line per problem, each with its file and line.

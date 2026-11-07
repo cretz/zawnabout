@@ -703,8 +703,11 @@ railway hollow-line tour=#true {
 
 // Small caves on their own
 
-dugout fern-dugout x=-480 y=55 z=600 facing=east r=25 {
-    note "Tiny cave in the valley wall near the meadow. The first secret most people find."
+dugout serpent-niche x=840 y=70.6 z=-1604 facing=north r=58 {
+    note "The niche the old folk cut into the spine's sea cliff for their serpent god. A ledge to stand on at its foot."
+}
+dugout fern-dugout x=-910 y=43 z=306 facing=southeast r=22 {
+    note "Snug cave in the foot of the falls plateau cliff, west of the meadow. The first secret most people find."
 }
 dugout tiers-cellar x=-2180 y=20 z=-100 facing=west r=30 {
     note "Below the lowest tier, just above the waves."

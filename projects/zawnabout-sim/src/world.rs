@@ -1180,6 +1180,13 @@ impl World {
             .map(|i| &self.colliders[*i as usize])
     }
 
+    /// Whether `p` is inside a building or a landmark.
+    pub fn in_building(&self, p: Vec3) -> bool {
+        self.near(p.x, p.z)
+            .filter(|c| c.prop & Collider::BUILDING != 0)
+            .any(|c| c.shape.push_out(p, 0.05).is_some())
+    }
+
     /// Whether `p` is inside a building, prop or the ground.
     pub fn solid_at(&self, p: Vec3) -> bool {
         self.near(p.x, p.z)
@@ -1329,13 +1336,18 @@ impl World {
     /// someone up, so two vehicles passing never swap a rider between them.
     pub fn carrier_keeping(&self, keep: Option<usize>, x: f32, z: f32, feet: f32) -> Option<usize> {
         keep.filter(|&i| {
-            i < self.traffic.vehicles.len()
-                && self
-                    .traffic
-                    .shapes(i)
-                    .iter()
-                    .filter_map(|s| s.support(x, z))
-                    .any(|h| (h - feet).abs() < 0.8)
+            if i >= self.traffic.vehicles.len() {
+                return false;
+            }
+            // Where this tick's move carries the rider: a vehicle climbing or diving
+            // fast (a mine car onto a trestle) would otherwise slip out from under them.
+            let (was, now) = (self.traffic.prev[i], self.traffic.poses[i]);
+            let p = now.to_world(was.to_local(Vec3::new(x, feet, z)));
+            self.traffic
+                .shapes(i)
+                .iter()
+                .filter_map(|s| s.support(p.x, p.z))
+                .any(|h| (h - p.y).abs() < 1.2)
         })
         .or_else(|| self.carrier(x, z, feet))
     }

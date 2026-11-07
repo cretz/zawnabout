@@ -638,12 +638,29 @@ impl Dragon {
         // Walk up any slope short of a cliff. Cliffs stop you, the ground never shoves. A
         // rider goes wherever their vehicle goes, past trees and posts beside the way.
         let riding = carrier.is_some();
+        // Under an overhang (in a nook or a cave) the open ground far overhead says
+        // nothing about this floor, so only the rock beside the body stops you there.
+        let under = world.ground_height(old_x, old_z) > self.pos.y - p.stand_height + 4.0;
         if !riding
+            && !under
             && world.ground_normal(self.pos.x, self.pos.z).y < p.walk_slope
             && world.ground_height(self.pos.x, self.pos.z) > self.pos.y - p.stand_height + 0.3
         {
             (self.pos.x, self.pos.z) = (old_x, old_z);
             flat = Vec2::ZERO;
+        }
+        // Cave walls and overhangs are rock beside the body, which the ground below
+        // knows nothing of: slide along them instead of walking in.
+        if !riding
+            && let Some((n, _)) = world.terrain.push_out(self.pos + Vec3::Y, p.body_radius)
+            && n.y < 0.6
+        {
+            let n = Vec2::new(n.x, n.z).normalize_or_zero();
+            let moved = Vec2::new(self.pos.x - old_x, self.pos.z - old_z);
+            let into = moved.dot(n).min(0.0);
+            self.pos.x -= n.x * into;
+            self.pos.z -= n.y * into;
+            flat -= n * flat.dot(n).min(0.0);
         }
         let (pushed, n) = if riding {
             (self.pos, Vec3::ZERO)

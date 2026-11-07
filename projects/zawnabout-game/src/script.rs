@@ -18,13 +18,17 @@ pub struct Script {
     until: Option<(String, f32)>,
     /// Failed `expect` and timed out `wait-until` lines.
     pub failures: u32,
+    /// Leave cards for things found up, as a player would see them. Off, each is logged
+    /// and dismissed so scripted flights carry on. `cards keep` turns it on.
+    keep_cards: bool,
 }
 
-const HOST: [&str; 8] = [
+const HOST: [&str; 9] = [
     "shot",
     "size",
     "save-trace",
     "stats",
+    "hide-mesh",
     "profile",
     "clouds",
     "sound",
@@ -43,6 +47,7 @@ impl Script {
             wait: 0.0,
             until: None,
             failures: 0,
+            keep_cards: false,
         }
     }
 
@@ -53,6 +58,11 @@ impl Script {
     /// Runs every line that is due after `dt` more seconds.
     pub fn update(&mut self, game: &mut Game, dt: f32) -> Vec<Output> {
         let mut out = Vec::new();
+        if !self.keep_cards {
+            for card in game.hud.book.cards.drain(..) {
+                out.push(Output::Log(format!("card: {}: {}", card.title, card.body)));
+            }
+        }
         // A wait only counts down once any wait-until before it is over.
         if self.until.is_none() {
             self.wait -= dt;
@@ -81,7 +91,11 @@ impl Script {
             let line = self.lines[self.pc].clone();
             self.pc += 1;
             let words: Vec<String> = line.split_whitespace().map(String::from).collect();
-            if words[0] == "wait" {
+            if words[..] == ["cards", "keep"] {
+                self.keep_cards = true;
+            } else if words[..] == ["cards", "auto"] {
+                self.keep_cards = false;
+            } else if words[0] == "wait" {
                 match words.get(1).and_then(|w| w.parse::<f32>().ok()) {
                     Some(secs) => self.wait += secs,
                     None => out.push(Output::Log(format!("bad wait: {line}"))),

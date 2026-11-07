@@ -2,9 +2,11 @@
 //! screenshots without a window.
 //!
 //! zawnabout [--headless] [--script FILE] [--out DIR] [--size WxH] [--seed N] [--debug] [--mute]
+//!           [--no-play]
 //! zawnabout --map FILE [--size WxH]
 //!
 //! `--debug` reads commands from stdin while windowed. F12 saves a screenshot to `--out`.
+//! `--no-play` turns gameplay off, leaving the islands alone.
 //! `--map` writes a top-down shaded map of the world, `--size` width wide, and exits.
 
 use std::path::{Path, PathBuf};
@@ -19,18 +21,89 @@ use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::PhysicalKey;
 use winit::window::{Window, WindowId};
 use zawnabout_game::audio::Synth;
+use zawnabout_game::game::Ask;
 use zawnabout_game::hud::{HudKey, NoteChange};
 use zawnabout_game::notes::{Note, note_stamp};
 use zawnabout_game::{Game, Gfx, Output, Renderer, Script, wgpu};
 
 const FRAME: f32 = 1.0 / 60.0;
 
-/// Where the player's keys are kept between runs.
-fn keys_file() -> Option<PathBuf> {
+/// Where the player's things are kept between runs: keys, settings and saves.
+fn data_file(name: &str) -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("zawnabout").join("keys.txt"))
+    Some(base.join("zawnabout").join(name))
+}
+
+fn keys_file() -> Option<PathBuf> {
+    data_file("keys.txt")
+}
+
+/// The save slot. One for now, named so more can come.
+const SLOT: &str = "save-a.txt";
+
+fn write_data(name: &str, text: &str) {
+    if let Some(f) = data_file(name) {
+        let _ = std::fs::create_dir_all(f.parent().unwrap_or(Path::new(".")));
+        let _ = std::fs::write(f, text);
+    }
+}
+
+/// Does what the game asked: keeps its save, settings and keys, and offers files for
+/// export and import.
+fn answer_asks(game: &mut Game) {
+    for ask in std::mem::take(&mut game.asks) {
+        match ask {
+            Ask::Save => {
+                if let Some(text) = game.save_text() {
+                    write_data(SLOT, &text);
+                }
+            }
+            Ask::Prefs => write_data("prefs.txt", &game.prefs_text()),
+            Ask::Keys => write_data("keys.txt", &game.bindings.to_text()),
+            Ask::Export => {
+                let Some(text) = game.save_text() else {
+                    continue;
+                };
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Save your game")
+                    .set_file_name("zawnabout-save.txt")
+                    .add_filter("zawnabout save", &["txt"])
+                    .save_file()
+                {
+                    let _ = std::fs::write(path, text);
+                }
+            }
+            Ask::Source => {
+                let url = zawnabout_game::book::SOURCE;
+                #[cfg(windows)]
+                let open = std::process::Command::new("explorer").arg(url).spawn();
+                #[cfg(target_os = "macos")]
+                let open = std::process::Command::new("open").arg(url).spawn();
+                #[cfg(not(any(windows, target_os = "macos")))]
+                let open = std::process::Command::new("xdg-open").arg(url).spawn();
+                if let Err(e) = open {
+                    eprintln!("open {url}: {e}");
+                }
+            }
+            Ask::Import => {
+                if let Some(path) = rfd::FileDialog::new()
+                    .set_title("Load a game")
+                    .add_filter("zawnabout save", &["txt"])
+                    .pick_file()
+                {
+                    match std::fs::read_to_string(path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|t| game.load_save(&t))
+                    {
+                        Ok(()) => game.asks.push(Ask::Save),
+                        Err(e) => eprintln!("load: {e}"),
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Where design notes go: `working-area/feedback` beside the repo when the game runs from
@@ -99,6 +172,7 @@ struct Args {
     seed: u64,
     map: Option<PathBuf>,
     mute: bool,
+    no_play: bool,
 }
 
 fn parse_args() -> Args {
@@ -111,6 +185,7 @@ fn parse_args() -> Args {
         seed: 1,
         map: None,
         mute: false,
+        no_play: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -128,6 +203,7 @@ fn parse_args() -> Args {
             "--seed" => a.seed = val().parse().expect("seed"),
             "--map" => a.map = Some(val().into()),
             "--mute" => a.mute = true,
+            "--no-play" => a.no_play = true,
             _ => panic!("unknown argument {arg}"),
         }
     }
@@ -219,6 +295,9 @@ fn host_command(
             std::fs::write(&path, csv).expect("write trace");
             println!("trace {}", path.display());
         }
+        "hide-mesh" => {
+            gfx.renderer.hide = words[1..].iter().filter_map(|w| w.parse().ok()).collect();
+        }
         "stats" => {
             // Renders once so the numbers match the current view.
             let _ = gfx.capture(game);
@@ -307,6 +386,9 @@ fn headless(args: Args) {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let (_, device, queue) = device(&instance, None);
     let mut game = Game::new(args.seed);
+    if args.no_play {
+        game.play = None;
+    }
     let renderer = Renderer::new(
         device,
         queue,
@@ -328,6 +410,12 @@ fn headless(args: Args) {
             }
         }
         game.advance(FRAME);
+        gfx.observe(&game);
+        if game.wants_snap() {
+            let (w, h) = gfx.renderer.size();
+            let rgba = gfx.capture(&game);
+            game.take_snap(&rgba, w as usize, h as usize);
+        }
     }
     if script.failures > 0 {
         println!("{} playbook failure(s)", script.failures);
@@ -397,18 +485,6 @@ fn start_sound(synth: Arc<Mutex<Synth>>) -> Option<cpal::Stream> {
 }
 
 impl App {
-    /// Pauses or resumes, saying so in the title bar.
-    fn set_paused(&mut self, on: bool) {
-        let _ = self.game.command(if on { "pause" } else { "resume" });
-        if let Some(win) = &self.win {
-            win.window.set_title(if on {
-                "zawnabout (paused, press Esc to keep flying)"
-            } else {
-                "zawnabout"
-            });
-        }
-    }
-
     fn new(args: Args) -> Self {
         let script = args
             .script
@@ -425,8 +501,12 @@ impl App {
             });
             rx
         });
+        let mut game = Game::new(args.seed);
+        if args.no_play {
+            game.play = None;
+        }
         Self {
-            game: Game::new(args.seed),
+            game,
             args,
             win: None,
             gilrs: Gilrs::new().ok(),
@@ -447,7 +527,7 @@ impl App {
         let Some(gilrs) = &mut self.gilrs else { return };
         while gilrs.next_event().is_some() {}
         let Some((_, pad)) = gilrs.gamepads().next() else {
-            self.game.input.gamepad(&[], &[]);
+            self.game.gamepad(&[], &[]);
             return;
         };
         let axes = [
@@ -479,7 +559,7 @@ impl App {
             .iter()
             .map(|b| pad.button_data(*b).map(|d| d.value()).unwrap_or(0.0))
             .collect();
-        self.game.input.gamepad(&axes, &buttons);
+        self.game.gamepad(&axes, &buttons);
     }
 
     fn frame(&mut self) {
@@ -526,6 +606,7 @@ impl App {
         }
 
         self.game.advance(dt);
+        answer_asks(&mut self.game);
         if self.args.debug {
             self.title_at -= dt;
             if self.title_at <= 0.0 {
@@ -549,6 +630,12 @@ impl App {
             ..Default::default()
         });
         win.gfx.render(&self.game, &view);
+        // A postcard's view: read it back as its picture.
+        if self.game.wants_snap() {
+            let (w, h) = win.gfx.renderer.size();
+            let rgba = win.gfx.capture(&self.game);
+            self.game.take_snap(&rgba, w as usize, h as usize);
+        }
         if let Some(s) = &self.synth {
             let mix = win.gfx.sound(&self.game);
             if let Ok(mut s) = s.lock() {
@@ -615,10 +702,22 @@ impl ApplicationHandler for App {
         surface.configure(&device, &config);
         let renderer = Renderer::new(device, queue, view_format, (config.width, config.height));
         let gfx = Gfx::new(renderer, &self.game);
-        // Played in a window, the game draws its own map and help, with the player's keys.
+        // Played in a window, the game draws its own map and notes, with the player's
+        // keys, settings and saved game, and starts on the journal, paused.
         self.game.hud.on = true;
         if let Some(text) = keys_file().and_then(|f| std::fs::read_to_string(f).ok()) {
             self.game.bindings.set_text(&text);
+        }
+        if let Some(text) = data_file("prefs.txt").and_then(|f| std::fs::read_to_string(f).ok()) {
+            self.game.set_prefs_text(&text);
+        }
+        if let Some(text) = data_file(SLOT).and_then(|f| std::fs::read_to_string(f).ok())
+            && let Err(e) = self.game.load_save(&text)
+        {
+            eprintln!("save: {e}");
+        }
+        if self.script.is_none() && !self.args.debug {
+            self.game.open_book();
         }
         if !self.args.mute {
             let synth = Arc::new(Mutex::new(Synth::new()));
@@ -640,13 +739,22 @@ impl ApplicationHandler for App {
 
     fn window_event(&mut self, el: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => el.exit(),
+            // Closing keeps the game where it is, to carry on next time.
+            WindowEvent::CloseRequested => {
+                if self.script.is_none()
+                    && let Some(text) = self.game.save_text()
+                {
+                    write_data(SLOT, &text);
+                }
+                el.exit()
+            }
             WindowEvent::Resized(s) => self.resize(s.width, s.height),
-            // Leaving the window pauses, as the web page does. Esc or P resumes.
+            // Leaving the window opens the journal, as the web page does, unless that
+            // is turned off.
             WindowEvent::Focused(false) => {
                 self.game.release_keys();
-                if !self.args.debug {
-                    self.set_paused(true);
+                if !self.args.debug && self.game.pause_away && !self.game.feedback.active {
+                    self.game.open_book();
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -660,6 +768,11 @@ impl ApplicationHandler for App {
                     }
                 }
                 self.cursor = (position.x, position.y);
+                if let Some(win) = &self.win {
+                    let (w, h) = (win.config.width as f64, win.config.height as f64);
+                    self.game
+                        .ui_hover((position.x / w) as f32, (position.y / h) as f32);
+                }
             }
             WindowEvent::MouseInput {
                 state,
@@ -678,10 +791,13 @@ impl ApplicationHandler for App {
                         (self.cursor.1 / h) as f32,
                         (w / h) as f32,
                     );
-                    // In notes mode a click starts a note there, otherwise it lands there.
-                    if self.game.feedback.active {
+                    // The journal and cards take clicks first. In notes mode a click starts a
+                    // note there, otherwise it lands there.
+                    if self.game.ui_click(nx, ny) {
+                        answer_asks(&mut self.game);
+                    } else if self.game.feedback.active {
                         self.game.notes_pick(nx, ny, aspect);
-                    } else {
+                    } else if !self.game.halted() {
                         self.game.tap(nx, ny, aspect);
                     }
                 }
@@ -704,47 +820,20 @@ impl ApplicationHandler for App {
                     }
                     return;
                 }
-                // The HUD's panels and notes take keys first, and its panels pause the
-                // game while open. Held keys repeat only while writing a note.
+                // The journal, cards, map and notes take keys first, and pause the game
+                // while they are up. Held keys repeat only while writing a note.
                 let writing = self.game.hud.writing.is_some();
                 if event.state.is_pressed() && (!event.repeat || writing) {
-                    let was = self.game.hud.open();
                     let in_notes = self.game.feedback.active;
-                    if self.game.hud_key(&name, event.text.as_deref()) == HudKey::Used {
+                    if self.game.ui_key(&name, event.text.as_deref()) == HudKey::Used {
                         sync_notes(&mut self.game, &self.notes);
                         // Entering notes mode reads the folder again, for replies.
                         if !in_notes && self.game.feedback.active {
                             self.game.set_notes(load_notes(&self.notes));
                         }
-                        if std::mem::take(&mut self.game.hud.changed)
-                            && let Some(f) = keys_file()
-                        {
-                            let _ = std::fs::create_dir_all(f.parent().unwrap_or(Path::new(".")));
-                            let _ = std::fs::write(f, self.game.bindings.to_text());
-                        }
-                        let open = self.game.hud.open();
-                        if open != was || (!open && self.game.paused) {
-                            self.set_paused(open);
-                        }
+                        answer_asks(&mut self.game);
                         return;
                     }
-                }
-                if matches!(name.as_str(), "Escape" | "KeyP") && event.state.is_pressed() {
-                    if !event.repeat {
-                        let paused = self.game.paused;
-                        self.set_paused(!paused);
-                    }
-                    return;
-                }
-                // U sets the sound, paused or not.
-                if name == "KeyU" {
-                    self.game.key(&name, event.state.is_pressed(), event.repeat);
-                    return;
-                }
-                if self.game.paused && event.state.is_pressed() {
-                    // Any other key just wakes it.
-                    self.set_paused(false);
-                    return;
                 }
                 self.game.key(&name, event.state.is_pressed(), event.repeat);
             }

@@ -14,7 +14,7 @@ struct Out {
 }
 
 @group(0) @binding(0) var atlas: texture_2d<f32>;
-@group(0) @binding(1) var nearest: sampler;
+@group(0) @binding(1) var soft: sampler;
 
 @vertex
 fn vs_hud(v: In) -> Out {
@@ -27,5 +27,5 @@ fn vs_hud(v: In) -> Out {
 
 @fragment
 fn fs_hud(o: Out) -> @location(0) vec4<f32> {
-    return textureSample(atlas, nearest, o.uv) * o.color;
+    return textureSample(atlas, soft, o.uv) * o.color;
 }

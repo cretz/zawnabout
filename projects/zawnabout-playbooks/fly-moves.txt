@@ -1,0 +1,47 @@
+# Gameplay: stunts from moves. Flat out flapping, a steep dive with fire, a high climb,
+# circles, a long glide, skimming the sea, a splash and the deepest caverns.
+play reset
+goto 5200 1600 400 270
+hold flap
+wait 28
+expect flown faster-than-wind
+release all
+goto 5200 1600 1500 270
+hold flap
+wait 3
+release all
+hold tuck
+hold pitch -1
+hold breath
+wait 4
+expect flown falling-star
+expect flown dragon-comet
+release all
+goto 5200 1600 1550 270
+wait 0.5
+expect flown sky-high
+goto 5200 1600 800 270
+hold turn 1
+wait 25
+expect flown dizzy-dragon
+release all
+goto 5200 1600 900 270
+wait 32
+expect flown long-glide
+goto 5200 1600 3 270
+hold flap
+wait 8
+expect flown wave-skimmer
+release all
+goto 5200 1600 300 270
+hold tuck
+hold pitch -1
+wait-until ground 15
+wait 0.4
+expect flown big-splash
+release all
+place -1800 -1050 -1500 0
+wait 0.5
+expect flown deep-down
+book flying
+shot moves.png

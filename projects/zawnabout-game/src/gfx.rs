@@ -30,6 +30,25 @@ struct DragonIds {
 
 pub struct Gfx {
     pub renderer: Renderer,
+    /// Treasure models by kind, the glint star over a find, and the hoard's coin heap.
+    treasures: Vec<(&'static str, MeshId)>,
+    star: MeshId,
+    heap: MeshId,
+    /// The postcard pictures in the atlas, as of this version of them.
+    pics_version: u32,
+    /// Talk bubbles: plain, and for someone with a favor.
+    bubbles: [MeshId; 2],
+    /// The journal on its stand in the lair.
+    lectern: MeshId,
+    /// Bunting flags, paper lanterns and their poles, for what finished sets bring.
+    flag: MeshId,
+    paper_lantern: MeshId,
+    pole: MeshId,
+    /// A story's lamp: an old iron lamp on a stone post.
+    brazier: MeshId,
+    /// A passenger's basket seat, and the umbrella they float down under.
+    saddle: MeshId,
+    umbrella: MeshId,
     dragon: DragonIds,
     terrain: TerrainMeshes,
     /// Water meshes with bounding spheres, and whether each is in a cave.
@@ -61,6 +80,8 @@ pub struct Gfx {
     /// Grass tufts around the camera, rebuilt when it moves to another cell.
     tuft: MeshId,
     tufts: std::cell::RefCell<((i32, i32), Vec<Instance>)>,
+    /// The sparser ring of tufts further out, rebuilt less often.
+    far_tufts: std::cell::RefCell<((i32, i32), Vec<Instance>)>,
     /// One mesh per vehicle, in the order of the sim's traffic.
     vehicles: Vec<MeshId>,
     /// Every lamp's head and foot, and whether it is underground where it always burns.
@@ -74,6 +95,8 @@ pub struct Gfx {
     /// The HUD's world map, drawn on another thread the first time the HUD shows, and
     /// whether it is in the atlas yet.
     hud_map: (Option<std::sync::mpsc::Receiver<Vec<u8>>>, bool),
+    /// The journal's smaller map, drawn a few rows a frame where the HUD's is not.
+    book_map: Option<crate::map::MapJob>,
 }
 
 /// A point light: position, reach and color.
@@ -180,6 +203,8 @@ const DISTANT: f32 = 3.0;
 /// this many times the prop range.
 const SMALL_TILE: f32 = 256.0;
 const SMALL_REACH: f32 = 0.14;
+/// The journal's own map, when there is no HUD map, in pixels square.
+const BOOK_MAP: u32 = 512;
 /// Water merges per square of this size (m).
 const WATER_TILE: f32 = 4096.0;
 
@@ -700,6 +725,27 @@ impl Gfx {
         }
 
         let renderer_spray = renderer.add_mesh(&models::spray());
+        let treasures = crate::treasure::KINDS
+            .iter()
+            .map(|k| (*k, renderer.add_mesh(&crate::treasure::treasure(k))))
+            .collect();
+        let star = renderer.add_mesh(&crate::treasure::star());
+        let lectern = renderer.add_mesh(&crate::treasure::lectern());
+        let flag = renderer.add_mesh(&crate::treasure::flag());
+        let paper_lantern = renderer.add_mesh(&crate::treasure::paper_lantern());
+        let pole = renderer.add_mesh(&crate::treasure::pole());
+        let brazier = renderer.add_mesh(&crate::treasure::brazier());
+        let saddle = renderer.add_mesh(&crate::treasure::saddle());
+        let umbrella = renderer.add_mesh(&crate::treasure::umbrella());
+        let bubbles = [
+            renderer.add_mesh(&crate::treasure::bubble(false)),
+            renderer.add_mesh(&crate::treasure::bubble(true)),
+        ];
+        let heap = {
+            let mut m = MeshBuilder::new();
+            crate::treasure::coins(&mut m, 1.0);
+            renderer.add_mesh(&m)
+        };
         let flame = renderer.add_mesh(&models::flame());
         let pool = renderer.add_mesh(&models::pool());
         let tuft = renderer.add_mesh(&models::tuft());
@@ -818,6 +864,18 @@ impl Gfx {
             renderer,
             dragon,
             terrain: TerrainMeshes::default(),
+            treasures,
+            star,
+            heap,
+            pics_version: 0,
+            bubbles,
+            lectern,
+            flag,
+            paper_lantern,
+            pole,
+            brazier,
+            saddle,
+            umbrella,
             water,
             spray: renderer_spray,
             flame,
@@ -839,10 +897,12 @@ impl Gfx {
             mouths,
             plug,
             tufts: std::cell::RefCell::new(((i32::MAX, 0), Vec::new())),
+            far_tufts: std::cell::RefCell::new(((i32::MAX, 0), Vec::new())),
             falls: crate::water::falls_feet(&game.sim.world.terrain),
             listener: crate::audio::Listener::new(game),
             chunk_budget: 3,
             hud_map: (None, false),
+            book_map: None,
         };
         gfx.update_terrain(game, usize::MAX);
         gfx
@@ -908,6 +968,7 @@ impl Gfx {
             // Mist lies in the low ground from first light, and burns off by mid morning.
             valley_fog: smooth(4.8, 6.2, sky.hour) * (1.0 - smooth(7.8, 10.0, sky.hour)),
             rainbow: 0.0,
+            bow: Vec3::NEG_Y,
         };
         // Inside a cloud the world whites out into mist close round, and under a rain
         // cloud the light turns grey.
@@ -963,6 +1024,7 @@ impl Gfx {
                 * (1.0 - rain)
                 * (1.0 - mist)
                 * open_sky as u8 as f32;
+            l.bow = rainbow_center(-l.sun_dir.normalize_or(Vec3::Y), cam);
         }
 
         let alpha = game.alpha();
@@ -1082,7 +1144,13 @@ impl Gfx {
         }
 
         let caves = lighting.underground > 0.05 || world.terrain.near_voids(game.camera.pos, 150.0);
-        let (mut fx, lights) = time("effects", || self.effects(game, caves, t));
+        let dark: Vec<Vec4> = game
+            .play
+            .as_ref()
+            .map(crate::play::dark)
+            .unwrap_or_default();
+        let (mut fx, lights) = time("effects", || self.effects(game, caves, t, &dark));
+        time("play", || self.play(game, t, night, &mut draws, &mut fx));
         // People live underground too, so their towns' life draws near the caves.
         if outside || caves {
             time("life", || {
@@ -1093,6 +1161,8 @@ impl Gfx {
                     t,
                     sim_time,
                     night,
+                    game.play.as_ref().and_then(crate::play::riding_folk),
+                    &dark,
                     &mut draws,
                     &mut fx,
                 )
@@ -1109,6 +1179,40 @@ impl Gfx {
                     &mut fx,
                 )
             });
+        }
+        // Nobody stands inside a wall: anyone whose way crosses one waits out of sight
+        // until they are through. Whoever is left nearest the dragon can be talked to.
+        {
+            let (body, heads) = self.life.people();
+            let cam = game.camera.pos;
+            draws.retain(|(m, inst)| {
+                if *m != body && !heads.contains(m) {
+                    return true;
+                }
+                let at = Vec3::from_slice(&inst.model[3][..3]);
+                at.distance(cam) > 200.0 || !world.in_building(at + Vec3::Y * 1.0)
+            });
+            let me = game.player_dragon().pos;
+            let feet = me.y - game.sim.flight.stand_height;
+            let near = draws
+                .iter()
+                .filter(|(m, _)| *m == body)
+                .map(|(_, inst)| Vec3::from_slice(&inst.model[3][..3]))
+                // Not a passenger on the dragon's own back.
+                .filter(|p| {
+                    (p.y - feet).abs() < 2.5 && Vec2::new(p.x - me.x, p.z - me.z).length() > 1.2
+                })
+                .min_by(|a, b| a.distance(me).total_cmp(&b.distance(me)))
+                .filter(|p| p.distance(me) < 12.0)
+                .map(|p| {
+                    let q = |v: f32| (v / 3.0).round() as i32 as u32;
+                    (
+                        p,
+                        (q(p.x).wrapping_mul(73_856_093) ^ q(p.z).wrapping_mul(19_349_663))
+                            | 1 << 31,
+                    )
+                });
+            game.near_drawn.set(near);
         }
         if outside {
             time("weather", || {
@@ -1204,86 +1308,468 @@ impl Gfx {
             rings,
             fx,
             lights,
+            dark: dark.clone(),
             clouds: if outside {
                 self.weather.shadows(game.camera.pos, game.time as f32)
             } else {
                 Vec::new()
             },
-            hud: {
+            // A postcard's picture is the plain view.
+            hud: if game.wants_snap() {
+                Vec::new()
+            } else {
                 let d = game.player_dragon();
+                let hoard = game.hoard_view();
+                let view = crate::book::View {
+                    hoard: hoard.as_ref(),
+                    binds: &game.bindings,
+                    muted: game.muted,
+                    pause_away: game.pause_away,
+                    hold_hour: game.hold_hour,
+                    touch: game.touch,
+                    hud: game.hud.on,
+                    map: game.map_view(),
+                };
                 game.hud.build(
                     self.renderer.size(),
                     glam::Vec2::new(d.pos.x, d.pos.z),
                     d.heading,
                     game.sim.world.terrain.def.bounds,
-                    &game.bindings,
                     self.hud_map.1,
                     game.feedback.active,
-                    game.paused,
-                    game.muted,
+                    &view,
                 )
             },
+        }
+    }
+
+    /// Finds the townsperson close enough to talk to, where the townsfolk are known.
+    /// Drawing does this every frame. Hosts that do not draw every frame call it.
+    pub fn observe(&self, game: &Game) {
+        let me = game.player_dragon();
+        let near = (game.play.is_some() && me.mode == zawnabout_sim::Mode::Ground)
+            .then(|| {
+                self.life.nearest_person(
+                    &game.sim.world,
+                    me.pos,
+                    game.folk_search,
+                    game.time as f32,
+                    game.sky().night,
+                )
+            })
+            .flatten();
+        game.near_folk.set(near);
+    }
+
+    /// Gameplay on top: finds still lying about, each glinting now and then when the sun
+    /// catches it (softly glowing at night and underground), and the hoard heaped up
+    /// in its lair with every treasure set round it.
+    /// A story's lamps, lit or waiting for fire.
+    fn story_lamps(&self, game: &Game, draws: &mut Vec<(MeshId, Instance)>) {
+        let Some(play) = &game.play else { return };
+        let cam = game.camera.pos;
+        for (foot, _) in crate::play::lamps(play) {
+            if foot.distance(cam) > 600.0 {
+                continue;
+            }
+            let day = game.sim.world.terrain.daylight(foot + Vec3::Y);
+            let m = Mat4::from_translation(foot);
+            draws.push((
+                self.brazier,
+                Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+            ));
+        }
+    }
+
+    /// What finished sets bring: people come out, bunting and lanterns go up.
+    fn set_effects(
+        &self,
+        game: &Game,
+        play: &crate::play::Play,
+        t: f32,
+        night: f32,
+        draws: &mut Vec<(MeshId, Instance)>,
+        fx: &mut Vec<(MeshId, Instance)>,
+    ) {
+        const FLAGS: [u32; 5] = [0xE0564A, 0xF2C230, 0x4A7FE0, 0x5CC06A, 0xFFF6E6];
+        const PAPER: [u32; 4] = [0xFF9A3C, 0xE84A4A, 0xFFD25A, 0xFF8FB0];
+        let cam = game.camera.pos;
+        let world = &game.sim.world;
+        let me = game.player_dragon();
+        let (body, heads) = self.life.people();
+        for e in crate::play::effects(play) {
+            if e.a.distance(cam) > 500.0 {
+                continue;
+            }
+            let day = world.terrain.daylight(e.a + Vec3::Y);
+            if e.kind == "folk" {
+                let to = me.pos - e.a;
+                let face = if to.length() < 15.0 {
+                    to.x.atan2(to.z)
+                } else {
+                    e.facing
+                };
+                let bob = (t * 3.0 + e.id as f32 * 1.7).sin().abs() * 0.12;
+                let sway = (t * 1.3 + e.id as f32).sin() * 0.06;
+                let m = Mat4::from_rotation_translation(
+                    Quat::from_rotation_y(face + sway),
+                    e.a + Vec3::Y * bob,
+                );
+                let shirt = linear(Rgb(LOCAL_SHIRTS[e.look as usize % LOCAL_SHIRTS.len()]), 1.0);
+                draws.push((body, Instance::tinted(m, shirt.extend(day))));
+                draws.push((
+                    heads[e.look as usize % 3],
+                    Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+                ));
+                continue;
+            }
+            // A pole at each end, and the string sagging between.
+            for top in [e.a, e.b] {
+                let ground = world.support_still(top.x, top.z, top.y);
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, top.y - ground + 0.3, 1.0),
+                    Quat::IDENTITY,
+                    Vec3::new(top.x, ground, top.z),
+                );
+                draws.push((
+                    self.pole,
+                    Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+                ));
+            }
+            let span = e.b - e.a;
+            let len = span.length();
+            let lanterns = e.kind == "lanterns";
+            let gap = if lanterns { 2.6 } else { 1.3 };
+            let n = (len / gap).max(1.0) as usize;
+            let yaw = span.x.atan2(span.z) - std::f32::consts::FRAC_PI_2;
+            for k in 1..n {
+                let u = k as f32 / n as f32;
+                let sag = len * 0.04 * 4.0 * u * (1.0 - u);
+                let at = e.a + span * u - Vec3::Y * sag;
+                let swing = (t * 1.6 + k as f32 * 0.9 + e.id as f32).sin() * 0.12;
+                let m = Mat4::from_rotation_translation(
+                    Quat::from_rotation_y(yaw) * Quat::from_rotation_x(swing),
+                    at,
+                );
+                if lanterns {
+                    let c = linear(Rgb(PAPER[(k + e.id) % PAPER.len()]), 1.0);
+                    let glow = (day + night * 1.5).min(2.0);
+                    draws.push((self.paper_lantern, Instance::tinted(m, c.extend(glow))));
+                    if night > 0.05 && at.distance(cam) < 300.0 {
+                        let p = at - Vec3::Y * 0.45;
+                        let face =
+                            Quat::from_rotation_arc(Vec3::Y, (cam - p).normalize_or(Vec3::Y));
+                        let s = Mat4::from_scale_rotation_translation(Vec3::splat(1.6), face, p);
+                        fx.push((
+                            self.star,
+                            Instance::tinted(s, (c * 1.4).extend(0.5 * night)),
+                        ));
+                    }
+                } else {
+                    let c = linear(Rgb(FLAGS[(k + e.id) % FLAGS.len()]), 1.0);
+                    draws.push((self.flag, Instance::tinted(m, c.extend(day))));
+                }
+            }
+        }
+    }
+
+    fn play(
+        &self,
+        game: &Game,
+        t: f32,
+        night: f32,
+        draws: &mut Vec<(MeshId, Instance)>,
+        fx: &mut Vec<(MeshId, Instance)>,
+    ) {
+        let Some(play) = &game.play else { return };
+        let cam = game.camera.pos;
+        let world = &game.sim.world;
+        self.observe(game);
+        let me = game.player_dragon();
+        let model = |kind: &str| {
+            self.treasures
+                .iter()
+                .find(|(k, _)| *k == kind)
+                .map_or(self.heap, |(_, m)| *m)
+        };
+        let mut shinies = Vec::new();
+        crate::play::shinies(play, &mut shinies);
+        let gold = linear(Rgb(0xFFE7A0), 1.0);
+        for s in shinies {
+            let dist = s.pos.distance(cam);
+            if dist > 160.0 {
+                continue;
+            }
+            let day = world.terrain.daylight(s.pos + Vec3::Y);
+            let turn = s.id as f32 * 2.39;
+            let m = Mat4::from_rotation_translation(Quat::from_rotation_y(turn), s.pos);
+            draws.push((
+                model(s.kind),
+                Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+            ));
+            // A quick twinkle every few seconds, each find on its own beat, seen only
+            // from close by. In the dark, a soft steady glow instead.
+            let fade = 1.0 - smooth(50.0, 80.0, dist);
+            if fade <= 0.0 {
+                continue;
+            }
+            let phase = (t * 0.4 + s.id as f32 * 0.377).fract();
+            let twinkle = (1.0 - (phase - 0.5).abs() * 9.0).max(0.0);
+            let sun = day * (1.0 - night);
+            let k = (twinkle * sun + (1.0 - sun) * 0.4) * fade;
+            if k < 0.02 {
+                continue;
+            }
+            let at = s.pos + Vec3::Y * 1.3;
+            let to_cam = (cam - at).normalize_or(Vec3::Y);
+            let size = 0.5 + 1.6 * twinkle * sun + 0.004 * dist;
+            let face = Quat::from_rotation_arc(Vec3::Y, to_cam) * Quat::from_rotation_y(t * 0.6);
+            let m = Mat4::from_scale_rotation_translation(Vec3::splat(size), face, at);
+            fx.push((self.star, Instance::tinted(m, (gold * 1.6).extend(k))));
+        }
+        // Named locals, turned toward the dragon when it is near, and lost things.
+        let lit = |id: &str| game.sim.beacon(id).is_some_and(|(_, lit)| lit);
+        let (mut locals, mut lost) = (Vec::new(), Vec::new());
+        let carried = crate::play::people(play, &lit, &mut locals, &mut lost);
+        let (body, heads) = self.life.people();
+        for l in &locals {
+            if l.pos.distance(cam) > 450.0 {
+                continue;
+            }
+            let to = me.pos - l.pos;
+            let face = if to.length() < 15.0 {
+                to.x.atan2(to.z)
+            } else {
+                l.facing
+            };
+            let sway = (t * 1.3 + l.id as f32).sin() * 0.04;
+            // Someone with a favor hops about to catch the dragon's eye.
+            let hop = if l.ask && to.length() < 80.0 {
+                (t * 4.0 + l.id as f32).sin().abs() * 0.3
+            } else {
+                0.0
+            };
+            let m = Mat4::from_rotation_translation(
+                Quat::from_rotation_y(face + sway),
+                l.pos + Vec3::Y * hop,
+            );
+            let day = world.terrain.daylight(l.pos + Vec3::Y);
+            let shirt = linear(Rgb(LOCAL_SHIRTS[l.look as usize % LOCAL_SHIRTS.len()]), 1.0);
+            draws.push((body, Instance::tinted(m, shirt.extend(day))));
+            draws.push((
+                heads[l.look as usize % 3],
+                Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+            ));
+        }
+        for item in &lost {
+            if item.pos.distance(cam) > 300.0 {
+                continue;
+            }
+            let m = Mat4::from_translation(item.pos);
+            draws.push((model(item.kind), Instance::tinted(m, Vec4::ONE)));
+            let k = 0.5 + 0.5 * (t * 2.0).sin();
+            let at = item.pos + Vec3::Y * 1.3;
+            let face = Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y));
+            // Big enough to spot from a way off, so "around here" is easy.
+            let size = 1.0 + k * 1.2 + item.pos.distance(cam) * 0.02;
+            let s = Mat4::from_scale_rotation_translation(Vec3::splat(size), face, at);
+            fx.push((self.star, Instance::tinted(s, (gold * 1.6).extend(0.8))));
+        }
+        // A passenger sits in a basket on the dragon's back, just behind the shoulders.
+        if let Some(rider) = crate::play::rider(play)
+            && let Some(v) = game.visual(game.player)
+        {
+            let mut parts = Vec::new();
+            v.parts(game.alpha(), &mut parts);
+            if let Some((_, body_m, _)) =
+                parts.iter().find(|(p, _, _)| *p == crate::pose::Part::Body)
+            {
+                let day = world.terrain.daylight(me.pos);
+                let seat = *body_m
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.9, 0.7, 0.9),
+                        Quat::IDENTITY,
+                        Vec3::new(0.0, 0.3, 0.25),
+                    );
+                draws.push((
+                    self.saddle,
+                    Instance::tinted(seat, Vec4::new(1.0, 1.0, 1.0, day)),
+                ));
+                let seat = *body_m
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.75, 0.55, 0.75),
+                        Quat::IDENTITY,
+                        Vec3::new(0.0, 0.42, 0.25),
+                    );
+                let shirt = linear(
+                    Rgb(LOCAL_SHIRTS[rider.look as usize % LOCAL_SHIRTS.len()]),
+                    1.0,
+                );
+                let day = world.terrain.daylight(me.pos);
+                draws.push((body, Instance::tinted(seat, shirt.extend(day))));
+                let head = *body_m
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::splat(0.75),
+                        Quat::IDENTITY,
+                        Vec3::new(0.0, 0.1, 0.25),
+                    );
+                draws.push((
+                    heads[rider.look as usize % 3],
+                    Instance::tinted(head, Vec4::new(1.0, 1.0, 1.0, day)),
+                ));
+            }
+        }
+        // Whatever the passenger points at twinkles big, so "over there" is easy to see.
+        if let Some((at, left)) = game.point_at {
+            let k = 0.5 + 0.5 * (t * 4.0).sin();
+            let at = at + Vec3::Y * 1.5;
+            let size = 1.5 + k * 1.5 + at.distance(cam) * 0.012;
+            let face = Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y))
+                * Quat::from_rotation_y(t * 1.5);
+            let m = Mat4::from_scale_rotation_translation(Vec3::splat(size), face, at);
+            fx.push((
+                self.star,
+                Instance::tinted(m, (gold * 1.8).extend(left.min(1.0))),
+            ));
+        }
+        // Passengers who hopped off mid-air, drifting down under their umbrellas.
+        for f in &game.floaters {
+            let (at, _) = f.at();
+            let day = world.terrain.daylight(at + Vec3::Y);
+            let sway = (f.age * 1.3).sin() * 0.15;
+            let m = Mat4::from_rotation_translation(Quat::from_rotation_z(sway), at);
+            let shirt = linear(Rgb(LOCAL_SHIRTS[f.look as usize % LOCAL_SHIRTS.len()]), 1.0);
+            draws.push((body, Instance::tinted(m, shirt.extend(day))));
+            draws.push((
+                heads[f.look as usize % 3],
+                Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+            ));
+            let u = m * Mat4::from_translation(Vec3::new(0.3, 1.2, 0.0));
+            draws.push((
+                self.umbrella,
+                Instance::tinted(u, Vec4::new(1.0, 1.0, 1.0, day)),
+            ));
+        }
+        self.set_effects(game, play, t, night, draws, fx);
+        self.story_lamps(game, draws);
+        // A carried thing rides in the dragon's arms.
+        if let Some(kind) = carried {
+            let m = Mat4::from_scale_rotation_translation(
+                Vec3::splat(0.6),
+                Quat::from_rotation_y(me.heading),
+                me.pos + Vec3::new(me.heading.sin(), 0.0, me.heading.cos()) * 1.3 - Vec3::Y * 0.4,
+            );
+            draws.push((model(kind), Instance::new(m)));
+        }
+        // A bubble over whoever the dragon could talk to.
+        if let Some(who) = game.listener() {
+            let at = who.bubble() + Vec3::Y * (t * 2.5).sin() * 0.08;
+            let to = (cam - at).normalize_or(Vec3::Z);
+            let face =
+                Quat::from_rotation_arc(Vec3::Z, Vec3::new(to.x, 0.0, to.z).normalize_or(Vec3::Z));
+            let m = Mat4::from_scale_rotation_translation(Vec3::splat(1.3), face, at);
+            let ask = game.listener_asks() as usize;
+            draws.push((self.bubbles[ask], Instance::new(m)));
+        }
+        if let Some(heap) = crate::play::heap(play)
+            && heap.at.distance(cam) < 400.0
+        {
+            let ground = |x: f32, z: f32| world.support_still(x, z, heap.at.y + 3.0);
+            let day = world.terrain.daylight(heap.at + Vec3::Y * 2.0);
+            let tint = Vec4::new(1.0, 1.0, 1.0, day);
+            let size = (0.5 + (heap.gold as f32).sqrt() * 0.14).min(6.0);
+            if heap.gold > 0 {
+                let at = Vec3::new(heap.at.x, ground(heap.at.x, heap.at.z), heap.at.z);
+                let m =
+                    Mat4::from_scale_rotation_translation(Vec3::splat(size), Quat::IDENTITY, at);
+                draws.push((self.heap, Instance::tinted(m, tint)));
+            }
+            // The journal on its stand beside the heap.
+            let (x, z) = (heap.at.x - size - 2.2, heap.at.z);
+            let m = Mat4::from_translation(Vec3::new(x, ground(x, z), z));
+            draws.push((self.lectern, Instance::tinted(m, tint)));
+            // Treasures in rings round the heap, the newest furthest out.
+            for (k, kind) in heap.kinds.iter().enumerate() {
+                let ring = k / 10;
+                let a = (k % 10) as f32 / 10.0 * std::f32::consts::TAU + ring as f32 * 0.31;
+                let r = size * 1.1 + 1.6 + ring as f32 * 1.7;
+                let (x, z) = (heap.at.x + a.cos() * r, heap.at.z + a.sin() * r);
+                let m = Mat4::from_rotation_translation(
+                    Quat::from_rotation_y(-a + std::f32::consts::FRAC_PI_2),
+                    Vec3::new(x, ground(x, z), z),
+                );
+                draws.push((model(kind), Instance::tinted(m, tint)));
+            }
         }
     }
 
     /// Tufts of grass on every lawn near the camera, swaying. They sit on a fixed world
     /// grid, so they stay put as the camera moves, and shrink away at the edge.
     fn grass(&self, game: &Game, draws: &mut Vec<(MeshId, Instance)>) {
-        const STEP: f32 = 2.4;
-        const RANGE: f32 = 46.0;
         let terrain = &game.sim.world.terrain;
         let cam = game.camera.pos;
-        if cam.y - terrain.height(cam.x, cam.z) > 70.0 {
+        if cam.y - terrain.height(cam.x, cam.z) > 90.0 {
             return;
         }
-        let key = ((cam.x / 6.0).floor() as i32, (cam.z / 6.0).floor() as i32);
-        let mut cache = self.tufts.borrow_mut();
-        if cache.0 != key {
-            cache.0 = key;
-            cache.1.clear();
-            let center = Vec2::new(key.0 as f32 + 0.5, key.1 as f32 + 0.5) * 6.0;
-            let n = (RANGE / STEP).ceil() as i32;
-            let (ci, cj) = ((center.x / STEP) as i32, (center.y / STEP) as i32);
-            for j in cj - n..=cj + n {
-                for i in ci - n..=ci + n {
-                    let seed =
-                        (i as u32).wrapping_mul(73_856_093) ^ (j as u32).wrapping_mul(19_349_663);
-                    let r = |k: u32| zawnabout_sim::shape::hash(seed.wrapping_add(k));
-                    let x = (i as f32 + r(1)) * STEP;
-                    let z = (j as f32 + r(2)) * STEP;
-                    let d = Vec2::new(x, z).distance(center);
-                    if d > RANGE {
-                        continue;
+        // Thick close by, and a sparser ring of bigger tufts out to where the eye still
+        // reads the ground as grass, so it never seems to start right underfoot.
+        let rings = [
+            (&self.tufts, 6.0f32, 2.4f32, 0.0f32, 50.0f32, 1.0f32),
+            (&self.far_tufts, 24.0, 5.0, 44.0, 100.0, 1.45),
+        ];
+        for (cache, cell, step, inner, range, grow) in rings {
+            let key = ((cam.x / cell).floor() as i32, (cam.z / cell).floor() as i32);
+            let mut cache = cache.borrow_mut();
+            if cache.0 != key {
+                cache.0 = key;
+                cache.1.clear();
+                let center = Vec2::new(key.0 as f32 + 0.5, key.1 as f32 + 0.5) * cell;
+                let n = (range / step).ceil() as i32;
+                let (ci, cj) = ((center.x / step) as i32, (center.y / step) as i32);
+                for j in cj - n..=cj + n {
+                    for i in ci - n..=ci + n {
+                        let seed = (i as u32).wrapping_mul(73_856_093)
+                            ^ (j as u32).wrapping_mul(19_349_663)
+                            ^ (step * 10.0) as u32;
+                        let r = |k: u32| zawnabout_sim::shape::hash(seed.wrapping_add(k));
+                        let x = (i as f32 + r(1)) * step;
+                        let z = (j as f32 + r(2)) * step;
+                        let d = Vec2::new(x, z).distance(center);
+                        if d > range || d < inner {
+                            continue;
+                        }
+                        let y = terrain.height(x, z);
+                        let at = Vec3::new(x, y, z);
+                        if terrain.water(x, z, y).is_some()
+                            || terrain.road_spot(x, z, 1.5).is_some()
+                            || terrain.on_pad(x, z)
+                        {
+                            continue;
+                        }
+                        let Some(color) =
+                            crate::terrain_mesh::lawn(terrain, at, terrain.normal(x, z))
+                        else {
+                            continue;
+                        };
+                        // The drawn ground rounds off cliff edges, so keep back from them.
+                        if terrain.rim(x, z, 5.0) > 1.2 {
+                            continue;
+                        }
+                        let fade = (1.0 - smooth(range * 0.7, range, d))
+                            * smooth(inner * 0.9, inner + 8.0, d).max((inner == 0.0) as u8 as f32);
+                        let size = (0.8 + r(3) * 0.7) * fade * grow;
+                        let m = Mat4::from_scale_rotation_translation(
+                            Vec3::new(size, size * (0.8 + r(4) * 0.5), size),
+                            Quat::from_rotation_y(r(5) * std::f32::consts::TAU),
+                            at - Vec3::Y * 0.05,
+                        );
+                        let tint = linear(color, 1.0) * (0.85 + r(6) * 0.3);
+                        cache.1.push(Instance::tinted(m, tint.extend(1.0)));
                     }
-                    let y = terrain.height(x, z);
-                    let at = Vec3::new(x, y, z);
-                    if terrain.water(x, z, y).is_some()
-                        || terrain.road_spot(x, z, 1.5).is_some()
-                        || terrain.on_pad(x, z)
-                    {
-                        continue;
-                    }
-                    let Some(color) = crate::terrain_mesh::lawn(terrain, at, terrain.normal(x, z))
-                    else {
-                        continue;
-                    };
-                    // The drawn ground rounds off cliff edges, so keep back from them.
-                    if terrain.rim(x, z, 5.0) > 1.2 {
-                        continue;
-                    }
-                    let fade = 1.0 - smooth(RANGE * 0.65, RANGE, d);
-                    let size = (0.8 + r(3) * 0.7) * fade;
-                    let m = Mat4::from_scale_rotation_translation(
-                        Vec3::new(size, size * (0.8 + r(4) * 0.5), size),
-                        Quat::from_rotation_y(r(5) * std::f32::consts::TAU),
-                        at - Vec3::Y * 0.05,
-                    );
-                    let tint = linear(color, 1.0) * (0.85 + r(6) * 0.3);
-                    cache.1.push(Instance::tinted(m, tint.extend(1.0)));
                 }
             }
+            draws.extend(cache.1.iter().map(|i| (self.tuft, *i)));
         }
-        draws.extend(cache.1.iter().map(|i| (self.tuft, *i)));
     }
 
     /// Ferries, boats, planes and cars where they are this frame, between ticks.
@@ -1345,7 +1831,13 @@ impl Gfx {
     }
 
     /// Fire, sparks and light shafts, and the point lights that go with them.
-    fn effects(&self, game: &Game, caves: bool, t: f32) -> (Vec<(MeshId, Instance)>, Vec<Light>) {
+    fn effects(
+        &self,
+        game: &Game,
+        caves: bool,
+        t: f32,
+        dark: &[Vec4],
+    ) -> (Vec<(MeshId, Instance)>, Vec<Light>) {
         let cam = game.camera.pos;
         let world = &game.sim.world;
         let mut fx = Vec::new();
@@ -1382,12 +1874,37 @@ impl Gfx {
             }
             near.push((b.flame + Vec3::Y * 1.5, 48.0, fire * 2.2 * (1.0 + flick)));
         }
+        // A story's lamps, burning once lit.
+        if let Some(play) = &game.play {
+            for (k, (foot, lit)) in crate::play::lamps(play).into_iter().enumerate() {
+                let dist = foot.distance(cam);
+                if !lit || dist > 1500.0 {
+                    continue;
+                }
+                let flame = foot + Vec3::Y * crate::play::LAMP_FLAME;
+                let k = k as f32 * 1.7;
+                let flick = 0.08 * (t * 13.0 + k).sin() + 0.06 * (t * 7.3 + k * 2.0).sin();
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::new(0.7, 1.0 * (1.0 + flick * 1.6), 0.7),
+                    Quat::from_rotation_y(t * 0.7 + k),
+                    flame - Vec3::Y * 0.3,
+                );
+                fx.push((self.flame, Instance::new(m)));
+                near.push((flame + Vec3::Y * 1.0, 30.0, fire * 1.6 * (1.0 + flick)));
+            }
+        }
         // Street lamps at night, and cave lamps always: a warm pool on the ground and a
         // soft halo, and the nearest ones light what is around them.
         let night = game.sky().night;
         let warm = linear(Rgb(0xFFC874), 1.0);
         for (lamp, foot, under) in &self.lamps {
-            let on = if *under { 1.0 } else { night };
+            let on = if *under {
+                1.0
+            } else if in_dark(dark, *lamp) {
+                0.0
+            } else {
+                night
+            };
             let dist = lamp.distance(cam);
             if on < 0.05 || (*under && !caves) || dist > 700.0 {
                 continue;
@@ -1540,6 +2057,7 @@ impl Gfx {
     pub fn render(&mut self, game: &Game, target: &wgpu::TextureView) {
         use crate::prof::time;
         self.load_hud_map(game);
+        self.load_pics(game);
         time("terrain", || self.update_terrain(game, self.chunk_budget));
         let frame = time("frame", || self.frame(game));
         time("encode", || self.renderer.render(target, &frame));
@@ -1550,10 +2068,39 @@ impl Gfx {
         self.listener.listen(game, &self.weather, &self.falls)
     }
 
+    /// Puts postcard pictures in the atlas when they change.
+    fn load_pics(&mut self, game: &Game) {
+        let Some(play) = &game.play else { return };
+        let Some((version, pics)) = crate::play::pics(play, self.pics_version) else {
+            return;
+        };
+        self.pics_version = version;
+        let c = crate::hud::CARD_CELL;
+        for (i, rgba) in pics {
+            let (x, y) = crate::hud::card_slot(i);
+            self.renderer.write_hud_rect(x, y, c.0 - 4, c.1 - 4, &rgba);
+        }
+    }
+
     /// Draws the HUD's map the first time the HUD is on, off the main thread where there
     /// are threads, and puts it in the atlas when done.
     fn load_hud_map(&mut self, game: &Game) {
-        if !game.hud.on || self.hud_map.1 {
+        if self.hud_map.1 {
+            return;
+        }
+        if !game.hud.on {
+            // No HUD map here, so the journal gets its own, a little at a time.
+            let terrain = &game.sim.world.terrain;
+            let job = self
+                .book_map
+                .get_or_insert_with(|| crate::map::MapJob::world(terrain, BOOK_MAP));
+            if job.step(terrain, 6) {
+                self.renderer
+                    .write_hud_rect(0, 0, BOOK_MAP, BOOK_MAP, &job.out);
+                self.book_map = None;
+                self.hud_map.1 = true;
+                game.map_px.set(BOOK_MAP as f32);
+            }
             return;
         }
         let draw =
@@ -1573,12 +2120,14 @@ impl Gfx {
                 {
                     self.renderer.set_hud_map(&draw(&terrain));
                     self.hud_map.1 = true;
+                    game.map_px.set(crate::hud::MAP as f32);
                 }
             }
             Some(rx) => {
                 if let Ok(rgba) = rx.try_recv() {
                     self.renderer.set_hud_map(&rgba);
                     self.hud_map.1 = true;
+                    game.map_px.set(crate::hud::MAP as f32);
                 }
             }
         }
@@ -1783,6 +2332,11 @@ fn light_shafts(
     out
 }
 
+/// Named locals' clothes, by their look.
+const LOCAL_SHIRTS: [u32; 9] = [
+    0x7FB069, 0xE07A5F, 0x3D5A80, 0xF2CC8F, 0x9C6ADE, 0x2A2E4A, 0x81B29A, 0xC8553D, 0x5B8E7D,
+];
+
 fn smooth(lo: f32, hi: f32, x: f32) -> f32 {
     let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -1824,4 +2378,63 @@ fn tint_leaf(v: &mut crate::mesh::Vertex, tint: Option<[f32; 3]>) {
     v.color[0] = (r as f32 * t[0]).min(255.0) as u8;
     v.color[1] = (g as f32 * t[1]).min(255.0) as u8;
     v.color[2] = (b as f32 * t[2]).min(255.0) as u8;
+}
+
+/// Where the rainbow's end is: an islet in the far corner of the sea.
+pub const RAINBOW_END: Vec3 = Vec3::new(5150.0, 0.0, -5150.0);
+
+/// Toward the middle of the rainbow's circle, seen from `cam`. A real one centers on
+/// the point right away from the sun, `anti`. This one keeps that height, so it is just
+/// as big, but swings round so one of its ends comes down on the rainbow's end.
+pub fn rainbow_center(anti: Vec3, cam: Vec3) -> Vec3 {
+    // Half way across the bands, in radians.
+    const ARC: f32 = 0.72;
+    let e = anti.y.clamp(-0.99, 0.99).asin();
+    let reach = ARC.cos() / e.cos();
+    if !(-1.0..=1.0).contains(&reach) {
+        return anti;
+    }
+    let side = reach.acos();
+    let to = RAINBOW_END - cam;
+    let corner = to.x.atan2(to.z);
+    let sun_side = anti.x.atan2(anti.z);
+    let gap = |a: f32| {
+        let d = (a - sun_side).rem_euclid(std::f32::consts::TAU);
+        d.min(std::f32::consts::TAU - d)
+    };
+    let a = [corner + side, corner - side]
+        .into_iter()
+        .min_by(|x, y| gap(*x).total_cmp(&gap(*y)))
+        .unwrap_or(sun_side);
+    Vec3::new(e.cos() * a.sin(), e.sin(), e.cos() * a.cos())
+}
+
+/// Whether `p` is where a story has put the lights out.
+pub fn in_dark(dark: &[Vec4], p: Vec3) -> bool {
+    dark.iter()
+        .any(|d| Vec2::new(d.x - p.x, d.y - p.z).length() < d.z)
+}
+
+#[cfg(test)]
+mod rainbow_tests {
+    use super::*;
+
+    /// Wherever you watch from, one end of the rainbow comes down on the horizon right
+    /// toward the rainbow's end, and the bow stays as high as a real one would be.
+    #[test]
+    fn one_end_on_the_corner() {
+        for cam in [
+            Vec3::new(-1800.0, 50.0, 800.0),
+            Vec3::new(3000.0, 300.0, 2000.0),
+        ] {
+            for sun in [Vec3::new(0.6, 0.2, 0.3), Vec3::new(-0.5, 0.35, -0.6)] {
+                let anti = -sun.normalize();
+                let c = rainbow_center(anti, cam);
+                let to = (RAINBOW_END - cam) * Vec3::new(1.0, 0.0, 1.0);
+                let angle = c.dot(to.normalize()).acos();
+                assert!((angle - 0.72).abs() < 0.01, "{angle}");
+                assert!((c.y - anti.y).abs() < 1e-4);
+            }
+        }
+    }
 }

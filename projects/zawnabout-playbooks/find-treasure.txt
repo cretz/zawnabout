@@ -1,0 +1,24 @@
+# Gameplay: land right beside a find to pick it up, a card shows and waits, then land in
+# a lair and make it home.
+cards keep
+land-at -1975 1137
+wait-until card 25
+expect halted
+expect found chess-bishop
+shot card.png
+ui-key Enter
+expect not card
+wait 0.5
+expect not halted
+goto-find fern-hollow 0
+wait-until card 5
+ui-key Enter
+expect lair fern-hollow
+book hoard
+shot hoard.png
+book close
+goto-find gull-crown 6
+wait 1
+expect not found gull-crown
+play off
+expect not halted

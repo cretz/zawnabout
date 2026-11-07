@@ -61,6 +61,9 @@ pub struct Lighting {
     pub valley_fog: f32,
     /// A rainbow in the sky opposite the sun, 0 to 1.
     pub rainbow: f32,
+    /// Toward the middle of the rainbow's circle, which sits so one end touches down on
+    /// the rainbow's end in the far corner of the sea.
+    pub bow: Vec3,
 }
 
 /// Everything one frame draws.
@@ -96,6 +99,8 @@ pub struct Frame {
     /// Big clouds that shade the ground: middle (x, z), radius and base height. At most
     /// [`crate::weather::SHADOWS`] are used.
     pub clouds: Vec<Vec4>,
+    /// Where a story has put the lights out: middle (x, z) and reach. At most [`DARK`].
+    pub dark: Vec<Vec4>,
     /// The heads-up display, drawn over everything.
     pub hud: Vec<crate::hud::HudVertex>,
 }
@@ -119,7 +124,14 @@ struct Globals {
     lights: [[f32; 4]; MAX_LIGHTS * 2],
     /// Cloud shadows: middle (x, z), radius, base height.
     clouds: [[f32; 4]; crate::weather::SHADOWS],
+    /// Dark regions: middle (x, z) and reach, zero reach for none.
+    dark: [[f32; 4]; DARK],
+    /// Toward the middle of the rainbow's circle.
+    bow: [f32; 4],
 }
+
+/// Most dark regions a frame passes to the shaders.
+pub const DARK: usize = 8;
 
 struct GpuMesh {
     buf: wgpu::Buffer,
@@ -214,6 +226,8 @@ pub struct Stats {
 
 pub struct Renderer {
     pub stats: Stats,
+    /// Meshes left out of the lit draws, for finding what something on screen is.
+    pub hide: Vec<u32>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     /// Always an sRGB format. Render targets are viewed with it.
@@ -483,8 +497,11 @@ impl Renderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
+        // Smooth, so text drawn a little smaller than its atlas size stays clean.
         let hud_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("hud"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         let hud_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -559,6 +576,7 @@ impl Renderer {
         let (msaa, depth) = Self::targets(&device, format, size);
         let mut r = Self {
             stats: Stats::default(),
+            hide: Vec::new(),
             device,
             queue,
             format,
@@ -591,6 +609,7 @@ impl Renderer {
         // The font goes in now. The map follows once it is drawn.
         let mut atlas = vec![0u8; (aw * ah * 4) as usize];
         crate::hud::font_into(&mut atlas);
+        crate::hud::thumbs_into(&mut atlas);
         r.write_hud_atlas(&atlas, 0, ah);
         r.shadow_mesh = Some(r.add_mesh(&crate::models::shadow_disc()));
         r.ring_mesh = Some(r.add_mesh(&crate::models::ring()));
@@ -625,6 +644,29 @@ impl Renderer {
             wgpu::Extent3d {
                 width: w,
                 height: rows,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+
+    /// Puts a `w` by `h` RGBA picture into the HUD atlas at `x`, `y`.
+    pub fn write_hud_rect(&self, x: u32, y: u32, w: u32, h: u32, rgba: &[u8]) {
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.hud_atlas,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
                 depth_or_array_layers: 1,
             },
         );
@@ -815,6 +857,14 @@ impl Renderer {
                 }
                 out
             },
+            dark: {
+                let mut out = [[0.0; 4]; DARK];
+                for (o, c) in out.iter_mut().zip(&frame.dark) {
+                    *o = c.to_array();
+                }
+                out
+            },
+            bow: vec4(l.bow, 0.0),
         };
         self.queue
             .write_buffer(&self.globals, 0, bytemuck::bytes_of(&globals));
@@ -915,6 +965,9 @@ impl Renderer {
                     let Some(mesh) = &self.meshes[id.0 as usize] else {
                         continue;
                     };
+                    if self.hide.contains(&(id.0 + 1_000_000)) {
+                        continue;
+                    }
                     pass.set_vertex_buffer(0, mesh.buf.slice(..));
                     pass.set_vertex_buffer(1, s.buf.slice(..));
                     pass.draw(0..mesh.count, 0..s.count);
@@ -928,7 +981,7 @@ impl Renderer {
             }
             pass.set_pipeline(&self.ground);
             for (id, center, radius) in &frame.terrain {
-                if !in_view(&planes, *center, *radius) {
+                if !in_view(&planes, *center, *radius) || self.hide.contains(&4_000_000) {
                     continue;
                 }
                 let Some(mesh) = &self.meshes[id.0 as usize] else {
@@ -946,7 +999,9 @@ impl Renderer {
             while i < draws.len() {
                 let id = draws[i].0;
                 let end = i + draws[i..].iter().take_while(|(m, _)| *m == id).count();
-                if let Some(mesh) = &self.meshes[id.0 as usize] {
+                if let Some(mesh) = &self.meshes[id.0 as usize]
+                    && !self.hide.contains(&id.0)
+                {
                     pass.set_vertex_buffer(0, mesh.buf.slice(..));
                     pass.set_vertex_buffer(1, self.dynamic.slice(..));
                     pass.draw(0..mesh.count, i as u32..end as u32);
@@ -960,7 +1015,7 @@ impl Renderer {
 
             pass.set_pipeline(&self.water);
             for (id, center, radius) in &frame.water {
-                if !in_view(&planes, *center, *radius) {
+                if !in_view(&planes, *center, *radius) || self.hide.contains(&3_000_000) {
                     continue;
                 }
                 let Some(mesh) = &self.meshes[id.0 as usize] else {

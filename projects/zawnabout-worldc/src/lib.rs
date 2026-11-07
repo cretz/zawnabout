@@ -10,6 +10,7 @@ use std::path::Path;
 
 use kdl::{KdlDocument, KdlNode, KdlValue};
 
+pub mod play;
 mod schema;
 mod shape;
 

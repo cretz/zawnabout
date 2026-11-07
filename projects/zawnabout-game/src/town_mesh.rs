@@ -332,6 +332,28 @@ impl Parts {
         );
     }
 
+    /// Upright frames down every face of a glass block, `gap` apart, standing just proud
+    /// of the glass, so its bands read as rows of windows.
+    fn mullions(&mut self, w: f32, d: f32, y0: f32, y1: f32, gap: f32, col: Rgb) {
+        let (x, z) = (w * 0.5 - 0.04, d * 0.5 - 0.04);
+        let half = 0.18;
+        let c = |px: f32, py: f32, pz: f32| Vec3::new(px, py, pz);
+        let spots = |len: f32| {
+            let n = (len / gap).round().max(2.0) as usize;
+            (1..n).map(move |k| -len * 0.5 + len * k as f32 / n as f32)
+        };
+        for u in spots(w) {
+            let (a, b) = (u - half, u + half);
+            self.quad(c(a, y0, z), c(b, y0, z), c(b, y1, z), c(a, y1, z), col);
+            self.quad(c(b, y0, -z), c(a, y0, -z), c(a, y1, -z), c(b, y1, -z), col);
+        }
+        for u in spots(d) {
+            let (a, b) = (u - half, u + half);
+            self.quad(c(x, y0, b), c(x, y0, a), c(x, y1, a), c(x, y1, b), col);
+            self.quad(c(-x, y0, a), c(-x, y0, b), c(-x, y1, b), c(-x, y1, a), col);
+        }
+    }
+
     fn lid(&mut self, w: f32, d: f32, y: f32, col: Rgb) {
         let (x, z) = (w * 0.5, d * 0.5);
         self.quad(
@@ -796,6 +818,7 @@ fn building(
                 n.walls(w - 0.2, d - 0.2, y + step * 0.3, y + step, glass);
                 n.night_from(from);
             }
+            n.mullions(w, d, 0.0, h, 3.6, c.wall);
             n.lid(w, d, h, c.roof);
             n.cube(
                 Vec3::new(0.0, h + 1.5, 0.0),
@@ -809,7 +832,14 @@ fn building(
                     STEEL,
                 );
             }
-            f.walls(w, d, 0.0, h, glass.mix(c.wall, 0.4));
+            // From afar: one glass block with every other band and a few frames, cheap
+            // but still read as rows of windows.
+            f.walls(w - 0.2, d - 0.2, 0.0, h, glass);
+            for k in (0..bands).step_by(2) {
+                let y = k as f32 * step;
+                f.walls(w, d, y, y + step * 0.3, c.wall);
+            }
+            f.mullions(w, d, 0.0, h, 11.0, c.wall);
             f.lid(w, d, h, c.roof);
         }
         Kind::Tower => {

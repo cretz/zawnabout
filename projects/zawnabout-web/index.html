@@ -11,28 +11,9 @@
   <body>
     <canvas id="game"></canvas>
 
-    <div id="welcome" class="card center hidden">
-      <h1 id="welcome-title">zawnabout</h1>
-      <p class="lead">You're a little dragon with a big sky. Go anywhere!</p>
-      <div id="controls"></div>
-      <p class="hint" id="start-hint">Press any key or tap to start</p>
-      <label class="setting"><input type="checkbox" id="pause-away" checked /> Pause when I switch away</label>
-      <label class="setting"><input type="checkbox" id="sound-on" checked /> Sound (U)</label>
-      <details id="rebind" class="setting hidden">
-        <summary>Change keys</summary>
-        <div id="rebind-list"></div>
-        <button id="rebind-reset" type="button">Reset all</button>
-      </details>
-    </div>
-
-    <div id="keys-card" class="hidden">
-      <button id="keys-toggle" title="Show or hide the controls">Controls</button>
-      <div id="keys-list"></div>
-    </div>
-
     <canvas id="minimap" class="hidden" title="Map (click to enlarge)"></canvas>
 
-    <button id="help-btn" class="round" aria-label="Controls">?</button>
+    <button id="book-btn" class="round" aria-label="Journal" title="Journal and pause (Esc)">&#128214;</button>
     <button id="notes-btn" class="round second" aria-label="Notes mode" title="Notes mode (N)">&#9998;</button>
     <button id="full-btn" class="round third hidden" aria-label="Full screen" title="Full screen">&#x26F6;</button>
 

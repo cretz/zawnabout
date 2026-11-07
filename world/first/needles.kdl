@@ -56,3 +56,7 @@ caves hollow {
         p -150 22 530
     }
 }
+
+site needle-wreck kind=wreck x=600 z=450 {
+    note "A schooner that tried to sail between the needles, long ago."
+}

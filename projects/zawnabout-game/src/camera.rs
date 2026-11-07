@@ -58,6 +58,12 @@ pub struct Camera {
     pub free_look: Vec2,
     dir: Vec3,
     fresh: bool,
+    /// How far out along the way to its spot the camera may go, eased back out after a
+    /// wall or the ground pulled it in, so it never flickers in and out.
+    reach: f32,
+    /// The dragon's height on the ground, smoothed, so rough rock underfoot doesn't
+    /// shake the view.
+    ground_y: f32,
 }
 
 impl Default for Camera {
@@ -70,6 +76,8 @@ impl Default for Camera {
             free_look: Vec2::ZERO,
             dir: Vec3::Z,
             fresh: true,
+            reach: 1.0,
+            ground_y: 0.0,
         }
     }
 }
@@ -88,6 +96,14 @@ impl Camera {
                 1.0 - (-rate * dt).exp()
             }
         };
+        let mut t = t;
+        if t.mode == Mode::Ground && !self.fresh {
+            self.ground_y += (t.pos.y - self.ground_y) * ease(6.0);
+            self.ground_y = self.ground_y.clamp(t.pos.y - 1.5, t.pos.y + 1.5);
+            t.pos.y = self.ground_y;
+        } else {
+            self.ground_y = t.pos.y;
+        }
         let speed = t.vel.length();
         let flat = Vec3::new(t.heading.sin(), 0.0, t.heading.cos());
         let mut want = flat;
@@ -112,7 +128,11 @@ impl Camera {
         let back = Quat::from_rotation_y(p.orbit.to_radians() + self.free_look.x) * self.dir;
         // Tilting swings the camera over or under the dragon.
         let side = Vec3::Y.cross(back).normalize_or(Vec3::X);
-        let back = Quat::from_axis_angle(side, -self.free_look.y) * back;
+        // Looking up swings the camera low, then tilts the view up past that, since the
+        // ground stops it going under the dragon.
+        let tilt = self.free_look.y.max(-0.25);
+        let up_more = (-0.25 - self.free_look.y).max(0.0);
+        let back = Quat::from_axis_angle(side, -tilt) * back;
         let want_pos = t.pos - back * dist + Vec3::Y * (p.height + slow * p.hover_height);
         self.pos = self.pos.lerp(want_pos, ease(p.catch_up));
         // Stay out of spires and rocks, and above whatever is underneath.
@@ -126,19 +146,28 @@ impl Camera {
         let from = t.pos + Vec3::Y * 1.0;
         let steps = 24;
         let margin = 1.6;
+        let mut clear = 1.0;
+        let mut lift = Vec3::ZERO;
         for i in 1..=steps {
             let q = from.lerp(self.pos, i as f32 / steps as f32);
             if world.support_still(q.x, q.z, q.y + 0.5) > q.y - 0.8 || world.terrain.sdf(q) < margin
             {
-                let back = from.lerp(self.pos, (i - 1) as f32 / steps as f32);
-                let up = back + Vec3::Y * 0.5;
-                self.pos = if world.terrain.sdf(up) >= margin {
-                    up
-                } else {
-                    back
-                };
+                clear = (i - 1) as f32 / steps as f32;
+                let back = from.lerp(self.pos, clear);
+                if world.terrain.sdf(back + Vec3::Y * 0.5) >= margin {
+                    lift = Vec3::Y * 0.5;
+                }
                 break;
             }
+        }
+        // In at once, so walls never hide the dragon; back out gently.
+        self.reach = if clear < self.reach || self.fresh {
+            clear
+        } else {
+            self.reach + (clear - self.reach) * ease(2.0)
+        };
+        if self.reach < 1.0 {
+            self.pos = from.lerp(self.pos, self.reach) + lift;
         }
         // Looking around centers on the dragon instead of ahead of it.
         let looking = (self.free_look.length() * 2.0).min(1.0);
@@ -147,7 +176,9 @@ impl Camera {
         } else {
             0.0
         };
-        self.look = t.pos + self.dir * ahead + Vec3::Y * (1.0 - 2.0 * slow);
+        self.look = t.pos
+            + self.dir * ahead
+            + Vec3::Y * (1.0 - 2.0 * slow + up_more.min(1.2).tan() * dist * 1.2);
 
         let fast = ((speed - 12.0) / (p.fast_speed - 12.0)).clamp(0.0, 1.0);
         self.fov += (p.fov + (p.fov_fast - p.fov) * fast * fast - self.fov) * ease(3.0);

@@ -15,6 +15,10 @@ use crate::mesh::Rgb;
 use crate::models;
 use crate::render::{Instance, MeshId, Renderer};
 
+/// How far over the ground townsfolk look for their footing: up onto paving, steps and
+/// terraces, but never a roof.
+const STEP_UP: f32 = 1.2;
+
 /// A flock of gulls circling a spot on the coast.
 struct Flock {
     center: Vec3,
@@ -161,6 +165,58 @@ impl Life {
     pub fn person_far(&self) -> MeshId {
         self.body_far
     }
+
+    /// Where walker `i` is at `time`, and which way they walk. None when they are
+    /// indoors for the night.
+    fn walker_at(&self, i: usize, world: &World, time: f32, night: f32) -> Option<(Vec3, Vec2)> {
+        let w = &self.walkers[i];
+        let s = i as u32 * 31;
+        if night > 0.5 && hash(s + 1) < 0.7 {
+            return None;
+        }
+        let len = w.a.distance(w.b);
+        // Out, a pause at the door, and back.
+        let u = (time * 1.3 / len + hash(s) * 10.0) % 2.0;
+        let (t, toward) = if u < 1.0 {
+            (u, w.b - w.a)
+        } else {
+            (2.0 - u, w.a - w.b)
+        };
+        let p = w.a.lerp(w.b, t.clamp(0.0, 1.0));
+        let top = w
+            .under
+            .unwrap_or_else(|| world.terrain.height(p.x, p.y) + STEP_UP);
+        let y = world.support(p.x, p.y, top);
+        let bob = (time * 9.0 + s as f32).sin().abs() * 0.07;
+        Some((Vec3::new(p.x, y + bob, p.y), toward))
+    }
+
+    /// The townsperson nearest `at` within `reach` meters, and a number that is theirs
+    /// alone, for what they say.
+    pub fn nearest_person(
+        &self,
+        world: &World,
+        at: Vec3,
+        reach: f32,
+        time: f32,
+        night: f32,
+    ) -> Option<(Vec3, u32)> {
+        let flat = Vec2::new(at.x, at.z);
+        self.walkers
+            .iter()
+            .enumerate()
+            .filter(|(_, w)| {
+                let len = w.a.distance(w.b);
+                w.a.distance(flat) < len + reach && w.b.distance(flat) < len + reach
+            })
+            .filter_map(|(i, _)| {
+                let (p, _) = self.walker_at(i, world, time, night)?;
+                let d = Vec2::new(p.x, p.z).distance(flat);
+                (d < reach && (p.y - at.y).abs() < 4.0).then_some((d, p, i as u32 * 31))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, p, s)| (p, s))
+    }
 }
 
 pub(crate) fn linear(c: Rgb) -> Vec3 {
@@ -233,21 +289,40 @@ impl Life {
             .collect();
         let mut walkers = Vec::new();
         for (i, w) in homes.windows(2).enumerate() {
+            // A row house shows its gable to the street, so its door is at the end of
+            // its ridge, along its axis.
             let door = |b: &zawnabout_sim::town::Building| {
-                let depth = if b.kind == Kind::Row {
-                    b.size.x
+                let (out, depth) = if b.kind == Kind::Row {
+                    (b.axis, b.size.x)
                 } else {
-                    b.size.z
+                    (b.front(), b.size.z)
                 };
-                Vec2::new(b.pos.x, b.pos.z) + b.front() * (depth * 0.5 + 1.5)
+                Vec2::new(b.pos.x, b.pos.z) + out * (depth * 0.5 + 1.5)
             };
             let (a, b) = (door(w[0]), door(w[1]));
             let under = (w[0].style == zawnabout_sim::terrain::Style::Cavern)
                 .then(|| w[0].pos.y.max(w[1].pos.y) + 3.0);
             // Cavern towns are busy at every hour, so they have twice the people.
+            // Only a way with nothing solid across it: no walking through walls.
+            // and no sudden drop or climb, which they would float over.
+            let clear = |a: Vec2, b: Vec2| {
+                let n = (a.distance(b) / 0.8).ceil() as usize;
+                let mut last: Option<f32> = None;
+                (0..=n).all(|k| {
+                    let p = a.lerp(b, k as f32 / n.max(1) as f32);
+                    let top = under.unwrap_or_else(|| world.terrain.height(p.x, p.y) + STEP_UP);
+                    let y = world.support_still(p.x, p.y, top);
+                    let step = last.is_none_or(|l| (y - l).abs() < 2.0);
+                    last = Some(y);
+                    // By the doors themselves they step in and out of the house.
+                    let door = p.distance(a).min(p.distance(b)) < 3.0;
+                    step && (door || !world.in_building(Vec3::new(p.x, y + 1.0, p.y)))
+                })
+            };
             if (i % 4 == 0 || (under.is_some() && i % 2 == 0))
                 && a.distance(b) > 3.0
                 && a.distance(b) < 120.0
+                && clear(a, b)
             {
                 walkers.push(Walker {
                     a,
@@ -475,6 +550,8 @@ impl Life {
         time: f32,
         sim_time: f32,
         night: f32,
+        riding: Option<u32>,
+        dark: &[glam::Vec4],
         draws: &mut Vec<(MeshId, Instance)>,
         fx: &mut Vec<(MeshId, Instance)>,
     ) {
@@ -766,26 +843,18 @@ impl Life {
         // Fewer people about at night.
         for (i, w) in self.walkers.iter().enumerate() {
             let s = i as u32 * 31;
-            if (night > 0.5 && hash(s + 1) < 0.7) || !near(w.a, 450.0) {
+            // Someone off for a ride on the dragon's back is not walking about.
+            if !near(w.a, 450.0) || riding == Some(s) {
                 continue;
             }
-            let len = w.a.distance(w.b);
-            // Out, a pause at the door, and back.
-            let u = (time * 1.3 / len + hash(s) * 10.0) % 2.0;
-            let (t, toward) = if u < 1.0 {
-                (u, w.b - w.a)
-            } else {
-                (2.0 - u, w.a - w.b)
+            let Some((at, toward)) = self.walker_at(i, world, time, night) else {
+                continue;
             };
-            let ease = t.clamp(0.0, 1.0);
-            let p = w.a.lerp(w.b, ease);
-            let top = w.under.unwrap_or_else(|| terrain.height(p.x, p.y) + 0.8);
-            let y = world.support(p.x, p.y, top);
-            let bob = (time * 9.0 + s as f32).sin().abs() * 0.07;
+            let p = Vec2::new(at.x, at.z);
             let m = Mat4::from_scale_rotation_translation(
                 Vec3::splat(0.95 + hash(s + 2) * 0.15),
                 Quat::from_rotation_y(toward.x.atan2(toward.y)),
-                Vec3::new(p.x, y + bob, p.y),
+                at,
             );
             let shirt = linear(SHIRTS[(hash(s + 3) * 8.0) as usize % 8]);
             draws.push((self.body, Instance::tinted(m, shirt.extend(1.0))));
@@ -998,7 +1067,7 @@ impl Life {
         }
         if night > 0.15 {
             for (k, top) in self.beams.iter().enumerate() {
-                if top.distance(cam) > 6000.0 {
+                if top.distance(cam) > 6000.0 || crate::gfx::in_dark(dark, *top) {
                     continue;
                 }
                 for side in [0.0, PI] {

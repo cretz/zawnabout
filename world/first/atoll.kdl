@@ -96,3 +96,7 @@ caves grotto {
         p 60 30 5
     }
 }
+
+site reef-wreck kind=wreck x=1080 z=200 {
+    note "An old trading ship that ran up on the outer reef, east of the atoll."
+}

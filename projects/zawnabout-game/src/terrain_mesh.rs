@@ -133,7 +133,9 @@ impl TerrainMeshes {
         deep: bool,
     ) -> Vec<(MeshId, Vec3, f32)> {
         let cave_range = PEEK_RANGE + (CAVE_RANGE - PEEK_RANGE) * (underground * 2.0).min(1.0);
-        let surface = |(_, c, r): &(MeshId, Vec3, f32)| !deep || c.distance(cam) - r < 300.0;
+        // Deep down, only what reaches within sight of a cave draws. Shallow cave walls
+        // ride with the outside meshes, so the far side of a big hall is among them.
+        let surface = |(_, c, r): &(MeshId, Vec3, f32)| !deep || c.distance(cam) - r < cave_range;
         self.drawn
             .iter()
             .filter_map(|k| self.built.get(k))
@@ -146,13 +148,7 @@ impl TerrainMeshes {
                 [outer, inner]
             })
             .flatten()
-            // Far chunks are never near enough to show from deep underground.
-            .chain(
-                self.groups
-                    .values()
-                    .filter_map(|g| g.mesh)
-                    .filter(|_| !deep),
-            )
+            .chain(self.groups.values().filter_map(|g| g.mesh).filter(surface))
             .collect()
     }
 
@@ -436,12 +432,13 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bo
     if c.y < 3.5 && n.y > 0.8 {
         return pick(&SAND);
     }
-    // Cold islands are snowy above a far lower line.
+    // Cold islands are snowy above a far lower line. The two great peaks wear caps:
+    // the home summit's above 700 m, the warm volcano's only on its highest rim.
     let climate = terrain.climate(c.x, c.z);
-    let snowline = if climate == 3 {
-        230.0 + h * 40.0
-    } else {
-        880.0
+    let snowline = match climate {
+        3 => 230.0 + h * 40.0,
+        1 => 860.0 + h * 30.0,
+        _ => 690.0 + h * 40.0,
     };
     if c.y > snowline {
         return SNOW.mix(pick(&ROCK), h * 0.3);
@@ -878,8 +875,23 @@ fn build(
                 for i in 1..nx {
                     let s = sdf(i, k, j);
                     let solid = s < 0.0;
+                    // Which way is out: up the field from rock to air. A quad on a grid edge
+                    // across the slope can lie nearly flat, so its edge's own axis cannot say.
+                    let grad = Vec3::new(
+                        sdf(i + 1, k, j) - s,
+                        sdf(i, k + 1, j) - s,
+                        sdf(i, k, j + 1) - s,
+                    );
+                    let facing = |axis: Vec3| {
+                        let away = if solid { axis } else { -axis };
+                        if grad.length_squared() > 1e-6 && grad.dot(away) > 0.0 {
+                            grad
+                        } else {
+                            away
+                        }
+                    };
                     if (sdf(i + 1, k, j) < 0.0) != solid {
-                        let out = if solid { Vec3::X } else { -Vec3::X };
+                        let out = facing(Vec3::X);
                         quad(
                             [
                                 vert(i, k - 1, j - 1),
@@ -891,7 +903,7 @@ fn build(
                         );
                     }
                     if (sdf(i, k + 1, j) < 0.0) != solid {
-                        let out = if solid { Vec3::Y } else { -Vec3::Y };
+                        let out = facing(Vec3::Y);
                         quad(
                             [
                                 vert(i - 1, k, j - 1),
@@ -903,7 +915,7 @@ fn build(
                         );
                     }
                     if (sdf(i, k, j + 1) < 0.0) != solid {
-                        let out = if solid { Vec3::Z } else { -Vec3::Z };
+                        let out = facing(Vec3::Z);
                         quad(
                             [
                                 vert(i - 1, k - 1, j),
@@ -919,4 +931,40 @@ fn build(
         }
     }
     (m, inner, skipped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Steep or upside-down triangles near a spot, in the chunk of each LOD holding it:
+    /// `AT="x z" cargo test --release -p zawnabout-game steep_near -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn steep_near() {
+        let w = zawnabout_sim::World::generate(1);
+        let v: Vec<f32> = std::env::var("AT")
+            .unwrap_or_default()
+            .split_whitespace()
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        let p = Vec2::new(v[0], v[1]);
+        for lod in 0..3u8 {
+            let size = N as f32 * CELL0 * (1u32 << lod) as f32;
+            let key = Key {
+                lod,
+                x: (p.x / size).floor() as i32,
+                z: (p.y / size).floor() as i32,
+            };
+            let (m, _, _) = build(&w.terrain, key, &|_| true);
+            for t in m.verts.chunks(3) {
+                let [a, b, c] = [t[0].pos, t[1].pos, t[2].pos].map(Vec3::from);
+                let mid = (a + b + c) / 3.0;
+                let n = (b - a).cross(c - a).normalize_or_zero();
+                if Vec2::new(mid.x, mid.z).distance(p) < 15.0 && n.y < 0.6 {
+                    println!("lod {lod} tri {a} {b} {c} n {n}");
+                }
+            }
+        }
+    }
 }

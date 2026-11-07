@@ -30,59 +30,10 @@ pub fn render_area(
     size: u32,
     marks: bool,
 ) -> Vec<u8> {
+    let mut job = MapJob::new(x0, z0, span, size);
+    while !job.step(terrain, size) {}
+    let mut out = job.out;
     let step = span / size as f32;
-    let at = |i: u32, j: u32| (x0 + (i as f32 + 0.5) * step, z0 + (j as f32 + 0.5) * step);
-    let mut heights = vec![0.0f32; (size * size) as usize];
-    for j in 0..size {
-        for i in 0..size {
-            let (x, z) = at(i, j);
-            heights[(j * size + i) as usize] = terrain.height(x, z);
-        }
-    }
-    let h = |i: u32, j: u32| heights[(j.min(size - 1) * size + i.min(size - 1)) as usize];
-    let light = Vec3::new(-0.6, 0.7, -0.4).normalize();
-    let mut out = Vec::with_capacity((size * size * 4) as usize);
-    for j in 0..size {
-        for i in 0..size {
-            let (x, z) = at(i, j);
-            let y = h(i, j);
-            let dx = h(i + 1, j) - h(i.saturating_sub(1), j);
-            let dz = h(i, j + 1) - h(i, j.saturating_sub(1));
-            let n = Vec3::new(-dx, 4.0 * step, -dz).normalize();
-            let shade = 0.55 + 0.6 * n.dot(light).max(0.0);
-            let c = match terrain.water(x, z, y) {
-                Some(level) => {
-                    let depth = level - y;
-                    let lake = level > 0.5;
-                    let deep = if lake {
-                        [0.25, 0.55, 0.7]
-                    } else {
-                        [0.16, 0.38, 0.62]
-                    };
-                    mix([0.55, 0.82, 0.9], deep, depth / 40.0)
-                }
-                None => {
-                    let base = match terrain.cover(x, z).map(|c| c.kind) {
-                        Some(CoverKind::Town) => [0.86, 0.66, 0.5],
-                        Some(CoverKind::Forest) => [0.3, 0.55, 0.28],
-                        Some(CoverKind::Meadow) => [0.72, 0.85, 0.45],
-                        Some(CoverKind::Snow) => [0.94, 0.96, 0.98],
-                        None => [0.52, 0.74, 0.38],
-                    };
-                    let land = if y < 3.5 {
-                        [0.9, 0.85, 0.62]
-                    } else {
-                        mix(base, [0.62, 0.57, 0.52], (y - 350.0) / 400.0)
-                    };
-                    let land = mix(land, [0.95, 0.95, 0.97], (y - 850.0) / 80.0);
-                    land.map(|v| v * shade)
-                }
-            };
-            out.extend(c.map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8));
-            out.push(255);
-        }
-    }
-    roads(terrain, x0, z0, step, size, &mut out);
     // Named places as dots: beacons orange, perches white, sites red, spawn black.
     for m in terrain.def.marks.iter().filter(|_| marks) {
         let color = match m.kind {
@@ -105,6 +56,123 @@ pub fn render_area(
         }
     }
     out
+}
+
+/// A map drawn a few rows at a time, so a browser with no threads to spare never stalls:
+/// the heights first, then the colors a row behind them, then the roads.
+pub struct MapJob {
+    x0: f32,
+    z0: f32,
+    step: f32,
+    size: u32,
+    heights: Vec<f32>,
+    /// Rows of heights done, and rows colored.
+    measured: u32,
+    colored: u32,
+    pub out: Vec<u8>,
+}
+
+impl MapJob {
+    pub fn new(x0: f32, z0: f32, span: f32, size: u32) -> Self {
+        Self {
+            x0,
+            z0,
+            step: span / size as f32,
+            size,
+            heights: vec![0.0; (size * size) as usize],
+            measured: 0,
+            colored: 0,
+            out: vec![0; (size * size * 4) as usize],
+        }
+    }
+
+    /// The whole world, north up.
+    pub fn world(terrain: &Terrain, size: u32) -> Self {
+        let b = terrain.def.bounds;
+        Self::new(b[0], b[1], b[2] - b[0], size)
+    }
+
+    /// Does up to `n` rows of work. True once the picture is done, roads and all.
+    pub fn step(&mut self, terrain: &Terrain, n: u32) -> bool {
+        let size = self.size;
+        let (x0, z0, step) = (self.x0, self.z0, self.step);
+        let at = |i: u32, j: u32| (x0 + (i as f32 + 0.5) * step, z0 + (j as f32 + 0.5) * step);
+        let mut left = n;
+        while left > 0 && self.measured < size {
+            let j = self.measured;
+            for i in 0..size {
+                let (x, z) = at(i, j);
+                self.heights[(j * size + i) as usize] = terrain.height(x, z);
+            }
+            self.measured += 1;
+            left -= 1;
+        }
+        // A row's shading needs the row after it.
+        let ready = if self.measured == size {
+            size
+        } else {
+            self.measured.saturating_sub(1)
+        };
+        let heights = &self.heights;
+        let h = |i: u32, j: u32| heights[(j.min(size - 1) * size + i.min(size - 1)) as usize];
+        let light = Vec3::new(-0.6, 0.7, -0.4).normalize();
+        while left > 0 && self.colored < ready {
+            let j = self.colored;
+            for i in 0..size {
+                let (x, z) = at(i, j);
+                let y = h(i, j);
+                let dx = h(i + 1, j) - h(i.saturating_sub(1), j);
+                let dz = h(i, j + 1) - h(i, j.saturating_sub(1));
+                let n = Vec3::new(-dx, 4.0 * step, -dz).normalize();
+                let shade = 0.55 + 0.6 * n.dot(light).max(0.0);
+                let c = ground(terrain, x, z, y, shade);
+                let k = ((j * size + i) * 4) as usize;
+                for (o, v) in self.out[k..k + 3].iter_mut().zip(c) {
+                    *o = (v.clamp(0.0, 1.0) * 255.0) as u8;
+                }
+                self.out[k + 3] = 255;
+            }
+            self.colored += 1;
+            left -= 1;
+        }
+        if self.colored == size && left > 0 {
+            roads(terrain, x0, z0, step, size, &mut self.out);
+            self.colored += 1;
+        }
+        self.colored > size
+    }
+}
+
+/// The map's color for the ground at `x`, `z`, `y` high, lit by `shade`.
+fn ground(terrain: &Terrain, x: f32, z: f32, y: f32, shade: f32) -> [f32; 3] {
+    match terrain.water(x, z, y) {
+        Some(level) => {
+            let depth = level - y;
+            let lake = level > 0.5;
+            let deep = if lake {
+                [0.25, 0.55, 0.7]
+            } else {
+                [0.16, 0.38, 0.62]
+            };
+            mix([0.55, 0.82, 0.9], deep, depth / 40.0)
+        }
+        None => {
+            let base = match terrain.cover(x, z).map(|c| c.kind) {
+                Some(CoverKind::Town) => [0.86, 0.66, 0.5],
+                Some(CoverKind::Forest) => [0.3, 0.55, 0.28],
+                Some(CoverKind::Meadow) => [0.72, 0.85, 0.45],
+                Some(CoverKind::Snow) => [0.94, 0.96, 0.98],
+                None => [0.52, 0.74, 0.38],
+            };
+            let land = if y < 3.5 {
+                [0.9, 0.85, 0.62]
+            } else {
+                mix(base, [0.62, 0.57, 0.52], (y - 350.0) / 400.0)
+            };
+            let land = mix(land, [0.95, 0.95, 0.97], (y - 850.0) / 80.0);
+            land.map(|v| v * shade)
+        }
+    }
 }
 
 /// Places worth finding on the big map, one per line as `kind id x z under`, where
@@ -182,6 +250,26 @@ fn roads(terrain: &Terrain, x0: f32, z0: f32, step: f32, size: u32, out: &mut [u
                         out[k..k + 3].copy_from_slice(&color);
                     }
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Every place the big map knows, for laying out gameplay:
+    /// `cargo test --release -p zawnabout-game --lib list_places -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn list_places() {
+        let w = zawnabout_sim::World::generate(1);
+        print!("{}", super::places(&w.terrain));
+        for m in w.terrain.def.marks {
+            if m.kind == "perch" || m.kind == "beacon" || m.kind == "dugout" || m.kind == "cavern" {
+                println!(
+                    "{} {} {:.0} {:.0} {:.0}",
+                    m.kind, m.id, m.pos[0], m.pos[1], m.pos[2]
+                );
             }
         }
     }

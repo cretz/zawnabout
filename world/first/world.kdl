@@ -40,6 +40,11 @@ spire lone-rock x=5200 z=900 h=26 r=24 top=flat {
     beacon lone-rock-beacon x=5205 y=26 z=895
 }
 
+spire rainbow-end x=5150 z=-5150 h=5 r=38 top=flat {
+    note "A little grassy islet in the farthest corner of the sea, where one end of the rainbow comes down. There's a pot of gold on it, of course."
+    perch rainbow-end-top x=5150 y=5 z=-5150
+}
+
 spire turtle-back x=-1500 z=4600 h=4 r=60 {
     note "Long reef rock barely above the water. Good for skimming low."
 }
@@ -655,6 +660,18 @@ landmark needle-warden-oar kind=warden x=-4608 y=0 z=3420 rot=-90 text="oar" {
 landmark needle-warden-lamp kind=warden x=-4648 y=0 z=3850 rot=-90 text="lamp" {
     note "A stone lamplighter carved out of a needle's west face, the other warden at the west gate. The lantern burns at night."
 }
-landmark spine-spiral kind=faces x=-960 y=0 z=-767 rot=180 text="spiral" {
-    note "A great stepped spiral cut high in the spine's south sea cliff, with three round bosses beneath. Nobody knows who made it."
+landmark spine-spiral kind=faces x=-960 y=0 z=-767 rot=180 text="serpent" {
+    note "The old serpent god of the islands, carved deep into a niche high in the spine's sea cliff, a glowing pearl in its jaws. Its little copper effigies stand in town squares."
+}
+landmark eye-ring kind=stones x=2700 z=-2000 rot=0 text="eye" {
+    note "Lantern stones round the eye, the shaft down into the lagoon vault."
+}
+landmark stonehold-effigy kind=statue x=-1862 z=-4266 rot=160 text="effigy" {
+    note "A copper effigy of the serpent god in Stonehold's market, polished by a thousand pats on the head."
+}
+landmark tidewater-effigy kind=statue x=-232 z=-4196 rot=40 text="effigy" {
+    note "The serpent god by Tidewater market, keeping an eye on the fish prices."
+}
+landmark kettle-effigy kind=statue x=-1834 z=1599 rot=250 text="effigy" {
+    note "The serpent god in Kettle Harbor's market square, a pearl in its jaws for luck."
 }

@@ -8,9 +8,13 @@ import { setupTouch } from "./touch.ts";
 const query = new URLSearchParams(location.search);
 const debug = query.has("debug");
 const SETTINGS_KEY = "zawnabout.settings";
+// What the game keeps in the browser: settings, keys, and the save slot.
+const PREFS_KEY = "zawnabout.prefs";
+const KEYS_KEY = "zawnabout.keys";
+const SAVE_KEY = "zawnabout.save.a";
 
 // Keys the game uses that browsers would otherwise scroll or act on.
-const GAME_KEYS = new Set(["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight"]);
+const GAME_KEYS = new Set(["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight", "Tab"]);
 
 declare global {
   interface Window {
@@ -27,35 +31,20 @@ declare global {
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-function controlsHtml(touch: boolean): string {
-  const rows = touch
-    ? [
-        ["Left side", "Drag to steer"],
-        ["Flap", "Tap, or hold to keep flapping"],
-        ["Dive", "Hold to tuck your wings"],
-        ["Brake", "Hold to slow down, land or turn tight"],
-        ["Brake + Flap", "Hover in place"],
-        ["Fire", "Hold to breathe fire. Light the beacons!"],
-        ["On the ground", "Push the stick all the way to run"],
-        ["Tap a glowing spot", "Fly there and land"],
-        ["Pencil button", "Notes mode: pause, look around, leave notes"],
-      ]
-    : [
-        ["<kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows", "Steer, walk"],
-        ["<kbd>Space</kbd>", "Flap (tap faster to flap harder)"],
-        ["<kbd>Shift</kbd>", "Tuck wings and dive"],
-        ["<kbd>E</kbd>, <kbd>Q</kbd> or <kbd>X</kbd>", "Brake: slow down, land, turn tight"],
-        ["Brake + Flap", "Hover in place"],
-        ["<kbd>F</kbd> or <kbd>R</kbd>", "Breathe fire. Light the beacons!"],
-        ["Hold <kbd>W</kbd> on the ground", "Run"],
-        ["Click a glowing spot", "Fly there and land"],
-        ["<kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd> or right drag", "Look around"],
-        ["<kbd>M</kbd>", "Big map with everything to find"],
-        ["<kbd>N</kbd>", "Notes mode: pause, fly around, leave notes"],
-        ["<kbd>Esc</kbd> or <kbd>P</kbd>", "Pause"],
-        ["Gamepad", "Stick, A flap, X fire, B or Y brake, triggers"],
-      ];
-  return rows.map(([k, v]) => `<span class="keys">${k}</span><span>${v}</span>`).join("");
+function load(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function keep(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Kept for this visit only.
+  }
 }
 
 function sizeCanvas(canvas: HTMLCanvasElement) {
@@ -81,6 +70,34 @@ function pollGamepad(app: App, state: { had: boolean }) {
   }
 }
 
+/** Offers the save as a file to keep. */
+function download(text: string) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type: "text/plain" }));
+  a.download = "zawnabout-save.txt";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+/** Asks for a save file and loads it. */
+function pickSave(app: App) {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".txt,text/plain";
+  input.addEventListener("change", async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    try {
+      app.load_save(await file.text());
+      const text = app.save_text();
+      if (text) keep(SAVE_KEY, text);
+    } catch (e) {
+      alert(`That file is not a zawnabout save (${e}).`);
+    }
+  });
+  input.click();
+}
+
 async function start() {
   const canvas = $<HTMLCanvasElement>("game");
   if (!("gpu" in navigator)) {
@@ -98,15 +115,35 @@ async function start() {
     return;
   }
 
-  const saved = localStorage.getItem(SETTINGS_KEY);
+  const saved = load(SETTINGS_KEY);
   if (saved) {
     for (const line of saved.split("\n")) {
       if (line.trim()) app.command(line);
     }
   }
-  const saveSettings = () => localStorage.setItem(SETTINGS_KEY, app.dump());
+  const saveSettings = () => keep(SETTINGS_KEY, app.dump());
+  if (query.get("play") === "0") app.command("play off");
+
+  // Settings, keys and the saved game, as they were left. Settings from before the
+  // journal kept sound and pausing under keys of their own.
+  let prefs = load(PREFS_KEY);
+  if (prefs === null) {
+    prefs = `sound ${load("zawnabout.sound") === "0" ? "off" : "on"}\npauseaway ${load("zawnabout.pauseaway") === "0" ? "off" : "on"}\n`;
+  }
+  app.set_prefs_text(prefs);
+  const keys = load(KEYS_KEY);
+  if (keys) app.set_bindings_text(keys);
+  const game = load(SAVE_KEY);
+  if (game) {
+    try {
+      app.load_save(game);
+    } catch (e) {
+      console.warn("save", e);
+    }
+  }
 
   const touch = query.has("touch") || matchMedia("(pointer: coarse)").matches;
+  app.set_touch(touch);
   // Full screen where the browser allows it. iPhone Safari does not, so there the button
   // explains Add to Home Screen, which opens without any browser bars.
   const full = $("full-btn");
@@ -121,225 +158,34 @@ async function start() {
     }
   });
 
-  const welcome = $("welcome");
   const notes = setupNotes(app, canvas, touch);
   setupSound(app);
-  // The atlas pauses the world while it is open, unless the pause card already has.
-  const minimap = setupMinimap(app, touch, (on) => {
-    if (welcome.classList.contains("hidden")) app.command(on ? "pause" : "resume");
-  });
-  // A tap on the touch stick area picks a note spot in notes mode, else a landing spot.
+  // The atlas pauses the world while it is open.
+  const minimap = setupMinimap(app, touch, (on) => app.command(on ? "pause" : "resume"));
+  // A tap on the touch stick area works the journal first, then picks a note spot in
+  // notes mode, else a landing spot.
   if (touch)
     setupTouch(app, (x, y) => {
-      if (!notes.active()) app.tap(x / innerWidth, y / innerHeight);
-      else if (!notes.writing()) notes.pick(x, y);
+      if (notes.active()) {
+        if (!notes.writing()) notes.pick(x, y);
+      } else if (!app.ui_click(x / innerWidth, y / innerHeight)) {
+        app.tap(x / innerWidth, y / innerHeight);
+      }
     });
 
-  $("controls").innerHTML = controlsHtml(touch);
-  if (touch) $("start-hint").textContent = "Tap to start";
-  // The welcome card doubles as the pause screen: the world waits while it is up.
-  let started = false;
-  const showHelp = (show: boolean) => {
-    if (show === !welcome.classList.contains("hidden")) return;
-    welcome.classList.toggle("hidden", !show);
-    if (show && started) {
-      $("welcome-title").textContent = "Paused";
-      $("start-hint").textContent = touch ? "Tap to keep flying" : "Press Esc or any key to keep flying";
-    }
-    if (!show) {
-      started = true;
-      app.blur();
-    }
-    if (show || !minimap.atlas()) app.command(show ? "pause" : "resume");
-  };
-  if (!query.has("nowelcome")) showHelp(true);
-  else started = true;
-  // Sound on or off from the pause card, remembered, and kept in step with the U key.
-  const SOUND_KEY = "zawnabout.sound";
-  const soundBox = $<HTMLInputElement>("sound-on");
-  try {
-    soundBox.checked = localStorage.getItem(SOUND_KEY) !== "0";
-  } catch {
-    soundBox.checked = true;
-  }
-  app.command(soundBox.checked ? "sound on" : "sound off");
-  soundBox.parentElement!.addEventListener("pointerdown", (e) => e.stopPropagation());
-  soundBox.addEventListener("change", () => {
-    app.command(soundBox.checked ? "sound on" : "sound off");
-    try {
-      localStorage.setItem(SOUND_KEY, soundBox.checked ? "1" : "0");
-    } catch {
-      // Kept for this visit only.
-    }
-  });
-  addEventListener("keyup", (e) => {
-    if (e.code !== "KeyU") return;
-    soundBox.checked = !app.muted();
-    try {
-      localStorage.setItem(SOUND_KEY, soundBox.checked ? "1" : "0");
-    } catch {
-      // Kept for this visit only.
-    }
-  });
-  // Leaving the tab or the window pauses too, unless turned off on the pause card.
-  const PAUSE_KEY = "zawnabout.pauseaway";
-  const away = $<HTMLInputElement>("pause-away");
-  try {
-    away.checked = localStorage.getItem(PAUSE_KEY) !== "0";
-  } catch {
-    away.checked = true;
-  }
-  away.parentElement!.addEventListener("pointerdown", (e) => e.stopPropagation());
-  away.addEventListener("change", () => {
-    try {
-      localStorage.setItem(PAUSE_KEY, away.checked ? "1" : "0");
-    } catch {
-      // Kept for this visit only.
-    }
-  });
+  $("book-btn").addEventListener("click", () => app.open_book());
+
+  // The game starts on its journal, open at help, paused.
+  if (!query.has("nowelcome")) app.open_book();
+
+  // Leaving the tab or the window opens the journal too, unless that is turned off.
   const leave = () => {
-    if (away.checked && started && !notes.active() && !query.has("nowelcome")) showHelp(true);
+    if (app.pause_away() && !notes.active() && !query.has("nowelcome")) app.open_book();
   };
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) leave();
   });
   window.addEventListener("blur", leave);
-
-  // Changing keys on the pause card: pick an action, press its new key. Kept in the
-  // browser for next time.
-  const KEYS_SAVED = "zawnabout.keys";
-  try {
-    const saved = localStorage.getItem(KEYS_SAVED);
-    if (saved) app.set_bindings_text(saved);
-  } catch {
-    // The game's own keys then.
-  }
-  let rebinding: string | null = null;
-  const LABELS: Record<string, string> = {
-    up: "Nose up",
-    down: "Nose down",
-    left: "Turn left",
-    right: "Turn right",
-    flap: "Flap",
-    tuck: "Dive",
-    brake: "Brake, land, hover",
-    breath: "Breathe fire",
-  };
-  const keyName = (code: string) =>
-    code.replace(/^Key|^Digit/, "").replace(/^Arrow(.*)/, "$1 arrow").replace(/(Left|Right)$/, "");
-  // The corner card shows the keys as they are now, changed or not.
-  const drawCorner = () => {
-    const bound = new Map(
-      app
-        .bindings_text()
-        .trim()
-        .split(/\r?\n/)
-        .map((line) => {
-          const [action, ...codes] = line.split(" ");
-          return [action, codes.filter((c) => !c.startsWith("Arrow"))] as [string, string[]];
-        }),
-    );
-    const kbd = (action: string, n: number) =>
-      [...new Set((bound.get(action) ?? []).map(keyName))]
-        .slice(0, n)
-        .map((k) => `<kbd>${k}</kbd>`)
-        .join(" ");
-    $("keys-list").innerHTML = [
-      [["up", "left", "down", "right"].map((a) => kbd(a, 1)).join(""), "Steer"],
-      [kbd("flap", 1), "Flap"],
-      [kbd("tuck", 1), "Dive"],
-      [kbd("brake", 2), "Brake, land, hover"],
-      [kbd("breath", 1), "Breathe fire"],
-      ["<kbd>I</kbd><kbd>J</kbd><kbd>K</kbd><kbd>L</kbd>", "Look around"],
-      ["<kbd>M</kbd>", "Big map"],
-      ["<kbd>N</kbd>", "Notes"],
-      ["<kbd>U</kbd>", "Sound on/off"],
-      ["<kbd>Esc</kbd>", "Pause, all controls"],
-    ]
-      .map(([k, v]) => `<span class="keys">${k}</span><span>${v}</span>`)
-      .join("");
-  };
-  const drawKeys = () => {
-    drawCorner();
-    $("rebind-list").innerHTML = app
-      .bindings_text()
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => {
-        const [action, ...codes] = line.split(" ");
-        const shown =
-          rebinding === action ? "Press a key..." : [...new Set(codes.map(keyName))].join(", ") || "none";
-        return `<span>${LABELS[action] ?? action}</span><button type="button" data-action="${action}">${shown}</button>`;
-      })
-      .join("");
-  };
-  const saveKeys = () => {
-    try {
-      localStorage.setItem(KEYS_SAVED, app.bindings_text());
-    } catch {
-      // Kept for this visit only.
-    }
-  };
-  if (!touch) {
-    const rebind = $("rebind");
-    rebind.classList.remove("hidden");
-    rebind.addEventListener("pointerdown", (e) => e.stopPropagation());
-    $("rebind-list").addEventListener("click", (e) => {
-      const action = (e.target as HTMLElement).dataset?.action;
-      if (action) {
-        rebinding = action;
-        drawKeys();
-      }
-    });
-    $("rebind-reset").addEventListener("click", () => {
-      app.reset_keys();
-      saveKeys();
-      drawKeys();
-    });
-    // While waiting for a new key, that key goes nowhere else.
-    window.addEventListener(
-      "keydown",
-      (e) => {
-        if (!rebinding) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        if (e.code !== "Escape") {
-          app.bind_key(rebinding, e.code);
-          saveKeys();
-        }
-        rebinding = null;
-        drawKeys();
-      },
-      { capture: true },
-    );
-    drawKeys();
-  }
-
-  // A small corner card of the keys for keyboard players, folded away with its button.
-  const keys = $("keys-card");
-  if (!touch) {
-    const KEYS_KEY = "zawnabout.keyscard";
-    drawCorner();
-    const fold = (open: boolean) => {
-      keys.classList.toggle("folded", !open);
-      try {
-        localStorage.setItem(KEYS_KEY, open ? "1" : "0");
-      } catch {
-        // Kept for this visit only.
-      }
-    };
-    let open = true;
-    try {
-      open = localStorage.getItem(KEYS_KEY) !== "0";
-    } catch {
-      // Open then.
-    }
-    keys.classList.remove("hidden");
-    fold(open);
-    $("keys-toggle").addEventListener("click", () => fold(keys.classList.contains("folded")));
-  }
-  $("help-btn").addEventListener("click", () => showHelp(welcome.classList.contains("hidden")));
-  welcome.addEventListener("pointerdown", () => showHelp(false));
 
   const typing = (e: Event) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
   window.addEventListener("keydown", (e) => {
@@ -348,23 +194,13 @@ async function start() {
       debugPanel.toggle();
       return;
     }
-    if (e.code === "KeyN" || (e.code === "Escape" && notes.active())) {
-      showHelp(false);
+    if ((e.code === "KeyN" && !app.halted()) || (e.code === "Escape" && notes.active())) {
       notes.toggle();
       return;
     }
-    if (e.code === "KeyH" || e.code === "Escape" || e.code === "KeyP") {
-      showHelp(welcome.classList.contains("hidden"));
-      return;
-    }
-    // U sets the sound, even with the card open.
-    if (e.code === "KeyU") {
-      if (!e.repeat) app.key(e.code, true, false);
-      return;
-    }
-    if (!welcome.classList.contains("hidden")) {
-      // The key that closes the card only closes it.
-      showHelp(false);
+    // The journal and cards take keys first. Held keys only repeat for flying.
+    if (!notes.active() && !e.repeat && app.ui_key(e.code)) {
+      e.preventDefault();
       return;
     }
     if (GAME_KEYS.has(e.code)) e.preventDefault();
@@ -376,7 +212,7 @@ async function start() {
   });
   window.addEventListener("blur", () => app.blur());
   // Click or tap the world to fly there and land. Drag it, or hold the right button, to
-  // look around.
+  // look around. The journal and cards take clicks first.
   let press: { x: number; y: number; at: number; id: number; drag: boolean } | null = null;
   canvas.addEventListener("pointerdown", (e) => {
     // The right button, or Ctrl with a click on a Mac, looks round from the first move.
@@ -385,7 +221,8 @@ async function start() {
     if (look) canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener("pointermove", (e) => {
-    if (!press || e.pointerId !== press.id || notes.active()) return;
+    app.ui_hover(e.clientX / canvas.clientWidth, e.clientY / canvas.clientHeight);
+    if (!press || e.pointerId !== press.id || notes.active() || app.halted()) return;
     if (!press.drag && Math.hypot(e.clientX - press.x, e.clientY - press.y) >= 12) {
       press.drag = true;
       canvas.setPointerCapture(e.pointerId);
@@ -393,12 +230,13 @@ async function start() {
     if (press.drag) app.look_drag(e.movementX || 0, e.movementY || 0);
   });
   canvas.addEventListener("pointerup", (e) => {
-    showHelp(false);
     const p = press;
     press = null;
     if (!p || notes.active() || p.drag) return;
     if (Math.hypot(e.clientX - p.x, e.clientY - p.y) < 12 && performance.now() - p.at < 400) {
-      app.tap(e.clientX / canvas.clientWidth, e.clientY / canvas.clientHeight);
+      const nx = e.clientX / canvas.clientWidth;
+      const ny = e.clientY / canvas.clientHeight;
+      if (!app.ui_click(nx, ny)) app.tap(nx, ny);
     }
   });
   canvas.addEventListener("pointercancel", () => (press = null));
@@ -416,6 +254,46 @@ async function start() {
   };
   window.zawnabout = api;
 
+  // What the game asks of the page: keep its save, settings and keys, or work files.
+  const answer = () => {
+    for (const ask of app.take_asks().split("\n")) {
+      if (ask === "save") {
+        const text = app.save_text();
+        if (text) keep(SAVE_KEY, text);
+      } else if (ask === "prefs") keep(PREFS_KEY, app.prefs_text());
+      else if (ask === "keys") keep(KEYS_KEY, app.bindings_text());
+      else if (ask === "export") {
+        const text = app.save_text();
+        if (text) download(text);
+      } else if (ask === "import") pickSave(app);
+      else if (ask === "source") window.open("https://github.com/cretz/zawnabout", "_blank", "noopener");
+    }
+  };
+
+  // A postcard's picture: the frame just drawn, shrunk on a page canvas and handed back.
+  const shrink = document.createElement("canvas");
+  shrink.width = 320;
+  shrink.height = 180;
+  const snap = () => {
+    const ctx = shrink.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return;
+    const s = Math.min(canvas.width / 16, canvas.height / 9);
+    const [w, h] = [s * 16, s * 9];
+    ctx.drawImage(canvas, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h, 0, 0, 320, 180);
+    const data = ctx.getImageData(0, 0, 320, 180).data;
+    app.take_snap(new Uint8Array(data.buffer), 320, 180);
+  };
+
+  // Leaving the page, or hiding it, keeps the game where it is, to carry on next time.
+  const keepGame = () => {
+    const text = app.save_text();
+    if (text) keep(SAVE_KEY, text);
+  };
+  addEventListener("pagehide", keepGame);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") keepGame();
+  });
+
   const pad = { had: false };
   let last = performance.now();
   const loop = (now: number) => {
@@ -424,6 +302,10 @@ async function start() {
     pollGamepad(app, pad);
     sizeCanvas(canvas);
     const host = app.frame(dt, canvas.width, canvas.height);
+    answer();
+    // The page's own buttons and touch controls step aside while the journal is up. The
+    // big map pauses the game too, but it is page chrome itself, so it stays.
+    document.body.classList.toggle("halted", app.halted() && !notes.active() && !minimap.atlas());
     const logs = app.take_logs();
     if (logs) {
       api.logs.push(...logs.split("\n"));
@@ -433,6 +315,7 @@ async function start() {
       const [cmd] = line.split(" ");
       if (cmd === "shot") api.shots.push(canvas.toDataURL("image/png"));
       if (cmd === "save-trace") api.logs.push(app.take_trace() ?? "");
+      if (cmd === "snap") snap();
     }
     debugPanel?.update();
     minimap.update(notes.active() ? notes.spots() : []);

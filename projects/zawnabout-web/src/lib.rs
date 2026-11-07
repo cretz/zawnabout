@@ -119,6 +119,10 @@ mod web {
             });
             self.gfx.render(&self.game, &view);
             self.gfx.renderer.queue.present(tex);
+            // A postcard's view: the page reads the canvas and hands it to `take_snap`.
+            if self.game.wants_snap() {
+                host.push("snap".into());
+            }
             if self.sound {
                 let mix = self.gfx.sound(&self.game);
                 self.synth.set(mix);
@@ -156,7 +160,87 @@ mod web {
         }
 
         pub fn gamepad(&mut self, axes: &[f32], buttons: &[f32]) {
-            self.game.input.gamepad(axes, buttons);
+            self.game.gamepad(axes, buttons);
+        }
+
+        /// Offers a key to the game's own screens: the journal (which is the pause
+        /// screen) and cards for things found. False when it is for flying.
+        pub fn ui_key(&mut self, code: &str) -> bool {
+            self.game.ui_key(code, None) == zawnabout_game::hud::HudKey::Used
+        }
+
+        /// A click or tap at normalized coordinates on the game's own screens. False when
+        /// it falls through to the world.
+        pub fn ui_click(&mut self, nx: f32, ny: f32) -> bool {
+            self.game.ui_click(nx, ny)
+        }
+
+        pub fn ui_hover(&mut self, nx: f32, ny: f32) {
+            self.game.ui_hover(nx, ny);
+        }
+
+        /// Opens the journal, which pauses.
+        pub fn open_book(&mut self) {
+            self.game.open_book();
+        }
+
+        /// Whether the world waits: the journal, a card or a pause is up.
+        pub fn halted(&self) -> bool {
+            self.game.halted()
+        }
+
+        /// Played by touch: help shows the touch controls.
+        pub fn set_touch(&mut self, on: bool) {
+            self.game.touch = on;
+        }
+
+        pub fn pause_away(&self) -> bool {
+            self.game.pause_away
+        }
+
+        /// What the game asks of the page, one word a line: `save`, `prefs`, `keys`,
+        /// `export` or `import`.
+        pub fn take_asks(&mut self) -> String {
+            use zawnabout_game::game::Ask;
+            std::mem::take(&mut self.game.asks)
+                .into_iter()
+                .map(|a| match a {
+                    Ask::Save => "save",
+                    Ask::Prefs => "prefs",
+                    Ask::Keys => "keys",
+                    Ask::Export => "export",
+                    Ask::Import => "import",
+                    Ask::Source => "source",
+                })
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                )
+        }
+
+        /// A postcard's picture: the canvas as `w` by `h` RGBA, read right after a frame
+        /// that asked for `snap`.
+        pub fn take_snap(&mut self, rgba: &[u8], w: u32, h: u32) {
+            self.game.take_snap(rgba, w as usize, h as usize);
+        }
+
+        /// The game as a save file, or nothing with gameplay off.
+        pub fn save_text(&self) -> Option<String> {
+            self.game.save_text()
+        }
+
+        /// Loads a save file. An error says why it would not.
+        pub fn load_save(&mut self, text: &str) -> Result<(), JsValue> {
+            self.game.load_save(text).map_err(js_err)
+        }
+
+        pub fn prefs_text(&self) -> String {
+            self.game.prefs_text()
+        }
+
+        pub fn set_prefs_text(&mut self, text: &str) {
+            self.game.set_prefs_text(text);
         }
 
         /// Looks around by a drag on the screen, in CSS pixels.
@@ -177,6 +261,9 @@ mod web {
         /// A tap or click at normalized coordinates (0..1, top left origin). Flies to and
         /// lands on whatever is there.
         pub fn tap(&mut self, nx: f32, ny: f32) -> bool {
+            if self.game.halted() {
+                return false;
+            }
             let aspect = self.config.width as f32 / self.config.height.max(1) as f32;
             self.game.tap(nx, ny, aspect)
         }

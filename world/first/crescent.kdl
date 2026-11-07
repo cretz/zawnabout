@@ -201,6 +201,7 @@ caves vault {
         beacon vault-beacon x=-300 y=-970 z=200
     }
     mouth eye-shaft kind=chimney w=50 hidden=#true light=#true {
+        note "Ringed at the top by tall lantern stones, so it reads as a way down people made, not a hole."
         p 100 60 0
         p 100 -100 0
         p 120 -520 30

@@ -1557,8 +1557,20 @@ fn sites(terrain: &Terrain, rng: &mut Rng, out: &mut Vec<Building>) {
                     "docks" => 80.0,
                     _ => 50.0,
                 };
-                // A pier straight out from the shore, with boats along it.
-                let mid = water_at(len * 0.5 - 8.0);
+                // A pier straight out from the shore, with boats along it. Over a long
+                // shallow beach it reaches back to the water's edge, so it never stands
+                // out at sea on its own.
+                let dry = |t: f32| terrain.height(at.x + dir.x * t, at.y + dir.y * t) > sea + 0.5;
+                let mut edge = 0.0;
+                // A site marked out on the water looks back toward land for the edge.
+                while !dry(edge) && edge > -200.0 {
+                    edge -= 2.0;
+                }
+                while edge < shore && dry(edge) {
+                    edge += 2.0;
+                }
+                let (land_end, sea_end) = ((edge - 4.0).min(shore - 8.0), shore + len - 8.0);
+                let mid = at + dir * (land_end + sea_end) * 0.5;
                 let pier = Vec3::new(mid.x, sea, mid.y);
                 if kind != "shipyard" {
                     push(
@@ -1566,7 +1578,7 @@ fn sites(terrain: &Terrain, rng: &mut Rng, out: &mut Vec<Building>) {
                         Kind::Pier,
                         pier,
                         dir,
-                        Vec3::new(len, 1.8, 7.0),
+                        Vec3::new(sea_end - land_end, 1.8, 7.0),
                         0.0,
                         6.0,
                         rng,
@@ -1603,7 +1615,15 @@ fn sites(terrain: &Terrain, rng: &mut Rng, out: &mut Vec<Building>) {
                 }
                 match kind {
                     "docks" | "ferry" => {
-                        let back = on_shore - dir * 18.0;
+                        // Back from the water, on dry ground: a site set by the water's
+                        // edge would otherwise put its shed in the sea.
+                        let mut back = on_shore - dir * 18.0;
+                        for _ in 0..30 {
+                            if terrain.height(back.x, back.y) > sea + 0.2 {
+                                break;
+                            }
+                            back -= dir * 4.0;
+                        }
                         let gb = terrain.height(back.x, back.y);
                         let k = if kind == "ferry" {
                             Kind::Terminal

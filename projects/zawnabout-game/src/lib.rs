@@ -2,9 +2,11 @@
 //! Platform hosts (native window, headless, browser) drive it.
 
 pub mod audio;
+pub mod book;
 pub mod camera;
 pub mod cave_life;
 pub mod feedback;
+pub mod font;
 pub mod fx;
 pub mod game;
 pub mod gfx;
@@ -16,13 +18,17 @@ pub mod mesh;
 pub mod models;
 pub mod notes;
 pub mod park_life;
+pub mod play;
 pub mod pose;
 pub mod prof;
 pub mod render;
 pub mod script;
 pub mod sea_life;
+pub mod talk;
 pub mod terrain_mesh;
+pub mod thumbs;
 pub mod town_mesh;
+pub mod treasure;
 pub mod water;
 pub mod weather;
 pub mod wildlife;

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["zawnabout-sim", "zawnabout-game", "zawnabout-native", "zawnabout-web", "zawnabout-worldc"]
+members = ["zawnabout-sim", "zawnabout-game", "zawnabout-native", "zawnabout-play", "zawnabout-web", "zawnabout-worldc"]
 
 [workspace.package]
 version = "0.0.0"
@@ -15,6 +15,7 @@ glam = "0.34"
 # No gles: WebGPU in the browser and native backends only.
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "wgsl", "webgpu", "dx12", "metal", "vulkan"] }
 zawnabout-game = { path = "zawnabout-game" }
+zawnabout-play = { path = "zawnabout-play" }
 zawnabout-sim = { path = "zawnabout-sim" }
 zawnabout-worldc = { path = "zawnabout-worldc" }
 
