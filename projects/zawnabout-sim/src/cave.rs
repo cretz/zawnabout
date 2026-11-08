@@ -288,10 +288,11 @@ fn decorate_one(t: &Terrain, v: &Void, seed: u64, out: &mut Vec<Placed>) {
                 } else {
                     1.2 + size * 2.4
                 };
-                // Under water it stays under, its tip clear of the surface.
+                // Under water an ordinary one stays under, its tip clear of the surface. A
+                // giant is a landmark and stands out of the lake, things rest on it.
                 let scale = match water {
-                    Some(level) => scale.min((level - at.y - 0.5) / CRYSTAL_TALL),
-                    None => scale,
+                    Some(level) if !giant => scale.min((level - at.y - 0.5) / CRYSTAL_TALL),
+                    _ => scale,
                 };
                 if scale < 0.4 {
                     continue;

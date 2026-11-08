@@ -3,7 +3,7 @@
 use std::path::Path;
 
 fn main() {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../world/first");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../zawnabout-world/first");
     println!("cargo:rerun-if-changed={}", dir.display());
     // The gameplay file is the play crate's, not the world's.
     for entry in std::fs::read_dir(&dir).expect("world dir") {

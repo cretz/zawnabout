@@ -159,7 +159,7 @@ fn no_leaves_in_water() {
 /// Probe: where every building of kind `KIND` (as in the world file, like `billboard`)
 /// stands, and which way it faces.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn where_kind() {
     let w = zawnabout_sim::World::generate(1);
     let name = std::env::var("KIND").unwrap_or_default();

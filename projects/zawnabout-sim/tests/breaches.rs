@@ -46,9 +46,9 @@ fn no_sea_holes() {
     assert!(bad.is_empty(), "caves open under the sea: {bad:?}");
 }
 
-/// Run with `--ignored --nocapture` to list every opening.
+/// Run with `--features probes` and `--nocapture` to list every opening.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn list_breaches() {
     let t = Terrain::new(&WORLD);
     for (id, (n, sea, at)) in breaches(&t) {
@@ -61,7 +61,7 @@ fn list_breaches() {
 
 /// Prints ground heights on a line: `PROBE="x0 z0 x1 z1 n"` in world space.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn probe() {
     let t = Terrain::new(&WORLD);
     let v: Vec<f32> = std::env::var("PROBE")
@@ -79,7 +79,7 @@ fn probe() {
 
 /// Prints rock distance up a column: `COLUMN="x z y0 y1 n"` in world space.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn column() {
     let t = Terrain::new(&WORLD);
     let v: Vec<f32> = std::env::var("COLUMN")
@@ -99,9 +99,9 @@ fn column() {
     }
 }
 
-/// Run with `--ignored --nocapture` to see how long the world takes to build.
+/// Run with `--features probes` and `--nocapture` to see how long the world takes to build.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn world_time() {
     let t0 = std::time::Instant::now();
     let w = zawnabout_sim::World::generate(1);
@@ -117,7 +117,7 @@ fn world_time() {
 }
 
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn decor_time() {
     let t = Terrain::new(&WORLD);
     let t0 = std::time::Instant::now();
@@ -166,7 +166,7 @@ fn boats_stay_afloat() {
 }
 
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn height_time() {
     let t = Terrain::new(&WORLD);
     let h = t.half_size();
@@ -186,9 +186,9 @@ fn height_time() {
 }
 
 /// Height, slope, cover, water and roads at spots, for placing things by hand. Run with
-/// `SPOTS="x z;x z" cargo test --release --test breaches spots -- --ignored --nocapture`.
+/// `SPOTS="x z;x z" cargo test --release --features probes --test breaches spots -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn spots() {
     let t = Terrain::new(&WORLD);
     let list = std::env::var("SPOTS").unwrap_or_default();
@@ -214,9 +214,9 @@ fn spots() {
 }
 
 /// Buildings near a spot and their solid shapes:
-/// `NEAR="x z" cargo test --release --test breaches near_buildings -- --ignored --nocapture`.
+/// `NEAR="x z" cargo test --release --features probes --test breaches near_buildings -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn near_buildings() {
     let w = zawnabout_sim::World::generate(1);
     let v: Vec<f32> = std::env::var("NEAR")
@@ -237,9 +237,9 @@ fn near_buildings() {
 }
 
 /// Every road end that meets no other road, and what it is in:
-/// `cargo test --release --test breaches road_ends -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test breaches road_ends -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn road_ends() {
     let t = Terrain::new(&WORLD);
     let roads = t.def.roads;
@@ -267,9 +267,9 @@ fn road_ends() {
 }
 
 /// Flat dry spots off the roads for something `r` across, searched over a square:
-/// `FLAT="cx cz half step r" cargo test --release --test breaches flat_spots -- --ignored --nocapture`.
+/// `FLAT="cx cz half step r" cargo test --release --features probes --test breaches flat_spots -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn flat_spots() {
     let t = Terrain::new(&WORLD);
     let v: Vec<f32> = std::env::var("FLAT")
@@ -320,9 +320,9 @@ fn flat_spots() {
 }
 
 /// The index of the first vehicle of a kind:
-/// `KIND=Train cargo test --release --test breaches first_vehicle -- --ignored --nocapture`.
+/// `KIND=Train cargo test --release --features probes --test breaches first_vehicle -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn first_vehicle() {
     let w = zawnabout_sim::World::generate(1);
     let want = std::env::var("KIND").unwrap_or_default();
@@ -342,9 +342,9 @@ fn first_vehicle() {
 }
 
 /// Every run of bridge points on every road: where it starts and ends, how long, and its
-/// deck heights: `cargo test --release --test breaches bridge_spans -- --ignored --nocapture`.
+/// deck heights: `cargo test --release --features probes --test breaches bridge_spans -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn bridge_spans() {
     let t = Terrain::new(&WORLD);
     for (i, r) in t.def.roads.iter().enumerate() {
@@ -382,9 +382,9 @@ fn bridge_spans() {
 }
 
 /// The suspension bridges and their towers:
-/// `cargo test --release --test breaches suspensions -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test breaches suspensions -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn suspensions() {
     let w = zawnabout_sim::World::generate(1);
     for b in &w.bridges {
@@ -406,9 +406,9 @@ fn suspensions() {
 }
 
 /// Each road's highest point and steepest stretch, to find where a tunnel belongs:
-/// `cargo test --release --test breaches road_climbs -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test breaches road_climbs -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn road_climbs() {
     let t = Terrain::new(&WORLD);
     for (i, r) in t.def.roads.iter().enumerate() {
@@ -437,9 +437,9 @@ fn road_climbs() {
 }
 
 /// The first few buildings of a kind, where they stand and which way:
-/// `KIND=Pier cargo test --release --test breaches buildings_of -- --ignored --nocapture`.
+/// `KIND=Pier cargo test --release --features probes --test breaches buildings_of -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn buildings_of() {
     let w = zawnabout_sim::World::generate(1);
     let want = std::env::var("KIND").unwrap_or_default();
@@ -454,9 +454,9 @@ fn buildings_of() {
 }
 
 /// One road's profile point by point: `ROAD=fang-road cargo test --release --test
-/// breaches road_profile -- --ignored --nocapture`.
+/// breaches road_profile -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn road_profile() {
     let t = Terrain::new(&WORLD);
     let want = std::env::var("ROAD").unwrap_or_default();
@@ -481,10 +481,10 @@ fn road_profile() {
 }
 
 /// Heights over a grid and every road's profile, for drawing road maps:
-/// `GRID="x0 z0 x1 z1 step" OUT=file cargo test --release --test breaches height_grid --
-/// --ignored --nocapture`. Lines are `h x z y` for ground, `r id x z y bridge tunnel`.
+/// `GRID="x0 z0 x1 z1 step" OUT=file cargo test --release --features probes --test breaches
+/// height_grid -- --nocapture`. Lines are `h x z y` for ground, `r id x z y bridge tunnel`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn height_grid() {
     use std::fmt::Write;
     let t = Terrain::new(&WORLD);
@@ -535,10 +535,10 @@ fn height_grid() {
 
 /// Cave floor heights over a grid, for laying paths through caverns:
 /// `FLOOR="x0 z0 x1 z1 step ytop" OUT=file cargo test --release --test breaches
-/// cave_floor -- --ignored`. Lines are `h x z y wet` as for `height_grid`, with `y` the
+/// cave_floor --`. Lines are `h x z y wet` as for `height_grid`, with `y` the
 /// first floor below `ytop` (or -9999 where `ytop` is in rock).
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn cave_floor() {
     use std::fmt::Write;
     let t = Terrain::new(&WORLD);
@@ -568,10 +568,10 @@ fn cave_floor() {
 }
 
 /// The floor and any water under spots in caves, for laying boat routes:
-/// `WATER="x z ytop;x z ytop" cargo test --release --test breaches cave_water -- --ignored
+/// `WATER="x z ytop;x z ytop" cargo test --release --features probes --test breaches cave_water --
 /// --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn cave_water() {
     let t = Terrain::new(&WORLD);
     for s in std::env::var("WATER").unwrap_or_default().split(';') {
@@ -589,9 +589,9 @@ fn cave_water() {
 }
 
 /// The solid shapes of the landmark nearest `NEAR="x z"`, with the support over each:
-/// `cargo test --release --test breaches landmark_shapes -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test breaches landmark_shapes -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn landmark_shapes() {
     let w = zawnabout_sim::World::generate(1);
     let v: Vec<f32> = std::env::var("NEAR")
@@ -616,9 +616,9 @@ fn landmark_shapes() {
 }
 
 /// Where every landmark of a kind stands: `KIND=Racetrack cargo test --release --test
-/// breaches landmarks_of -- --ignored --nocapture`.
+/// breaches landmarks_of -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn landmarks_of() {
     let w = zawnabout_sim::World::generate(1);
     let want = std::env::var("KIND").unwrap_or_default();
@@ -630,9 +630,9 @@ fn landmarks_of() {
 }
 
 /// Landmarks inside a box, `BOX="x0 z0 x1 z1"`, with their footprints:
-/// `cargo test --release --test breaches landmarks_in -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test breaches landmarks_in -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn landmarks_in() {
     let w = zawnabout_sim::World::generate(1);
     let v: Vec<f32> = std::env::var("BOX")
@@ -663,7 +663,7 @@ fn landmarks_in() {
 /// Probe: open spots for a new landmark in `AREA="x0 z0 x1 z1"`: no road within `R`
 /// meters (default 50), no building, flat to `FLAT` meters, dry and under no rock.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn open_spots() {
     let w = zawnabout_sim::World::generate(1);
     let t = &w.terrain;
@@ -715,10 +715,10 @@ fn open_spots() {
 /// must never reach past the cavern into the rock, where it would leave a pocket of air a
 /// dragon could fly into and be pushed out of on the far side. Every lake still opens a
 /// ledge under its cavern's lower walls along the shore (flight now refuses a step deep
-/// into rock, so none can be flown through). Run by hand with `--ignored` until basins
-/// stop at their cavern's walls.
+/// into rock, so none can be flown through). A probe, behind the `probes` feature,
+/// until basins stop at their cavern's walls.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn cave_lakes_stay_in_their_caves() {
     use zawnabout_sim::terrain::{VoidShape, void_bounds};
     let t = Terrain::new(&WORLD);

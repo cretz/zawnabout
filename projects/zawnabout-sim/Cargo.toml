@@ -6,6 +6,11 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[features]
+# Probes: tests that print what they find for a person to read, not checks. Run one with
+# `cargo test --release -p CRATE --features probes NAME -- --nocapture`.
+probes = []
+
 [dependencies]
 glam = { workspace = true }
 

@@ -271,9 +271,9 @@ fn roads_hold_up() {
 }
 
 /// Every fault on every road, for review:
-/// `ROAD=fang cargo test --release --test roads road_audit -- --ignored --nocapture`.
+/// `ROAD=fang cargo test --release --features probes --test roads road_audit -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn road_audit() {
     let w = World::generate(1);
     let only = std::env::var("ROAD").unwrap_or_default();
@@ -297,9 +297,9 @@ fn road_audit() {
 }
 
 /// Car trips: how many, how long, and the shortest:
-/// `cargo test --release --test roads trips -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test roads trips -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn trips() {
     let w = World::generate(1);
     let places: Vec<Vec2> = w
@@ -384,9 +384,9 @@ fn trips() {
     }
 }
 
-/// One car's trip over time: `CAR=5 cargo test --release --test roads car_trace -- --ignored --nocapture`.
+/// One car's trip over time: `CAR=5 cargo test --release --features probes --test roads car_trace -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn car_trace() {
     let w = World::generate(1);
     let k: usize = std::env::var("CAR")
@@ -422,9 +422,9 @@ fn car_trace() {
     }
 }
 
-/// When boats pass a spot, `AT="x z"`: `cargo test --release --test roads boats_by -- --ignored --nocapture`.
+/// When boats pass a spot, `AT="x z"`: `cargo test --release --features probes --test roads boats_by -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn boats_by() {
     let w = World::generate(1);
     let v: Vec<f32> = std::env::var("AT")
@@ -451,9 +451,9 @@ fn boats_by() {
 }
 
 /// Helicopters: where they stop, and how close they pass over the ground:
-/// `cargo test --release --test roads helicopters -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test roads helicopters -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn helicopters() {
     let w = World::generate(1);
     for (i, v) in w.traffic.vehicles.iter().enumerate() {
@@ -486,9 +486,9 @@ fn helicopters() {
 }
 
 /// Where cars dip into the road or float over it, near `AT="x z"` (200 m round): each
-/// one's ends against the ground, worst first. `cargo test --release --test roads sinking -- --ignored --nocapture`.
+/// one's ends against the ground, worst first. `cargo test --release --features probes --test roads sinking -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn sinking() {
     use zawnabout_sim::traffic::{BUS, TRUCK};
     let w = World::generate(1);
@@ -537,9 +537,9 @@ fn sinking() {
     }
 }
 
-/// Every vehicle near `AT="x z"` at time `T`: `cargo test --release --test roads near -- --ignored --nocapture`.
+/// Every vehicle near `AT="x z"` at time `T`: `cargo test --release --features probes --test roads near -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn near() {
     let w = World::generate(1);
     let v: Vec<f32> = std::env::var("AT")
@@ -570,9 +570,9 @@ fn near() {
     }
 }
 
-/// How far each drawbridge is lifted over time: `cargo test --release --test roads draw_lifts -- --ignored --nocapture`.
+/// How far each drawbridge is lifted over time: `cargo test --release --features probes --test roads draw_lifts -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn draw_lifts() {
     let mut w = World::generate(1);
     for t in 0..120 {
@@ -590,9 +590,9 @@ fn draw_lifts() {
 }
 
 /// How far the ground pokes through or sags under each landmark's footprint, `KIND=waterpark`:
-/// `cargo test --release --test roads ground_under -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test roads ground_under -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn ground_under() {
     let w = World::generate(1);
     let kind = std::env::var("KIND").unwrap_or("waterpark".into());
@@ -726,7 +726,7 @@ fn buses_call_at_stops() {
 
 /// Probe: parcel vans halted at a stop, a couple of seconds in, after `T` seconds.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn vans() {
     let w = World::generate(1);
     let from: f32 = std::env::var("T")

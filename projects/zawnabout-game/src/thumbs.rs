@@ -118,9 +118,9 @@ mod tests {
 #[cfg(test)]
 mod sheet {
     /// Writes every treasure's picture side by side as raw RGBA, for a look:
-    /// `OUT=path cargo test --release -p zawnabout-game thumb_sheet -- --ignored`.
+    /// `OUT=path cargo test --release -p zawnabout-game --features probes thumb_sheet --`.
     #[test]
-    #[ignore]
+    #[cfg(feature = "probes")]
     fn thumb_sheet() {
         let t = super::THUMB as usize;
         let kinds = crate::treasure::KINDS;

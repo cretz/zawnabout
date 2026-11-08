@@ -1,12 +1,14 @@
 //! How turns feel: turn rate, bank and speed over a held turn.
 
+#![cfg(feature = "probes")]
+
 use zawnabout_sim::glam::Vec3;
 use zawnabout_sim::{DT, DragonInput, Mode, Sim, TICK_HZ};
 
 /// Prints turn rate over time for a few speeds and stick amounts. Run with
-/// `cargo test --release --test turning -- --ignored --nocapture`.
+/// `cargo test --release --features probes --test turning -- --nocapture`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn turn_table() {
     let base = Sim::new(1);
     for speed in [30.0, 60.0, 110.0] {

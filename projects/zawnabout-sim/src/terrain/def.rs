@@ -1,4 +1,4 @@
-//! The world as data, generated at build time from `world/first/*.kdl` by
+//! The world as data, generated at build time from `zawnabout-world/first/*.kdl` by
 //! `zawnabout-worldc`. Points are world space. Ids are `island/name`.
 
 #[derive(Debug)]

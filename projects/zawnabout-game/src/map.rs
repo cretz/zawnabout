@@ -258,9 +258,9 @@ fn roads(terrain: &Terrain, x0: f32, z0: f32, step: f32, size: u32, out: &mut [u
 #[cfg(test)]
 mod tests {
     /// Every place the big map knows, for laying out gameplay:
-    /// `cargo test --release -p zawnabout-game --lib list_places -- --ignored --nocapture`.
+    /// `cargo test --release -p zawnabout-game --features probes --lib list_places -- --nocapture`.
     #[test]
-    #[ignore]
+    #[cfg(feature = "probes")]
     fn list_places() {
         let w = zawnabout_sim::World::generate(1);
         print!("{}", super::places(&w.terrain));

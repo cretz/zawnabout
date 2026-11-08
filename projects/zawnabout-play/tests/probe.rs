@@ -1,12 +1,14 @@
 //! Probes for placing gameplay content. Run one with
-//! `cargo test --release -p zawnabout-play --test probe NAME -- --ignored --nocapture`.
+//! `cargo test --release -p zawnabout-play --features probes --test probe NAME -- --nocapture`.
+
+#![cfg(feature = "probes")]
 
 use zawnabout_sim::terrain::def::WORLD;
 use zawnabout_sim::world::World;
 
 /// Bridge decks over water or gaps: road, middle point, deck height and what is below.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn gaps() {
     let w = World::generate(1);
     for (i, r) in WORLD.roads.iter().enumerate() {
@@ -86,7 +88,7 @@ fn gaps() {
 
 /// Ground and water across a gate's middle, along its crossing: GATE="x1 z1 x2 z2".
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn across() {
     let w = World::generate(1);
     let v: Vec<f32> = std::env::var("GATE")
@@ -113,7 +115,7 @@ fn across() {
 /// The nearest dry, open, flat spot to each of `DRY="x z [y];..."`, out of the water and
 /// not on or in a building, for moving a find or a townsperson that landed badly.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn dry() {
     let w = World::generate(1);
     for s in std::env::var("DRY").unwrap_or_default().split(';') {

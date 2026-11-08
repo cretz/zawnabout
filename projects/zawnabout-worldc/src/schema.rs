@@ -1,5 +1,5 @@
 //! The world vocabulary: which nodes exist, what they take and what they may hold.
-//! Property kinds are `n` number, `s` string and `b` bool. See `world/README.md`.
+//! Property kinds are `n` number, `s` string and `b` bool. See `zawnabout-world/README.md`.
 
 /// Which points a node takes, and the properties each point may carry.
 #[derive(Clone, Copy)]

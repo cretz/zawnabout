@@ -1,11 +1,13 @@
 //! Prop counts and mesh sizes, for budgeting.
 
+#![cfg(feature = "probes")]
+
 use zawnabout_game::models;
 use zawnabout_sim::{PropKind, Sim};
 
-/// `cargo test --release -p zawnabout-game --test props -- --ignored --nocapture`
+/// `cargo test --release -p zawnabout-game --features probes --test props -- --nocapture`
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn prop_table() {
     let sim = Sim::new(1);
     for kind in PropKind::ALL {
@@ -24,7 +26,7 @@ fn prop_table() {
 /// What fills a town tile: triangles by building kind, near and far, and props.
 /// `TILE="x z"` (meters, any point in the tile), same command as above with `tile_cost`.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn tile_cost() {
     use std::collections::HashMap;
     let sim = Sim::new(1);
@@ -64,7 +66,7 @@ fn tile_cost() {
 
 /// The heaviest buildings in the world, near and far triangles.
 #[test]
-#[ignore]
+#[cfg(feature = "probes")]
 fn heavy_buildings() {
     let sim = Sim::new(1);
     let mut rows: Vec<_> = sim

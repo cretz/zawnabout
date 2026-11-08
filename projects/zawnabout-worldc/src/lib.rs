@@ -1,6 +1,6 @@
 //! Compiles a world folder of KDL files into Rust source for the sim. Runs at build time.
 //!
-//! Every node is checked against the vocabulary in `world/README.md`, so typos fail the
+//! Every node is checked against the vocabulary in `zawnabout-world/README.md`, so typos fail the
 //! build with a file and line. Outlines and paths are smoothed and roughened here, once,
 //! with plain arithmetic only, so every build of the same files gives the same world.
 
@@ -1800,7 +1800,7 @@ mod tests {
 
     #[test]
     fn first_world_compiles() {
-        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../world/first");
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../zawnabout-world/first");
         let rust = compile(&dir).unwrap_or_else(|e| panic!("{e}"));
         assert!(rust.contains("pub static WORLD"));
     }

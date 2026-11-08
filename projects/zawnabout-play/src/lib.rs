@@ -1,7 +1,7 @@
 //! Gameplay, laid on top of the islands. It reads the world and one player's dragon and
 //! never changes either, so with it gone the islands are exactly as they are. Each
 //! player has their own: a hoard and its lair for now, more layers later. What it keeps
-//! saves as text, a section a layer, keyed by the stable ids in `world/first/play.kdl`.
+//! saves as text, a section a layer, keyed by the stable ids in `zawnabout-world/first/play.kdl`.
 
 use glam::Vec3;
 use zawnabout_sim::dragon::{Dragon, Mode};

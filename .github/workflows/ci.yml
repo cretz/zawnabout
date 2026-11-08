@@ -1,8 +1,21 @@
 name: CI
 
+# Pull requests, and `main` once one merges. A branch on its own is not waiting on
+# anything, and checking it on push too would run everything twice once its PR is open.
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
+
+# One run per branch: a newer push cancels the older run instead of racing it for the
+# build cache.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
 
 defaults:
   run:
@@ -10,19 +23,27 @@ defaults:
     working-directory: projects
 
 jobs:
-  # Formatting and lints once, for native and the web build.
+  # Formatting and lints once, for native (tests included) and the web build.
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      # The same pin as `projects/rust-toolchain.toml`, so CI denies the lints a developer sees.
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - name: Linux packages
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev
+      # Kept even when the run fails, so the next try does not rebuild every dependency.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: projects
+          cache-on-failure: true
       - run: cargo fmt --check
-      - run: cargo clippy --release -- -D warnings
-      - run: cargo clippy --release --target wasm32-unknown-unknown -p zawnabout-web -- -D warnings
+      - run: cargo clippy --release --locked --all-targets --all-features -- -D warnings
+      - run: cargo clippy --release --locked --target wasm32-unknown-unknown -p zawnabout-web -- -D warnings
 
   # Tests and every playbook on each platform. CI machines have no GPU, so wgpu falls back
   # to a software one: lavapipe on Linux, WARP on Windows, the runner's virtual GPU on macOS.
@@ -32,21 +53,28 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
       - name: Linux packages
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev mesa-vulkan-drivers
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev mesa-vulkan-drivers
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: projects
-      - run: cargo build --release
-      - run: cargo test --release
+          cache-on-failure: true
+      - run: cargo build --release --locked
+      - run: cargo test --release --locked
+      # Every playbook, against the binary built above, on the runner's software GPU.
       - name: Playbooks
-        run: zawnabout-playbooks/run-all.sh "$RUNNER_TEMP/playbooks"
-      - name: Playbook logs and shots
+        env:
+          ZAWNABOUT_PLAYBOOK_OUT: ${{ runner.temp }}/playbooks
+        run: cargo test --release --locked -p zawnabout-native --features playbooks --test playbooks -- --nocapture
+      - name: Keep the playbook logs and shots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: playbooks-${{ matrix.os }}
           path: ${{ runner.temp }}/playbooks
+          if-no-files-found: ignore

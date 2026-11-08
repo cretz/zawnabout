@@ -3,7 +3,7 @@
 use std::path::Path;
 
 fn main() {
-    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../world/first/play.kdl");
+    let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../zawnabout-world/first/play.kdl");
     println!("cargo:rerun-if-changed={}", file.display());
     let rust = zawnabout_worldc::play::compile(&file).unwrap_or_else(|e| {
         for line in e.lines() {

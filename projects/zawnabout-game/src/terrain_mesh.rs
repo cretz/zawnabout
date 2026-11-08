@@ -703,14 +703,14 @@ impl Job {
 
 /// A chunk's outside and deep cave meshes, and the deep caves it left out because the
 /// camera is not near them (`near` says which are), all at once.
-#[cfg(test)]
+#[cfg(all(test, feature = "probes"))]
 fn build(
     terrain: &Terrain,
     key: Key,
     near: &dyn Fn(u16) -> bool,
 ) -> (MeshBuilder, MeshBuilder, Vec<u16>) {
     let mut job = Job::new(key);
-    while !job.step(terrain, near) {}
+    while !job.step(terrain, near, f64::INFINITY) {}
     (job.m, job.inner, job.skipped)
 }
 
@@ -1291,14 +1291,14 @@ fn faces(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "probes"))]
 mod tests {
     use super::*;
 
     /// Steep or upside-down triangles near a spot, in the chunk of each LOD holding it:
-    /// `AT="x z" cargo test --release -p zawnabout-game steep_near -- --ignored --nocapture`.
+    /// `AT="x z" cargo test --release -p zawnabout-game --features probes steep_near -- --nocapture`.
     #[test]
-    #[ignore]
+    #[cfg(feature = "probes")]
     fn steep_near() {
         let w = zawnabout_sim::World::generate(1);
         let v: Vec<f32> = std::env::var("AT")

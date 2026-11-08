@@ -10,6 +10,10 @@ publish.workspace = true
 name = "zawnabout"
 path = "src/main.rs"
 
+[features]
+# The playbooks test (tests/playbooks.rs), which needs a GPU (a software one does).
+playbooks = []
+
 [dependencies]
 cpal = "0.16"
 gilrs = "0.11"

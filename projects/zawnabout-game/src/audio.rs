@@ -485,14 +485,14 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "probes"))]
 mod levels {
     use super::*;
 
     /// Probe: how loud each sound is on its own at full level, as RMS.
-    /// `cargo test --release -p zawnabout-game levels -- --ignored --nocapture`
+    /// `cargo test --release -p zawnabout-game --features probes levels -- --nocapture`
     #[test]
-    #[ignore]
+    #[cfg(feature = "probes")]
     fn each_sound_alone() {
         for k in 0..8 {
             let mut v = [0.0f32; 8];

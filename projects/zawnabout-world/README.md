@@ -1,4 +1,7 @@
-# World Files
+# zawnabout-world
+
+The world files: the islands, caves, towns and gameplay, written by hand.
+
 
 Each world is a folder of KDL v2 files compiled into Rust at build time. `world.kdl` places islands, open ocean finds and anything spanning islands. Each island file holds its own features.
 
