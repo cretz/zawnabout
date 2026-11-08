@@ -865,3 +865,27 @@ spire north-stack x=600 z=-2600 h=95 r=85 top=flat {
     note "Lone stack off the north cliffs, split down one side by its shaft."
     perch north-stack-top x=560 y=95 z=-2640
 }
+
+// The Sea Doors: a great hall built into the north sea cliff, its doors at the water.
+// The hall runs back through the rock and opens high in the wall of a cavern, where a
+// stair comes down to an underground lake. The rock is cut a little wider than the
+// building, which lines it inside and covers the cuts with its two fronts.
+caves sea-doors-rock {
+    cavern sea-doors-front x=625 y=79 z=-1661 w=192 h=158 d=57 rot=20 shape=block glow=0 decor=bare
+    cavern sea-doors-hall x=564 y=46 z=-1495 w=68 h=90 d=355 rot=20 shape=block glow=0.6 decor=bare
+    cavern sea-doors-back x=501 y=54 z=-1321 w=192 h=200 d=45 rot=20 shape=block glow=0 decor=bare
+    cavern sea-doors-cave x=451 y=50 z=-1183 w=400 h=250 d=320 rot=20 shape=dome glow=0.35 decor=crystal {
+        note "Behind the Sea Doors. Still water under the stair, crystal glow."
+        lake sea-doors-pool level=-15 {
+            p 559 -1218
+            p 390 -1279
+            p 352 -1235
+            p 358 -1163
+            p 509 -1109
+            p 559 -1159
+        }
+    }
+}
+landmark sea-doors kind=seadoors x=620 y=4 z=-1648 rot=160 {
+    note "The great hall in the north sea cliff. Fly in from the sea, out over the cave lake."
+}

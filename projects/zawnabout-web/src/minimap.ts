@@ -502,14 +502,36 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
     }
   }, true);
 
+  // What the small map last showed. It only draws again when that changes, which in
+  // flight is a fraction of a pixel a second, so most frames it costs nothing.
+  let drawn = "";
+
   return {
     /** Whether the atlas is open, so the game stays paused under it. */
     atlas: () => size === "atlas",
     update(pins: number[]) {
       const px = Math.round(canvas.clientWidth * Math.min(devicePixelRatio || 1, 2));
-      if (canvas.width !== px) canvas.width = canvas.height = px;
+      if (canvas.width !== px) {
+        canvas.width = canvas.height = px;
+        drawn = "";
+      }
       const w = shownView();
       const s = px / w.s;
+      const [x, z, heading] = app.map_marker();
+      if (size !== "atlas") {
+        const shows = [
+          size,
+          Math.round(((x - w.x) * s) * 4),
+          Math.round(((z - w.z) * s) * 4),
+          Math.round(heading * 60),
+          pick ? `${pick.x},${pick.z}` : "",
+          pins.join(","),
+        ].join(" ");
+        if (shows === drawn) return;
+        drawn = shows;
+      } else {
+        drawn = "";
+      }
       const mx = (x: number) => (x - w.x) * s;
       const mz = (z: number) => (z - w.z) * s;
       ctx.imageSmoothingEnabled = true;
@@ -574,7 +596,6 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
       }
 
       // Heading 0 faces +z, which is down on the map.
-      const [x, z, heading] = app.map_marker();
       const r = px / (size === "atlas" ? 60 : 28);
       ctx.save();
       ctx.translate(mx(x), mz(z));

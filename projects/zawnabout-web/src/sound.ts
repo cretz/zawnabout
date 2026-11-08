@@ -1,11 +1,19 @@
 import type { App } from "../pkg/zawnabout_web.js";
 
 /** Plays the world's sound, made in Rust, through the page. Browsers only allow sound
- *  after the player does something, so it starts on the first click or key. */
+ *  after the player does something, so it starts on the first click, tap or key. */
 export function setupSound(app: App) {
   let ctx: AudioContext | null = null;
   const start = () => {
-    if (ctx) return;
+    if (ctx) {
+      // iPads may make the sound wait until a tap lifts, so ask again on each one
+      // until it plays.
+      if (ctx.state !== "running" && !document.hidden) void ctx.resume();
+      return;
+    }
+    // Plays like a video does, so an iPad's silent switch does not hush it.
+    const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+    if (session) session.type = "playback";
     ctx = new AudioContext();
     const node = ctx.createScriptProcessor(4096, 0, 2);
     let buf = new Float32Array(0);
@@ -22,14 +30,16 @@ export function setupSound(app: App) {
       }
     };
     node.connect(ctx.destination);
+    void ctx.resume();
     app.set_sound(true);
   };
-  addEventListener("pointerdown", start, { once: true, capture: true });
-  addEventListener("keydown", start, { once: true, capture: true });
+  for (const ev of ["pointerdown", "pointerup", "touchend", "click", "keydown"]) {
+    addEventListener(ev, start, { capture: true });
+  }
   // Quiet while the page is hidden.
   document.addEventListener("visibilitychange", () => {
     if (!ctx) return;
-    if (document.hidden) ctx.suspend();
-    else ctx.resume();
+    if (document.hidden) void ctx.suspend();
+    else void ctx.resume();
   });
 }

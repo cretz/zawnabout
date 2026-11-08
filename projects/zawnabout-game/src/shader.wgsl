@@ -200,9 +200,12 @@ fn haze_lit(col: vec3f, world: vec3f, day: f32) -> vec3f {
     let far = mix(sky(normalize(to_frag)), g.cave.rgb * 0.3 + vec3f(0.05, 0.035, 0.025), gloom);
     // Morning mist lying low over the water and the low ground, thicker off in the
     // distance, never in caves.
+    // Its noise is only worked out where there is mist at all.
     let low = (1.0 - smoothstep(2.0, 40.0, world.y)) * smoothstep(60.0, 900.0, length(to_frag));
-    let bank = smoothstep(0.45, 0.75, vnoise(world.xz * 0.0025 + vec2f(g.misc.x * 0.004, 0.0)));
-    let mist = g.sky_top.w * low * bank * 0.6 * (1.0 - g.cave.a);
+    var mist = g.sky_top.w * low * 0.6 * (1.0 - g.cave.a);
+    if mist > 0.0 {
+        mist *= smoothstep(0.45, 0.75, vnoise(world.xz * 0.0025 + vec2f(g.misc.x * 0.004, 0.0)));
+    }
     let veiled = mix(col, g.sky_horizon.rgb * 0.5 + vec3f(0.42), mist);
     return mix(veiled, far, fog * (1.0 - gloom * 0.4));
 }
@@ -286,56 +289,68 @@ fn ground_detail(base: vec3f, world: vec3f) -> vec3f {
     let rock = (1.0 - smoothstep(0.28, 0.4, (hi - lo) / max(hi, 0.001))) * (1.0 - grass) * (1.0 - snow);
     let sand = smoothstep(0.1, 0.2, base.r - base.b) * (1.0 - grass);
     var c = base;
-    // Drifts: big soft patches, then smaller ones inside them.
-    let drift = vnoise(w * 0.011) * 0.6 + vnoise(w * 0.047 + 13.0) * 0.4;
-    let lush = base * vec3f(0.72, 0.88, 0.78);
-    let dry = base * vec3f(1.12, 1.04, 0.8);
-    c = mix(c, mix(lush, dry, smoothstep(0.25, 0.75, drift)), grass * 0.85);
-    // Tufts and clover up close, fading before they would shimmer.
+    // Screen derivatives are taken here, before any branch, for WebGPU. Each kind of
+    // detail is only worked out where it shows, which spares slow devices most of it.
     let tp = w * 0.9;
     let near = 1.0 - smoothstep(0.06, 0.2, max(fwidth(tp.x), fwidth(tp.y)));
-    let tuft = hash2(floor(tp));
-    c *= 1.0 + (tuft - 0.5) * 0.12 * near * grass;
-    // Wind sweeping over the grass: gusts roll across in pale waves, as the blades bend
-    // and show their lighter undersides.
-    let t = g.misc.x;
-    let gp = w * vec2f(0.016, 0.011) - vec2f(t * 0.09, t * 0.06);
-    let gust = vnoise(gp) * 0.65 + vnoise(gp * 2.9 + 4.0) * 0.35;
-    let sheen = smoothstep(0.52, 0.82, gust) * grass * (1.0 - snow);
-    c = mix(c, c * vec3f(1.14, 1.12, 0.94) + vec3f(0.018, 0.022, 0.0), sheen * 0.75);
-    // Wildflowers dotted through some meadows, one to a cell, only up close.
     let fp = w * 0.6;
     let fw = max(fwidth(fp.x), fwidth(fp.y));
-    let fc = floor(fp);
-    let fh = hash2(fc + 91.0);
-    let spot = vec2f(hash2(fc + 3.0), hash2(fc + 5.0)) * 0.6 + 0.2;
-    let petal_r = 0.09 + fw * 0.5;
-    let dot_in = 1.0 - smoothstep(petal_r, petal_r + 0.05, length(fract(fp) - spot));
-    let patchy = smoothstep(0.48, 0.72, vnoise(w * 0.021 + 40.0));
-    let bloom = dot_in * step(0.5, fh) * patchy * grass * (1.0 - smoothstep(0.03, 0.08, fw));
-    let kind = hash2(fc + 17.0);
-    var petal = vec3f(0.92, 0.9, 0.82);
-    if kind > 0.45 {
-        petal = vec3f(0.95, 0.72, 0.08);
+    if grass > 0.0 {
+        // Drifts: big soft patches, then smaller ones inside them.
+        let drift = vnoise(w * 0.011) * 0.6 + vnoise(w * 0.047 + 13.0) * 0.4;
+        let lush = base * vec3f(0.72, 0.88, 0.78);
+        let dry = base * vec3f(1.12, 1.04, 0.8);
+        c = mix(c, mix(lush, dry, smoothstep(0.25, 0.75, drift)), grass * 0.85);
+        // Tufts and clover up close, fading before they would shimmer.
+        let tuft = hash2(floor(tp));
+        c *= 1.0 + (tuft - 0.5) * 0.12 * near * grass;
+        // Wind sweeping over the grass: gusts roll across in pale waves, as the blades
+        // bend and show their lighter undersides.
+        if snow < 1.0 {
+            let t = g.misc.x;
+            let gp = w * vec2f(0.016, 0.011) - vec2f(t * 0.09, t * 0.06);
+            let gust = vnoise(gp) * 0.65 + vnoise(gp * 2.9 + 4.0) * 0.35;
+            let sheen = smoothstep(0.52, 0.82, gust) * grass * (1.0 - snow);
+            c = mix(c, c * vec3f(1.14, 1.12, 0.94) + vec3f(0.018, 0.022, 0.0), sheen * 0.75);
+        }
+        // Wildflowers dotted through some meadows, one to a cell, only up close.
+        if fw < 0.08 {
+            let fc = floor(fp);
+            let fh = hash2(fc + 91.0);
+            let spot = vec2f(hash2(fc + 3.0), hash2(fc + 5.0)) * 0.6 + 0.2;
+            let petal_r = 0.09 + fw * 0.5;
+            let dot_in = 1.0 - smoothstep(petal_r, petal_r + 0.05, length(fract(fp) - spot));
+            let patchy = smoothstep(0.48, 0.72, vnoise(w * 0.021 + 40.0));
+            let bloom = dot_in * step(0.5, fh) * patchy * grass * (1.0 - smoothstep(0.03, 0.08, fw));
+            let kind = hash2(fc + 17.0);
+            var petal = vec3f(0.92, 0.9, 0.82);
+            if kind > 0.45 {
+                petal = vec3f(0.95, 0.72, 0.08);
+            }
+            if kind > 0.75 {
+                petal = vec3f(0.62, 0.36, 0.9);
+            }
+            if kind > 0.9 {
+                petal = vec3f(0.95, 0.42, 0.55);
+            }
+            c = mix(c, petal, bloom * 0.9);
+        }
     }
-    if kind > 0.75 {
-        petal = vec3f(0.62, 0.36, 0.9);
-    }
-    if kind > 0.9 {
-        petal = vec3f(0.95, 0.42, 0.55);
-    }
-    c = mix(c, petal, bloom * 0.9);
     // Rock in layers like sediment: each layer its own shade, from cool gray to warm
     // ochre, wavering with the noise, with a dark seam between layers.
-    let y = world.y + (vnoise(w * 0.015) - 0.5) * 14.0;
-    let layer = floor(y / 9.0);
-    let lh = hash2(vec2f(layer, 7.0));
-    let shade = mix(vec3f(0.86, 0.88, 0.94), vec3f(1.16, 1.04, 0.86), lh) * (0.9 + 0.2 * hash2(vec2f(layer, 3.0)));
-    let seam = 1.0 - smoothstep(0.0, 0.06, fract(y / 9.0));
-    c = mix(c, c * shade * (1.0 - seam * 0.14), rock);
-    c = mix(c, c * vec3f(1.06, 1.0, 0.92), vnoise(w * 0.03 + 5.0) * rock * 0.4);
+    if rock > 0.0 {
+        let y = world.y + (vnoise(w * 0.015) - 0.5) * 14.0;
+        let layer = floor(y / 9.0);
+        let lh = hash2(vec2f(layer, 7.0));
+        let shade = mix(vec3f(0.86, 0.88, 0.94), vec3f(1.16, 1.04, 0.86), lh) * (0.9 + 0.2 * hash2(vec2f(layer, 3.0)));
+        let seam = 1.0 - smoothstep(0.0, 0.06, fract(y / 9.0));
+        c = mix(c, c * shade * (1.0 - seam * 0.14), rock);
+        c = mix(c, c * vec3f(1.06, 1.0, 0.92), vnoise(w * 0.03 + 5.0) * rock * 0.4);
+    }
     // Sand: wind ripples.
-    c *= 1.0 + sin(w.x * 0.9 + w.y * 0.4 + vnoise(w * 0.1) * 3.0) * 0.04 * sand * near;
+    if sand * near > 0.0 {
+        c *= 1.0 + sin(w.x * 0.9 + w.y * 0.4 + vnoise(w * 0.1) * 3.0) * 0.04 * sand * near;
+    }
     return c;
 }
 
@@ -384,7 +399,8 @@ fn fs_ground(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec
     // Against sea cliffs the swell surges white up the rock every few seconds, each
     // stretch of cliff in its own time. Measured from the sea itself, as a tall cliff
     // face's own height over the water is too coarse.
-    {
+    // The tallest surge reaches 7.7m, so only faces below that are worked out.
+    if i.world.y > -0.3 && i.world.y < 7.7 && abs(n.y) < 0.6 && day >= 0.6 {
         let t = g.misc.x;
         let wob = hash2(floor(i.world.xz * 0.15)) * 6.28;
         let steep = 1.0 - smoothstep(0.35, 0.6, abs(n.y));
@@ -509,24 +525,31 @@ fn fs_water(i: VertOut) -> @location(0) vec4f {
         col += g.sun_color.rgb * moon * 0.7 * night * day;
         // Swell lines rolling in to the shore and breaking white in the shallows. Rivers
         // and pools are too small for surf, so only wide still water gets it.
+        // Each of these only works out its noise where it shows.
         let still = 1.0 - smoothstep(0.5, 2.0, length(flow));
         let shore = (1.0 - smoothstep(0.04, 0.3, depth)) * still;
-        let roll = fract(depth * 7.0 - t * 0.22 + vnoise(i.world.xz * 0.012) * 0.8);
-        let crest = smoothstep(0.82, 0.96, roll) * (1.0 - smoothstep(0.96, 1.0, roll)) * shore;
-        col = mix(col, vec3f(0.93, 0.97, 1.0), crest * 0.5 * mix(0.4, 1.0, day));
+        if shore > 0.0 {
+            let roll = fract(depth * 7.0 - t * 0.22 + vnoise(i.world.xz * 0.012) * 0.8);
+            let crest = smoothstep(0.82, 0.96, roll) * (1.0 - smoothstep(0.96, 1.0, roll)) * shore;
+            col = mix(col, vec3f(0.93, 0.97, 1.0), crest * 0.5 * mix(0.4, 1.0, day));
+        }
         // Whitecaps out on open water, little patches that come and go with the wind.
-        let wind = i.world.xz * vec2f(0.16, 0.42) + vec2f(t * 0.5, t * 0.2);
-        let gust = vnoise(wind) * smoothstep(0.45, 0.75, vnoise(i.world.xz * 0.02 + t * 0.03));
-        let open = smoothstep(0.35, 0.8, depth) * still * (1.0 - smoothstep(80.0, 450.0, dist));
-        col = mix(col, vec3f(0.95, 0.98, 1.0), smoothstep(0.8, 0.88, gust) * open * 0.5 * day);
+        let open = smoothstep(0.35, 0.8, depth) * still * (1.0 - smoothstep(80.0, 450.0, dist)) * day;
+        if open > 0.0 {
+            let wind = i.world.xz * vec2f(0.16, 0.42) + vec2f(t * 0.5, t * 0.2);
+            let gust = vnoise(wind) * smoothstep(0.45, 0.75, vnoise(i.world.xz * 0.02 + t * 0.03));
+            col = mix(col, vec3f(0.95, 0.98, 1.0), smoothstep(0.8, 0.88, gust) * open * 0.5);
+        }
         // Running water: streaks of light and foam drawn out along the flow, racing
         // downstream at its speed.
         let speed = length(flow);
-        let along = flow / max(speed, 0.001);
-        let q = vec2f(dot(i.world.xz, vec2f(-along.y, along.x)) * 0.3, dot(i.world.xz, along) * 0.035 - t * speed * 0.035);
-        let streak = vnoise(q) * vnoise(q * vec2f(1.7, 1.3) + 9.0);
         let running = smoothstep(0.3, 1.5, speed) * (1.0 - smoothstep(150.0, 600.0, dist));
-        col = mix(col, vec3f(0.9, 0.96, 1.0), smoothstep(0.3, 0.55, streak) * running * 0.5 * mix(0.4, 1.0, day));
+        if running > 0.0 {
+            let along = flow / max(speed, 0.001);
+            let q = vec2f(dot(i.world.xz, vec2f(-along.y, along.x)) * 0.3, dot(i.world.xz, along) * 0.035 - t * speed * 0.035);
+            let streak = vnoise(q) * vnoise(q * vec2f(1.7, 1.3) + 9.0);
+            col = mix(col, vec3f(0.9, 0.96, 1.0), smoothstep(0.3, 0.55, streak) * running * 0.5 * mix(0.4, 1.0, day));
+        }
         // Foam where the water thins out at its edges and where it rushes.
         let fizz = hash2(floor(i.world.xz * 0.5) + floor(t * 3.0));
         let edge = 1.0 - smoothstep(0.0, 0.08, depth);

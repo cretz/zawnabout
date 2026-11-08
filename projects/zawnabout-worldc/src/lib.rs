@@ -978,6 +978,8 @@ impl Compiler {
                         "townhall",
                         "farm",
                         "port",
+                        "seadoors",
+                        "basaltgate",
                     ],
                     "stones",
                 );
@@ -1081,7 +1083,7 @@ impl Compiler {
                     ctx,
                     node,
                     "shape",
-                    &["hall", "dome", "shaft", "carved"],
+                    &["hall", "dome", "shaft", "carved", "block"],
                     "hall",
                 );
                 let decor = self.word(
@@ -1640,6 +1642,7 @@ impl Compiler {
                 "dome" => "Dome",
                 "shaft" => "Shaft",
                 "carved" => "Carved",
+                "block" => "Block",
                 "tube" => "Tube",
                 "basin" => "Basin",
                 _ => "Hall",

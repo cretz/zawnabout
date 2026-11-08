@@ -1,7 +1,7 @@
 //! Desktop host. Runs windowed for play, or `--headless` to run a debug script and write
 //! screenshots without a window.
 //!
-//! zawnabout [--headless] [--script FILE] [--out DIR] [--size WxH] [--seed N] [--debug] [--mute]
+//! zawnabout [--headless] [--script FILE] [--out DIR] [--size WxH] [--seed N] [--debug] [--mute] [--software]
 //!           [--no-play]
 //! zawnabout --map FILE [--size WxH]
 //!
@@ -173,6 +173,8 @@ struct Args {
     map: Option<PathBuf>,
     mute: bool,
     no_play: bool,
+    /// The software GPU even where there is a real one, to stand in for a slow device.
+    software: bool,
 }
 
 fn parse_args() -> Args {
@@ -186,6 +188,7 @@ fn parse_args() -> Args {
         map: None,
         mute: false,
         no_play: false,
+        software: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -204,6 +207,7 @@ fn parse_args() -> Args {
             "--map" => a.map = Some(val().into()),
             "--mute" => a.mute = true,
             "--no-play" => a.no_play = true,
+            "--software" => a.software = true,
             _ => panic!("unknown argument {arg}"),
         }
     }
@@ -232,14 +236,20 @@ fn main() {
 fn device(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface>,
+    software: bool,
 ) -> (wgpu::Adapter, wgpu::Device, wgpu::Queue) {
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        compatible_surface: surface,
-        force_fallback_adapter: false,
-        ..Default::default()
-    }))
-    .expect("no GPU adapter");
+    let ask = |fallback: bool| {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: surface,
+            force_fallback_adapter: fallback,
+            ..Default::default()
+        }))
+    };
+    // With no GPU (a CI machine), a software one: WARP on Windows, lavapipe on Linux.
+    let adapter = ask(software)
+        .or_else(|_| ask(true))
+        .expect("no GPU adapter");
     let (device, queue) =
         pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
             .expect("no GPU device");
@@ -384,7 +394,12 @@ fn headless(args: Args) {
     let script_path = args.script.expect("--headless needs --script");
     let text = std::fs::read_to_string(&script_path).expect("read script");
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let (_, device, queue) = device(&instance, None);
+    let (adapter, device, queue) = device(&instance, None, args.software);
+    let info = adapter.get_info();
+    println!(
+        "adapter {} ({:?}, {:?})",
+        info.name, info.device_type, info.backend
+    );
     let mut game = Game::new(args.seed);
     if args.no_play {
         game.play = None;
@@ -671,7 +686,7 @@ impl ApplicationHandler for App {
         let surface = instance
             .create_surface(window.clone())
             .expect("create surface");
-        let (adapter, device, queue) = device(&instance, Some(&surface));
+        let (adapter, device, queue) = device(&instance, Some(&surface), self.args.software);
         let caps = surface.get_capabilities(&adapter);
         let format = caps
             .formats

@@ -250,7 +250,7 @@ stunt under-rope-bridge name="Under the Rope Bridge" line="Beneath the swaying r
 
 stunt goal name="Goal!" line="Straight through the goal at Moonharbor's stadium. The crowd goes wild!" kind=gap x1=1121.4 z1=-1646.8 x2=1120.2 z2=-1654.0 lo=12 hi=17.3
 stunt own-goal name="Own Goal" line="Through the other goal at Moonharbor's stadium. Well, it still counts!" kind=gap x1=1229.8 z1=-1666.0 x2=1228.6 z2=-1673.2 lo=12 hi=17.3
-stunt through-the-eye name="Through the Eye" line="All the way through the eye, the great shaft between the sky and the lagoon vault." kind=near x=2705 z=-1993 lo=-320 hi=-140 r=28
+stunt through-the-eye name="Through the Eye" line="All the way through the eye, the great shaft between the sky and the lagoon vault." kind=near x=2895 z=-1845 lo=-400 hi=-260 r=30
 
 stunt falling-star name="Falling Star" line="A long, steep dive, wings tucked tight. Whoosh!" kind=dive
 stunt dragon-comet name="Dragon Comet" line="Diving and breathing fire at the same time. Like a comet!" kind=comet
@@ -460,7 +460,7 @@ find book-cinema kind=book set=library-books name="The Great Film Book" x=1560 z
 find gem-glass kind=gem set=deep-gems name="The Crystal Lake Gem" x=-3310 y=-560 z=1115 hint="Deep under the home island's west side, by the crystal lake." story="Clear as the lake it came from. It makes little rainbows on the cave walls."
 find gem-elder kind=gem set=deep-gems name="The Elder Gem" x=-1880 y=-220 z=-4560 hint="In the deepest hall under the old stone island." story="The old stone folk found it, then put it back. They thought it was happy there."
 find gem-fang kind=gem set=deep-gems name="The Ember Gem" x=3620 y=-650 z=3380 hint="Far down in the great cave under the volcano." story="Warm as a coal and green as a leaf. The volcano made it, very slowly."
-find gem-vault kind=gem set=deep-gems name="The Lagoon Gem" x=2640 y=-750 z=-1960 hint="In the huge vault under the crescent's lagoon, near where the light comes down." story="It sat in the beam of light from the eye, glittering, for a thousand years."
+find gem-vault kind=gem set=deep-gems name="The Lagoon Gem" x=3090 y=-750 z=-1690 hint="In the huge vault under the crescent's lagoon, near where the light comes down." story="It sat in the beam of light from the eye, glittering, for a thousand years."
 find gem-north kind=gem set=deep-gems name="The North Vault Gem" x=-1850 y=-1100 z=-1480 hint="In the ruined vault far under the home island's north." story="Older than the ruins, older than the old folk. It just sparkles and waits."
 
 // Lone treasures everywhere.
@@ -587,6 +587,12 @@ postcard gull-rock name="Gull Rock" island=atoll x=-5350 z=-3050 r=30 line="A ta
 postcard oil-rig name="The Oil Rig" island=sea x=-1600 z=3100 r=50 line="A tall rig out to sea, with a helipad on top and gulls on every rail."
 postcard turtle-camp name="Turtle Back" island=sea x=-1500 z=4605 r=50 line="A long low reef rock, where a castaway camps and the turtles come ashore."
 postcard atoll-seals name="The Atoll Seals" island=atoll x=-4300 z=-2825 r=40 line="Seals lazing on the warm rocks inside the atoll, barking at the boats."
+postcard sea-doors name="The Sea Doors" island=home x=-1158 z=-908 r=45 line="Great doors in the north sea cliff, open to the waves. Nobody remembers who built them, but everybody says hello to them."
+postcard sea-doors-lake name="Behind the Sea Doors" island=home x=-1324 z=-453 r=40 line="A stair down to a still lake under the cliffs, glowing with crystals."
+postcard basalt-gate name="Basalt Gate" island=fang x=4000 z=3880 r=45 line="A railway station built right into the volcano. The trains go in one side and come out in a cave."
+postcard basalt-cave name="The Cave Station" island=fang x=4000 z=3245 r=35 line="The last stop, on a pillar over a warm cave lake. Mind the gap, and the drop."
+find sea-doors-bell kind=bell name="The Tide Bell" x=-1256 y=4 z=-684 hint="In the long hall behind the Sea Doors, by the copper wave." story="It rings by itself at high tide. Nobody pulls the rope. There is no rope."
+find basalt-clock kind=clock name="The Stationmaster's Clock" x=4012 y=3.3 z=3245 hint="At the cave station, the last stop under Basalt Gate." story="The stationmaster left it to keep time in the cave. It is always exactly right, and a little bit warm."
 
 // More townsfolk, with favors and rides.
 
@@ -725,3 +731,156 @@ local ollie name="Ollie" town="Moonharbor" x=1488 z=-1470 facing=180 look=0 {
     line "The park is the windiest place in town. Windy is good. Mostly."
     request kind=fetch ask="My kite got stuck up on the cinema roof! Can you get it down for me?" hint="Ollie's kite is stuck on the cinema roof, by Moonharbor's park." thanks="My kite! It's not even torn! Thank you, dragon. Have my second-best kite too. No wait. My third-best." gold=5 gift-kind="kite" gift-name="Ollie's Third-Best Kite" gift-story="It flies, mostly sideways. Ollie says that's on purpose." item-kind="kite" item-name="Ollie's kite" item-x=1552 item-z=-1478
 }
+
+// Other dragons, one on each outer island. Each leads the way to a secret of its own.
+find cinder-scale kind=gem name="Cinder's Old Scale" x=-1888 z=-5035 story="A scale as big as a dinner plate, shed by Grandmother Cinder long ago. It still feels warm."
+find blaze-ribbon kind=ribbon name="Blaze's First Ribbon" x=3603 z=3665 story="The very first ribbon Blaze ever won, hidden by the falls so nobody could win it back."
+find wisp-shell kind=shell name="Wisp's Wishing Shell" x=-3700 z=4050 story="Wisp kept this by the old wreck. Hold it to your ear and it hums a little dragon song."
+find tinker-key kind=key name="Tinker's Spare Key" x=3108 z=-3470 story="It opens nothing at all, Tinker says. That's what makes it so special."
+
+dragon cinder name="Grandmother Cinder" kind=wise island=twins x=-1950 z=-4660 tint="9AB4F2" size=1.35 meet="Hrrm? Oh! Another dragon! I haven't seen one of us in a hundred years. Come and sit, little one. I'm Cinder." rumor="My grandad swears an old blue dragon sits up on the Elder Summit on the Twins, watching the sea. Nobody's been brave enough to say hello." about="The oldest dragon on the islands. She knows every story, and where most things are hidden." secret=cinder-scale gift-kind=book gift-name="Cinder's Book of Old Tales" gift-story="Stories of the dragons who flew here long ago, in Cinder's own big, curly writing." {
+    perch x=-1900 z=-5045
+    perch x=-2100 z=-4150
+    way x=-2100 z=-4150
+    way x=-1092 z=-4220
+    way x=-1900 z=-5045
+    line "When I was young, the islands had a dragon on every peak. Now there's you. That's a fine start."
+    line "The people here are kind. They still leave their lamps lit for us, you know. Just in case."
+    line "Sit a while. The view from up here never gets old. Neither do I, apparently."
+}
+dragon blaze name="Blaze" kind=racer island=fang x=3600 z=3000 tint="FF9A6A" size=1.05 meet="Whoa, a new dragon! Bet you can't keep up with me. I'm Blaze, the fastest thing on four wings. Well, two wings. You know what I mean." rumor="Something orange goes whooshing round the rim of the old volcano on Fang most days. Folk say it's a dragon who loves a race." about="A show-off who loves racing. Fast, loud and very friendly." secret=blaze-ribbon gift-kind=trophy gift-name="Blaze's Spare Trophy" gift-story="Blaze has so many trophies there's no room in the nook. This one's for you, for being a good sport." race-to="Fang Lodge" race-x=4607 race-z=3215 race-r=60 prize-kind=medal prize-name="The Fang Lodge Medal" prize-story="You beat Blaze to Fang Lodge! Blaze says it was the wind. It wasn't the wind." {
+    perch x=3300 z=2600
+    perch x=3450 z=3150
+    way x=3450 z=3150
+    way x=3603 z=3665
+    line "I flew round the whole island before breakfast. Twice. I think. It was very fast."
+    line "Watch this! No, wait, you missed it. I'll do it again later."
+    line "Racing is the best. Second best is talking about racing."
+}
+dragon wisp name="Wisp" kind=shy island=needles x=-4300 y=330 z=3600 tint="C8A8F5" size=0.8 meet="Oh! You kept coming back. I'm... I'm Wisp. Sorry I flew off. You seem nice." rumor="The fishermen say a little purple dragon hides on top of the Needles. Shy thing. Flies off if you get close, but it always peeks back." about="A shy young dragon who lives on the Needle tops. Flies off at first, but stays once it trusts you." secret=wisp-shell gift-kind=shell gift-name="Wisp's Pretty Pebble Shell" gift-story="Wisp left this by your heap without a word. Very shy. Very sweet." {
+    perch x=-4560 y=220 z=3420
+    perch x=-3920 y=250 z=3680
+    way x=-4579 y=200 z=3878
+    way x=-3700 z=4050
+    line "The Needles are quiet. I like quiet. And you. You're quiet too, mostly."
+    line "Sometimes I watch the ships from up here and pretend they're all going somewhere nice."
+    line "Do you want to see my favorite place? I don't show anybody. Well, there's nobody to show."
+}
+dragon tinker name="Tinker" kind=collector island=crescent x=1550 z=-1350 tint="7FD6B0" size=1.0 meet="Hello hello! A dragon! Do you collect things too? Of course you do. I'm Tinker. I collect everything, but spyglasses most of all." rumor="There's a green dragon who sits on top of Moon Tower in Moonharbor. Collects shiny things, they say. Spyglasses most of all." about="A collector of shiny and curious things, spyglasses most of all. Always happy to trade, never sad if you say no." secret=tinker-key gift-kind=clock gift-name="Tinker's Ticking Clock" gift-story="It ticks backwards on Tuesdays. Tinker says that's a feature." want=spyglass trade-kind=compass trade-name="Tinker's Golden Compass" trade-story="It always points to something interesting. Tinker swapped it for a spyglass, and you both think you got the better deal." {
+    perch x=2200 z=-3000
+    perch x=2320 z=-3400
+    way x=2200 z=-3000
+    way x=3020 z=-3500
+    way x=3100 z=-3480
+    line "Every shiny thing has a story. Most of them start with somebody dropping it."
+    line "I keep my collection in neat little piles. Very neat. Mostly neat."
+    line "Have you seen any spyglasses? I do love a spyglass. You can see other shiny things through them!"
+}
+
+// Happenings: one is always on somewhere, until you have been to see it. Then, once you
+// are well away, the next begins.
+happening kettle-regatta name="The Kettle Regatta" place="Kettle Harbor" x=-1316 z=1929 r=110 rumor="The regatta's on down at Kettle Harbor! Little boats everywhere, and fireworks after dark. Go and see!" seen="The regatta! Bunting on the quay, cheering from the shore, and the little boats bobbing past. Stay for the fireworks if it's dark." {
+    bunting x1=-1342 z1=1926 h1=5 x2=-1290 z2=1926 h2=5
+    bunting x1=-1342 z1=1933 h1=5 x2=-1290 z2=1933 h2=5
+    folk name="Commodore Bea" x=-1320 z=1929 facing=0 look=6 line="Hold your hats! The red sail's in the lead! No, the blue! No, wait..."
+    folk name="Little Sid" x=-1305 z=1930 facing=20 look=3 line="I'm going to sail in it next year. Or the year after. When my legs are longer."
+    folk name="Mr. Pottle" x=-1330 z=1931 facing=340 look=8 line="Forty regattas I've watched. Never once seen a dragon at one before!"
+    fireworks x=-1316 z=2000 h=80
+}
+happening village-wedding name="A Village Wedding" place="Home Village" x=-1984 z=1076 r=90 rumor="There's a wedding in Home Village! Everybody's invited, they say. Even dragons, I'd think." seen="A wedding! Rosie and Tom are married, and the whole village is dancing. They're so happy you came!" {
+    bunting x1=-2000 z1=1074 h1=5 x2=-1968 z2=1074 h2=5
+    lanterns x1=-2000 z1=1079 h1=6 x2=-1968 z2=1079 h2=6
+    folk name="Rosie" x=-1986 z=1076 facing=90 look=1 line="We're married! And a dragon came to the wedding! Nobody's ever going to believe this."
+    folk name="Tom" x=-1982 z=1076 facing=270 look=0 line="I was so nervous I forgot my own name. Rosie had to remind me. It's Tom."
+    folk name="Auntie Gwen" x=-1975 z=1074 facing=200 look=7 line="I cried all the way through. Happy crying! The best kind."
+    fireworks x=-1984 z=1104 h=70
+}
+happening stonehold-market name="Market Day" place="Stonehold" x=-1827 z=-4256 r=90 rumor="It's market day up in Stonehold. Cheese, honey, wool socks, the lot. Smells wonderful." seen="Market day in Stonehold! Stalls of cheese and honey and woolly socks, and everybody haggling cheerfully." {
+    bunting x1=-1842 z1=-4258 h1=5 x2=-1812 z2=-4258 h2=5
+    lanterns x1=-1842 z1=-4252 h1=6 x2=-1812 z2=-4252 h2=6
+    folk name="Cheesy Pete" x=-1835 z=-4256 facing=0 look=5 line="Finest cheese on the Twins! Try some. Go on. A big bite, you're a dragon."
+    folk name="Honey Nell" x=-1822 z=-4256 facing=0 look=2 line="Fresh honey! The bees worked very hard. Please don't tell them I'm selling it."
+    folk name="Old Ham" x=-1828 z=-4253 facing=180 look=8 line="I've come every market day for sixty years. I still never know what I came for."
+}
+happening moon-fireworks name="Fireworks Night" place="Moonharbor" x=1608 z=-1309 r=120 rumor="Fireworks night in Moonharbor! Best seen after dark, from up high. Which I suppose you can do." seen="Fireworks night! The whole city is out on the waterfront, waiting for dark. Find a good perch and watch the sky." {
+    lanterns x1=1595 z1=-1312 h1=6 x2=1622 z2=-1306 h2=6
+    folk name="Professor Wick" x=1606 z=-1309 facing=20 look=8 line="Each one is a little chemistry experiment that goes BOOM. My favorite kind."
+    folk name="Juniper" x=1614 z=-1306 facing=40 look=1 line="The blue ones are the best. No, the gold ones. All of them!"
+    fireworks x=1650 z=-1240 h=110
+    fireworks x=1560 z=-1250 h=95
+}
+happening ship-launch name="A Ship Launch" place="Tidewater" x=-355 z=-3630 r=110 rumor="They're launching a new ship at the Tidewater shipyard! Flags and cheering and everything." seen="A new ship slides into the sea, and the whole shipyard cheers! The shipwrights wave at you." {
+    bunting x1=-370 z1=-3630 h1=6 x2=-340 z2=-3630 h2=6
+    folk name="Shipwright Odo" x=-356 z=-3628 facing=0 look=6 line="Three years building her. Now she's off to see the world. I'm not crying, it's sawdust."
+    folk name="Mayor Pell" x=-347 z=-3633 facing=330 look=7 line="I name this ship... oh, I've forgotten. Somebody write it down next time."
+    fireworks x=-355 z=-3560 h=60
+}
+happening palm-party name="A Beach Party" place="Palm Ring" x=-4241 z=-3057 r=100 rumor="There's a beach party on Palm Ring tonight. Lanterns on the sand and dancing till late!" seen="A beach party! Lanterns on the sand, music, and everyone dancing barefoot. They've saved you a spot." {
+    lanterns x1=-4256 z1=-3058 h1=5 x2=-4226 z2=-3058 h2=5
+    lanterns x1=-4256 z1=-3053 h1=5 x2=-4226 z2=-3053 h2=5
+    folk name="Kai" x=-4244 z=-3056 facing=90 look=0 line="Dance with us, dragon! Mind the lanterns. And the sandcastles. And Grandma."
+    folk name="Grandma Moana" x=-4236 z=-3056 facing=270 look=7 line="I've danced at every beach party for eighty years. I'm only just warming up."
+    fireworks x=-4241 z=-3120 h=60
+}
+
+// Towns thank you as you help their people: at each step, something new goes up.
+favor kettle-band town="Kettle Harbor" at=2 done="Kettle Harbor has hung bunting by the harbor and got the town band out to play for you. Go and hear them!" {
+    bunting x1=-1377 z1=1647 h1=5 x2=-1349 z2=1647 h2=5
+    folk name="Bandleader Fen" x=-1363 z=1650 facing=180 look=6 line="One, two, one two three! This tune is called The Dragon's Jig. We wrote it this morning."
+    folk name="Drummer Bo" x=-1357 z=1650 facing=200 look=3 line="Boom, boom, crash! Sorry. I get excited."
+}
+favor kettle-vane town="Kettle Harbor" at=5 done="Kettle Harbor put a golden dragon weather vane up in your honor! It turns with the wind, just like you." {
+    vane x=-1315 z=1684 h=9
+}
+favor terrace-band town="Terrace Hill" at=2 done="Terrace Hill has strung up bunting and lanterns, just for you. They're very proud of their dragon." {
+    bunting x1=-284 z1=1263 h1=5 x2=-256 z2=1263 h2=5
+    lanterns x1=-284 z1=1268 h1=6 x2=-256 z2=1268 h2=6
+}
+favor terrace-vane town="Terrace Hill" at=5 done="Terrace Hill put up a golden dragon weather vane on the hill. You can see it from all over town." {
+    vane x=-315 z=1282 h=10
+}
+favor moon-band town="Moonharbor" at=2 done="Moonharbor hung bunting along the square and a street fiddler plays for you. Go and listen!" {
+    bunting x1=1556 z1=-1376 h1=5 x2=1584 z2=-1376 h2=5
+    folk name="Street Fiddler Lu" x=1570 z=-1373 facing=180 look=2 line="I only know happy songs. Sad ones make my fiddle squeak."
+}
+favor moon-vane town="Moonharbor" at=6 done="Moonharbor put a golden dragon weather vane up by the waterfront. The city's own dragon!" {
+    vane x=1608 z=-1387 h=10
+}
+favor tide-band town="Tidewater" at=2 done="Tidewater hung bunting on the waterfront for you, and the fishermen wave whenever you pass." {
+    bunting x1=-274 z1=-3986 h1=5 x2=-246 z2=-3986 h2=5
+}
+favor tide-vane town="Tidewater" at=4 done="Tidewater put a golden dragon weather vane by the docks. Every sailor checks it before setting out." {
+    vane x=-176 z=-3996 h=9
+}
+favor stone-band town="Stonehold" at=2 done="Stonehold strung up lanterns for you in the old town. They say it's the first time in a hundred years." {
+    lanterns x1=-1756 z1=-4300 h1=6 x2=-1728 z2=-4300 h2=6
+}
+favor stone-vane town="Stonehold" at=4 done="Stonehold put a golden dragon weather vane on the old town. The old folk say it's just like the ones in the stories." {
+    vane x=-1743 z=-4296 h=10
+}
+favor village-band town="Home Village" at=2 done="Home Village strung bunting between the houses for you. Everyone says hello when you fly over." {
+    bunting x1=-1806 z1=1070 h1=5 x2=-1778 z2=1070 h2=5
+}
+favor village-vane town="Home Village" at=4 done="Home Village put up a golden dragon weather vane. It always points to wherever you are. Probably." {
+    vane x=-1888 z=975 h=9
+}
+favor palm-band town="Palm Ring" at=2 done="Palm Ring hung paper lanterns along the beach for you. They glow so prettily at night." {
+    lanterns x1=-4246 z1=-2737 h1=5 x2=-4218 z2=-2737 h2=5
+}
+favor palm-vane town="Palm Ring" at=4 done="Palm Ring put a golden dragon weather vane on the beach. The gulls are a little jealous." {
+    vane x=-4283 z=-2730 h=8
+}
+
+// Night lights: six little things that only come out after dark, glowing softly where
+// they lie. Find them all and Lantern Hollow lights up for a night festival.
+set night-lights name="Night lights" done="All six night lights are found! Lantern Hollow is having a night festival, with lanterns strung all through the hollow. Go and see after dark." {
+    lanterns x1=-1778 z1=1149 h1=6 x2=-1750 z2=1149 h2=6
+    lanterns x1=-1778 z1=1155 h1=6 x2=-1750 z2=1155 h2=6
+    folk name="Lamplighter Lil" x=-1764 z=1152 facing=180 look=4 line="Every night light, home again! The hollow hasn't glowed like this since my granny was small."
+}
+find firefly-jar kind=lantern set=night-lights when="night" name="The Firefly Jar" x=-2296 z=1560 hint="Where the garden gnomes meet in a circle, a little jar of light waits for dark." story="A jar of fireflies that never fly away. They blink hello when you pick it up."
+find moonstone kind=gem set=night-lights when="night" name="The Moonstone" x=-1718 z=-410 hint="Up beside the snowman at the very top of home, a stone that only shines by moonlight." story="It glows like a little moon, and is cold as snow even on a warm night."
+find star-candle kind=candle set=night-lights when="night" name="The Star Candle" x=3646 z=3030 hint="By the observatory on Fang, where people look at the stars, a candle lights itself at night." story="A candle that lit itself the night a shooting star went over. It has never gone out."
+find owl-flute kind=flute set=night-lights when="night" name="The Owl's Flute" x=-2094 z=-4140 hint="In the hedge maze on the Twins, an owl's flute plays only after dark." story="Blow it softly and every owl on the islands hoots back."
+find glow-shell kind=shell set=night-lights when="night" name="The Glow Shell" x=3030 z=-3490 hint="By the great sandcastle on the Crescent, a shell glows on the sand once the sun is down." story="It glows blue in the dark, like a piece of the sea at night."
+find night-pearl kind=pearl set=night-lights when="night" name="The Night Pearl" x=-4250 z=3610 hint="At the foot of the Great Needle, a pearl shines up from the rocks at night." story="A pearl as dark as the night sky, with a little star twinkling inside."

@@ -344,3 +344,48 @@ railway ember-line mine=#true {
     p -282 -855.6 -445
     p -272 -855.0 -447
 }
+
+// Basalt Gate: a grand station cut into the fang's south side. A gorge runs up from the
+// beach to its front, the railway runs through its great hall, and out the back on a
+// viaduct over a cave lake to a station in the cavern. The rock is cut a little wider
+// than the building, which lines it inside and covers the cuts with its two fronts.
+gorge gate-gorge w=140 {
+    note "Cut from the beach to Basalt Gate's front."
+    p 400 900 depth=0
+    p 400 800 depth=10
+    p 400 700 depth=140
+    p 400 600 depth=300
+    p 400 530 depth=400
+}
+caves basalt-gate-rock {
+    cavern basalt-front x=400 y=83 z=527 w=180 h=162 d=34 shape=block glow=0 decor=bare
+    cavern basalt-hall x=400 y=39 z=372 w=84 h=78 d=330 shape=block glow=0.7 decor=bare
+    cavern basalt-back x=400 y=43 z=227 w=180 h=222 d=55 shape=block glow=0 decor=bare
+    cavern basalt-cave x=400 y=4 z=40 w=520 h=260 d=420 shape=dome glow=0.35 decor=ember {
+        note "Behind Basalt Gate. The viaduct crosses the warm lake to the cave station."
+        lake basalt-pool level=-61 {
+            p 290 150
+            p 510 150
+            p 550 40
+            p 500 -70
+            p 300 -70
+            p 250 40
+        }
+    }
+}
+landmark basalt-gate kind=basaltgate x=400 y=2 z=530 rot=0 {
+    note "The station's front faces down the gorge to the sea."
+}
+railway basalt-line {
+    note "Back and forth from the beach, through Basalt Gate and over the cave lake."
+    p 400 860
+    p 400 760
+    p 400 2 650
+    p 400 2 537
+    p 400 2 300
+    p 400 2 200
+    p 400 2 -60
+    station basalt-beach x=400 z=840
+    station basalt-gate-station x=400 z=380
+    station basalt-cave-station x=400 z=-40
+}

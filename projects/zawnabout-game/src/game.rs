@@ -96,13 +96,19 @@ pub enum Listener {
     Folk(Vec3, u32),
     /// Someone a finished set brought, by their number among its effects.
     Guest(usize, Vec3),
+    /// A named dragon, by its number.
+    Kin(usize, Vec3),
 }
 
 impl Listener {
     /// Where their bubble floats.
     pub fn bubble(&self) -> Vec3 {
-        let (Listener::Local(_, p) | Listener::Folk(p, _) | Listener::Guest(_, p)) = self;
-        *p + Vec3::Y * 2.6
+        match self {
+            Listener::Local(_, p) | Listener::Folk(p, _) | Listener::Guest(_, p) => {
+                *p + Vec3::Y * 2.6
+            }
+            Listener::Kin(_, p) => *p + Vec3::Y * 4.0,
+        }
     }
 }
 
@@ -183,6 +189,21 @@ pub struct Game {
     /// have already pointed out this ride.
     chatter: f32,
     pointed: Vec<Vec3>,
+    /// The other dragons and the hatchling, flying and resting.
+    pub flock: crate::kin::Flock,
+    /// Who the named dragons are, from the play layer, once there is one.
+    pub kin: Vec<crate::kin::KinInfo>,
+    /// Times a dragon has been talked to, to pick its line.
+    kin_talks: u32,
+    /// The racer being raced, if one is.
+    racing: Option<usize>,
+    /// Fire on the egg so far (s), time flown with the hatchling (s), and fire breathed
+    /// beside it (s).
+    warm: f32,
+    together: f32,
+    fired: f32,
+    /// A gift was looked for on this visit to the lair.
+    gift_looked: bool,
     /// Lines waiting to show at the bottom, one after another: who or what, and the line.
     toasts: Vec<(String, String)>,
     /// How big the map in the atlas is, once drawn, for the journal's map page.
@@ -276,6 +297,14 @@ impl Game {
             chore_offer: None,
             chatter: 4.0,
             pointed: Vec::new(),
+            flock: crate::kin::Flock::default(),
+            kin: Vec::new(),
+            kin_talks: 0,
+            racing: None,
+            warm: 0.0,
+            together: 0.0,
+            fired: 0.0,
+            gift_looked: false,
             toasts: Vec::new(),
             map_px: std::cell::Cell::new(0.0),
             point_at: None,
@@ -286,6 +315,11 @@ impl Game {
     }
 
     /// Time of day from the sim's clock, so everyone sees the same sky.
+    /// Whether it is dark enough for the things that only come out at night.
+    fn sky_night(&self) -> bool {
+        self.sky().night > 0.5
+    }
+
     pub fn sky(&self) -> Sky {
         let l = &self.look;
         let dir = |yaw: f32, pitch: f32| {
@@ -417,6 +451,22 @@ impl Game {
         if d.mode != Mode::Ground || self.halted() || self.feedback.active {
             return None;
         }
+        if let Some((i, f)) = self
+            .flock
+            .dragons
+            .iter()
+            .enumerate()
+            .filter(|(i, f)| crate::play::kin_met(play, *i) && f.settled())
+            .min_by(|a, b| {
+                a.1.d
+                    .pos
+                    .distance(d.pos)
+                    .total_cmp(&b.1.d.pos.distance(d.pos))
+            })
+            && f.d.pos.distance(d.pos) < TALK_REACH * 1.6
+        {
+            return Some(Listener::Kin(i, f.d.pos));
+        }
         if let Some((i, p)) = crate::play::nearest_local(play, d.pos, TALK_REACH) {
             return Some(Listener::Local(i, p));
         }
@@ -458,6 +508,13 @@ impl Game {
                     self.asks.push(Ask::Save);
                 }
                 card
+            }
+            Listener::Kin(i, _) => {
+                let Some(play) = self.play.as_ref() else {
+                    return false;
+                };
+                self.kin_talks += 1;
+                crate::play::kin_talk(play, i, self.kin_talks)
             }
             Listener::Guest(k, _) => {
                 let Some(card) = self
@@ -608,10 +665,23 @@ impl Game {
             .point_at
             .map(|(p, _)| self.to_screen(p + Vec3::Y * 1.5));
         let me = self.player_dragon().pos;
-        self.hud.goal = self
-            .play
-            .as_ref()
-            .and_then(crate::play::goal)
+        let flock_goal = self.flock.busy().and_then(|(i, task)| {
+            let k = self.kin.get(i)?;
+            let f = &self.flock.dragons[i];
+            Some(match task {
+                crate::kin::Task::Race => {
+                    let (to, at, r) = k.race.clone()?;
+                    crate::play::Goal { name: to, at, r }
+                }
+                _ => crate::play::Goal {
+                    name: format!("Follow {}", k.name),
+                    at: f.d.pos,
+                    r: 0.0,
+                },
+            })
+        });
+        self.hud.goal = flock_goal
+            .or_else(|| self.play.as_ref().and_then(crate::play::goal))
             .filter(|g| g.at.distance(me) > g.r)
             .map(|g| {
                 let (mut at, seen) = self.to_screen(g.at + Vec3::Y * 2.0);
@@ -702,6 +772,7 @@ impl Game {
         }
         let Some(play) = &self.play else { return };
         let Some(rider) = crate::play::rider(play) else {
+            self.hatchling_chatter(dt);
             return;
         };
         let d = self.player_dragon().clone();
@@ -785,6 +856,205 @@ impl Game {
             self.chatter = 9.0 + (self.time as f32 * 3.1).sin().abs() * 6.0;
         } else {
             self.chatter = 2.0;
+        }
+    }
+
+    /// The hatchling has sharp little eyes: it squeaks at glints you might fly past.
+    fn hatchling_chatter(&mut self, dt: f32) {
+        let Some(play) = &self.play else { return };
+        if crate::play::egg(play) != 2 || self.flock.hatchling.is_none() {
+            return;
+        }
+        self.chatter -= dt;
+        if self.chatter > 0.0 {
+            return;
+        }
+        self.chatter = 6.0;
+        let me = self.player_dragon().pos;
+        let mut shinies = Vec::new();
+        crate::play::shinies(play, &mut shinies);
+        if let Some(s) = shinies
+            .iter()
+            .filter(|s| s.kind != "coins" && s.pos.distance(me) < 160.0)
+            .find(|s| !self.pointed.contains(&s.pos))
+        {
+            self.pointed.push(s.pos);
+            self.point_at = Some((s.pos, 8.0));
+            self.toast_all(vec![(
+                "Little one".into(),
+                "Squeak! Squeak! It's spotted something shiny, over there!".into(),
+            )]);
+            self.chatter = 15.0;
+        }
+    }
+
+    /// Answers a dragon's ask: follow it, race it, swap, or take the egg.
+    fn kin_answer(&mut self, i: usize, ask: crate::book::KinAsk) {
+        use crate::book::KinAsk;
+        let Some(k) = self.kin.get(i) else { return };
+        match ask {
+            KinAsk::Follow => {
+                self.flock.lead(i, k);
+                self.toast_all(vec![(
+                    k.name.clone(),
+                    "This way! Follow the red arrow.".into(),
+                )]);
+            }
+            KinAsk::Race => {
+                self.flock.race(i, k);
+                self.racing = Some(i);
+                let to = k.race.as_ref().map_or(String::new(), |r| r.0.clone());
+                self.toast_all(vec![(k.name.clone(), format!("Go! First to {to} wins!"))]);
+            }
+            KinAsk::Trade | KinAsk::Egg => {
+                if let Some(play) = &mut self.play
+                    && let Some(card) = crate::play::kin_do(play, i, ask)
+                {
+                    self.hud.book.cards.push(card);
+                    self.asks.push(Ask::Save);
+                }
+            }
+            KinAsk::Chat => {}
+        }
+    }
+
+    /// The other dragons and the family, a step: they fly about, meet you, lead and
+    /// race, leave gifts, and the egg and hatchling do their things.
+    fn kin_step(&mut self) {
+        let Some(play) = &mut self.play else {
+            self.flock = crate::kin::Flock::default();
+            return;
+        };
+        let world = &self.sim.world;
+        if self.kin.is_empty() {
+            self.kin = crate::play::kin_info(play);
+            for k in &mut self.kin {
+                if let Some((_, at, _)) = &mut k.race {
+                    at.y = world.support_still(at.x, at.z, 5000.0);
+                }
+            }
+        }
+        if self.kin.is_empty() {
+            return;
+        }
+        let p = &self.sim.flight;
+        self.flock.ensure(&self.kin, p.stand_height);
+        let me = self
+            .sim
+            .dragon(self.player)
+            .expect("player dragon exists")
+            .clone();
+        let egg = crate::play::egg(play);
+        let size = crate::play::hatchling_size(play);
+        let side = Vec3::new(me.heading.cos(), 0.0, -me.heading.sin());
+        let beside = me.pos + side * 3.0;
+        self.flock
+            .set_hatchling((egg == 2).then_some(beside), size, p.stand_height * size);
+        let met: Vec<bool> = (0..self.kin.len())
+            .map(|i| crate::play::kin_met(play, i))
+            .collect();
+        let news = self.flock.tick(&self.kin, &met, &me, p, world, DT);
+        let mut lines = Vec::new();
+        let mut cards = Vec::new();
+        for n in news {
+            match n {
+                crate::kin::FlockNews::Shown(i) => {
+                    lines.push(crate::play::kin_shown(play, i));
+                    self.flock.home(i, &self.kin[i]);
+                }
+                crate::kin::FlockNews::Finished(i) => {
+                    if self.racing == Some(i) {
+                        self.racing = None;
+                        match crate::play::kin_raced(play, i, false) {
+                            Ok(c) => cards.push(c),
+                            Err(l) => lines.push(l),
+                        }
+                    }
+                    self.flock.home(i, &self.kin[i]);
+                }
+            }
+        }
+        // Beat the racer to the finish.
+        if let Some(i) = self.racing
+            && let Some((_, at, r)) = &self.kin[i].race
+            && (at.x - me.pos.x).hypot(at.z - me.pos.z) < *r
+            && (at.y - me.pos.y).abs() < r.max(40.0)
+        {
+            self.racing = None;
+            match crate::play::kin_raced(play, i, true) {
+                Ok(c) => cards.push(c),
+                Err(l) => lines.push(l),
+            }
+            self.flock.home(i, &self.kin[i]);
+        }
+        // Coming upon a dragon not yet met.
+        for i in 0..self.kin.len() {
+            if crate::play::kin_met(play, i) {
+                continue;
+            }
+            // The shy one is only caught sitting still. The others can be met anywhere.
+            let f = &self.flock.dragons[i];
+            let shy = self.kin[i].kind == "shy";
+            if (shy && !f.settled()) || f.d.pos.distance(me.pos) > 70.0 {
+                continue;
+            }
+            match crate::play::find_kin(play, i) {
+                Some(crate::play::Meet::Card(c)) => cards.push(c),
+                Some(crate::play::Meet::Flee(who, line)) => {
+                    lines.push((who, line));
+                    if let Some(to) = self.flock.flee(i, &self.kin[i]) {
+                        self.point_at = Some((to, 8.0));
+                    }
+                }
+                None => {}
+            }
+        }
+        // Home in the lair: a friend may have left something, and the egg wants fire.
+        let heap = crate::play::heap(play).map(|h| h.at);
+        let home = heap.is_some_and(|h| h.distance(me.pos) < 25.0);
+        if home && me.mode == Mode::Ground && !self.gift_looked {
+            self.gift_looked = true;
+            cards.extend(crate::play::kin_gift(play));
+        }
+        if heap.is_none_or(|h| h.distance(me.pos) > 80.0) {
+            self.gift_looked = false;
+        }
+        if egg == 1 && heap.is_some_and(|h| h.distance(me.pos) < 14.0) && me.breath > 0.5 {
+            self.warm += DT;
+            if self.warm > 2.0 {
+                self.warm = 0.0;
+                cards.extend(crate::play::hatch(play));
+            }
+        }
+        // Firsts with the hatchling.
+        if egg == 2 {
+            if me.mode == Mode::Air {
+                self.together += DT;
+            }
+            if me.breath > 0.5 {
+                self.fired += DT;
+            }
+            let water = world
+                .terrain
+                .water(me.pos.x, me.pos.z, me.pos.y - 13.0)
+                .is_some_and(|l| me.pos.y < l + 1.5);
+            for (name, now) in [
+                ("flight", self.together > 8.0),
+                ("splash", me.swimming || water),
+                ("fire", self.fired > 1.0),
+            ] {
+                if now {
+                    lines.extend(crate::play::first(play, name));
+                }
+            }
+        }
+        if crate::play::take_changed(play) {
+            self.asks.push(Ask::Save);
+        }
+        self.toast_all(lines);
+        if !cards.is_empty() {
+            self.hud.book.cards.extend(cards);
+            self.release_keys();
         }
     }
 
@@ -998,6 +1268,7 @@ impl Game {
                         crate::play::decline(play, i);
                     }
                 }
+                Do::Kin(i, ask) => self.kin_answer(i, ask),
                 Do::TakeChore => {
                     if let (Some(play), Some(ch)) = (&mut self.play, self.chore_offer.take()) {
                         crate::play::take_chore(play, ch);
@@ -1255,6 +1526,7 @@ impl Game {
         for c in &self.hud.book.cards {
             let kind = match c.kind {
                 crate::book::CardKind::Find => "find".to_string(),
+                crate::book::CardKind::News => "news".to_string(),
                 crate::book::CardKind::Say => "say".to_string(),
                 crate::book::CardKind::Carry => "carry".to_string(),
                 crate::book::CardKind::Postcard(Some(i)) => format!("postcard {i}"),
@@ -1325,6 +1597,7 @@ impl Game {
                         },
                         _ => match kind {
                             "find" => crate::book::CardKind::Find,
+                            "news" => crate::book::CardKind::News,
                             "carry" => crate::book::CardKind::Carry,
                             _ => crate::book::CardKind::Say,
                         },
@@ -1424,21 +1697,32 @@ impl Game {
             return;
         }
         self.chatter(dt);
-        self.update_camera(dt);
+        crate::prof::time("camera", || self.update_camera(dt));
         self.update_rider_bits(dt);
     }
 
     fn tick(&mut self) {
         let mut input = self.input.sample(DT, &self.bindings, &self.controls);
         input.land_at = self.land_request.take();
-        self.sim.step(&[(self.player, input)]);
-        self.fx.tick(&self.sim, DT);
+        let player = self.player;
+        crate::prof::time("step", || self.sim.step(&[(player, input)]));
+        crate::prof::time("fx", || self.fx.tick(&self.sim, DT));
+        crate::prof::time("kin", || self.kin_step());
+        let night = self.sky_night();
         if let Some(play) = &mut self.play {
+            crate::play::set_night(play, night);
             let me = self.sim.dragon(self.player).expect("player dragon exists");
             let time = self.sim.tick as f32 * DT;
             let breath = self.sim.flight.breath_range;
             let news = crate::play::tick(play, me, &self.sim.world, time, breath);
             let mut lines = news.toasts;
+            if news.cheer && crate::play::egg(play) == 2 {
+                // The hatchling copies the stunt with a roll of its own.
+                if let Some(h) = &mut self.flock.hatchling {
+                    h.spin = std::f32::consts::TAU;
+                }
+                lines.extend(crate::play::first(play, "stunt"));
+            }
             if news.cheer
                 && let Some(rider) = crate::play::rider(play)
             {
@@ -1471,12 +1755,14 @@ impl Game {
                 }
             }
         }
-        for d in &self.sim.dragons {
-            match self.visuals.iter_mut().find(|(id, _)| *id == d.id) {
-                Some((_, v)) => v.tick(d, &self.sim.flight, &self.sim.world, DT),
-                None => self.visuals.push((d.id, DragonVisual::new(d))),
+        crate::prof::time("visuals", || {
+            for d in &self.sim.dragons {
+                match self.visuals.iter_mut().find(|(id, _)| *id == d.id) {
+                    Some((_, v)) => v.tick(d, &self.sim.flight, &self.sim.world, DT),
+                    None => self.visuals.push((d.id, DragonVisual::new(d))),
+                }
             }
-        }
+        });
         if let Some(t) = &mut self.trace {
             t.since += DT;
             if t.since >= t.every {
@@ -1910,6 +2196,13 @@ impl Game {
     /// A vehicle named in a script: its number, or a kind with an optional count, such as
     /// `cruise`, `ferry.1` or `metro` (the lead car of a subway train). Names keep playbooks
     /// working when the number of cars on the roads changes.
+    /// Vehicles far from any dragon move only now and then, so one about to have a dragon
+    /// put on it is brought up to now first.
+    fn refresh_vehicle(&mut self, i: usize) {
+        let time = self.sim.tick as f32 * DT;
+        self.sim.world.traffic.refresh(i, time);
+    }
+
     pub fn vehicle(&self, name: &str) -> Result<usize, String> {
         if let Ok(i) = name.parse::<usize>() {
             return Ok(i);
@@ -1976,6 +2269,17 @@ impl Game {
             ["card"] => !self.hud.book.cards.is_empty(),
             ["can-talk"] => self.listener().is_some(),
             ["riding"] => self.play.as_ref().and_then(crate::play::rider).is_some(),
+            // met N: named dragon N is met. egg N: the egg is 0 not had, 1 given, 2
+            // hatched. busy: a dragon is leading the way or racing.
+            ["met", n] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::kin_met(play, n.parse::<usize>().map_err(|_| "a number")?)
+            }
+            ["egg", n] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                crate::play::egg(play).to_string() == *n
+            }
+            ["busy"] => self.flock.busy().is_some(),
             // guide: the way to where what the dragon carries is going shows.
             ["guide"] => self.hud.goal.is_some(),
             ["say"] => self.hud.say.is_some(),
@@ -2283,11 +2587,13 @@ impl Game {
             // ride n: stands the dragon on top of vehicle n.
             ["land-on", which] => {
                 let i = self.vehicle(which)?;
+                self.refresh_vehicle(i);
                 self.land_request = Some(self.deck(i).ok_or("no such vehicle")?);
                 Ok(String::new())
             }
             ["ride", which] => {
                 let i = self.vehicle(which)?;
+                self.refresh_vehicle(i);
                 let Vec3 { x, y: top, z } = self.deck(i).ok_or("no such vehicle")?;
                 let p = Vec3::new(x, top, z);
                 let stand = self.sim.flight.stand_height;
@@ -2501,6 +2807,48 @@ impl Game {
                 self.stand_at(at - Vec3::new(heading.sin(), 0.0, heading.cos()) * away);
                 Ok(self.state())
             }
+            // thanks all: every town's thanks goes up, for a look at them.
+            ["thanks", "all"] => {
+                let play = self.play.as_mut().ok_or("gameplay is off")?;
+                crate::play::thank_all(play);
+                Ok(String::new())
+            }
+            // kin-state: where every other dragon is and what it is doing.
+            ["kin-state"] => Ok(self
+                .flock
+                .dragons
+                .iter()
+                .chain(self.flock.hatchling.iter())
+                .map(|f| {
+                    format!(
+                        "({:.0},{:.0},{:.0}) {:?} {:?} settled={}",
+                        f.d.pos.x,
+                        f.d.pos.y,
+                        f.d.pos.z,
+                        f.d.mode,
+                        f.task,
+                        f.settled()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" | ")),
+            // goto-kin N [AWAY]: standing near named dragon N (or `little` for the
+            // hatchling), wherever it is now.
+            ["goto-kin", which, ..] => {
+                let f = if *which == "little" {
+                    self.flock.hatchling.as_ref()
+                } else {
+                    self.flock
+                        .dragons
+                        .get(which.parse::<usize>().map_err(|_| "a number")?)
+                };
+                let at =
+                    f.ok_or("no such dragon yet")?.d.pos - Vec3::Y * self.sim.flight.stand_height;
+                let away = if words.len() > 2 { num(2)? } else { 8.0 };
+                let heading = self.player_dragon().heading;
+                self.stand_at(at - Vec3::new(heading.sin(), 0.0, heading.cos()) * away);
+                Ok(self.state())
+            }
             // try-gate ID [N]: flying at a stunt's gate (or course ID's gate N), a little
             // way back, headed through it.
             ["try-gate", id, ..] => {
@@ -2629,6 +2977,68 @@ impl Game {
             ["camera", "reset"] => {
                 self.camera.reset();
                 Ok(String::new())
+            }
+            // sdf x y z: how far that point is from rock, negative inside it.
+            ["sdf", _, _, _] => {
+                let p = Vec3::new(num(1)?, num(2)?, num(3)?);
+                Ok(format!("sdf {p} {:.1}", self.sim.world.terrain.sdf(p)))
+            }
+            // props-near x y z r: every prop within r of the point, nearest first.
+            ["props-near", _, _, _, _] => {
+                let (p, r) = (Vec3::new(num(1)?, num(2)?, num(3)?), num(4)?);
+                let mut near: Vec<_> = self
+                    .sim
+                    .world
+                    .props
+                    .iter()
+                    .filter(|q| q.pos.distance(p) < r)
+                    .collect();
+                near.sort_by(|a, b| a.pos.distance(p).total_cmp(&b.pos.distance(p)));
+                Ok(near
+                    .iter()
+                    .map(|q| {
+                        format!(
+                            "{:?} v{} x{:.1} at ({:.1},{:.1},{:.1})",
+                            q.kind, q.variant, q.scale, q.pos.x, q.pos.y, q.pos.z
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n"))
+            }
+            // skip secs: moves the clock on that far at once, every vehicle to where it
+            // is by then, without playing the time out. For setting up a test quickly.
+            ["skip", _] => {
+                let n = (num(1)?.max(0.0) / DT).round() as u64;
+                self.sim.tick += n;
+                self.time += (n as f32 * DT) as f64;
+                let t = self.sim.tick as f32 * DT;
+                let traffic = &mut self.sim.world.traffic;
+                traffic.update(t);
+                for i in 0..traffic.vehicles.len() {
+                    traffic.refresh(i, t);
+                }
+                Ok(self.state())
+            }
+            // ground x z: the height of the top surface there.
+            ["ground", _, _] => {
+                let (x, z) = (num(1)?, num(2)?);
+                Ok(format!(
+                    "ground {x} {z} {:.1}",
+                    self.sim.world.terrain.height(x, z)
+                ))
+            }
+            // camera: how far the camera is from the dragon and from rock.
+            ["camera"] => {
+                let c = self.camera.pos;
+                let d = self.player_dragon().pos + Vec3::Y;
+                Ok(format!(
+                    "camera off dragon {:.1} m, off rock {:.1} m, at {:.1} {:.1} {:.1}",
+                    (c - d).length(),
+                    self.sim.world.terrain.sdf(c),
+                    c.x,
+                    c.y,
+                    c.z
+                ))
             }
             _ => Err(format!("unknown command: {line}")),
         }

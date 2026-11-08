@@ -30,6 +30,9 @@ struct DragonIds {
 
 pub struct Gfx {
     pub renderer: Renderer,
+    /// What the last frame drawn while the game was halted showed: nothing moves then,
+    /// so the picture can stay up until the HUD over it changes.
+    still: Option<u64>,
     /// Treasure models by kind, the glint star over a find, and the hoard's coin heap.
     treasures: Vec<(&'static str, MeshId)>,
     star: MeshId,
@@ -50,6 +53,8 @@ pub struct Gfx {
     saddle: MeshId,
     umbrella: MeshId,
     dragon: DragonIds,
+    /// Each named dragon's own colors, built once they are known.
+    kin_meshes: Vec<DragonIds>,
     terrain: TerrainMeshes,
     /// Water meshes with bounding spheres, and whether each is in a cave.
     water: Vec<(MeshId, Vec3, f32, bool)>,
@@ -79,9 +84,9 @@ pub struct Gfx {
     plug: MeshId,
     /// Grass tufts around the camera, rebuilt when it moves to another cell.
     tuft: MeshId,
-    tufts: std::cell::RefCell<((i32, i32), Vec<Instance>)>,
+    tufts: std::cell::RefCell<Lawn>,
     /// The sparser ring of tufts further out, rebuilt less often.
-    far_tufts: std::cell::RefCell<((i32, i32), Vec<Instance>)>,
+    far_tufts: std::cell::RefCell<Lawn>,
     /// One mesh per vehicle, in the order of the sim's traffic.
     vehicles: Vec<MeshId>,
     /// Every lamp's head and foot, and whether it is underground where it always burns.
@@ -90,7 +95,8 @@ pub struct Gfx {
     /// whether they are a fair's colored bulbs that chase round.
     bulbs: Vec<(Vec3, f32, bool, bool)>,
     pool: MeshId,
-    /// Terrain chunks built per frame at most. Slow devices want 1.
+    /// Terrain chunk steps per frame at most. Steps stop sooner once
+    /// [`CHUNK_SECS`] have gone by.
     pub chunk_budget: usize,
     /// The HUD's world map, drawn on another thread the first time the HUD shows, and
     /// whether it is in the atlas yet.
@@ -183,6 +189,9 @@ fn wall_lamps(world: &zawnabout_sim::World) -> impl Iterator<Item = (Vec3, Vec3,
 }
 
 /// Props are batched per square of this size (m), so far squares can be skipped.
+/// Time a frame spends building terrain before leaving the rest for the next (s). At
+/// least one step always runs, so terrain keeps coming on any device.
+const CHUNK_SECS: f64 = 0.004;
 const PROP_TILE: f32 = 1024.0;
 const CLOUD_TILE: f32 = 3000.0;
 /// Tiles per side of a far group, and how far out (times the detail range) the group
@@ -863,6 +872,7 @@ impl Gfx {
         let mut gfx = Self {
             renderer,
             dragon,
+            kin_meshes: Vec::new(),
             terrain: TerrainMeshes::default(),
             treasures,
             star,
@@ -896,15 +906,16 @@ impl Gfx {
             plugs,
             mouths,
             plug,
-            tufts: std::cell::RefCell::new(((i32::MAX, 0), Vec::new())),
-            far_tufts: std::cell::RefCell::new(((i32::MAX, 0), Vec::new())),
+            tufts: std::cell::RefCell::new(Lawn::default()),
+            far_tufts: std::cell::RefCell::new(Lawn::default()),
             falls: crate::water::falls_feet(&game.sim.world.terrain),
             listener: crate::audio::Listener::new(game),
-            chunk_budget: 3,
+            chunk_budget: 12,
+            still: None,
             hud_map: (None, false),
             book_map: None,
         };
-        gfx.update_terrain(game, usize::MAX);
+        gfx.update_terrain(game, usize::MAX, f64::INFINITY);
         gfx
     }
 
@@ -913,18 +924,23 @@ impl Gfx {
         &self.weather
     }
 
-    /// Streams terrain chunks around the camera, building at most `budget` new ones.
-    pub fn update_terrain(&mut self, game: &Game, budget: usize) {
+    /// Streams terrain chunks around the camera, at most `budget` steps of building, and
+    /// none started after `secs`.
+    pub fn update_terrain(&mut self, game: &Game, budget: usize, secs: f64) {
         self.terrain.update(
             &mut self.renderer,
             &game.sim.world.terrain,
             game.camera.pos,
             budget,
+            secs,
         );
     }
 
     fn mesh(&self, part: Part) -> MeshId {
-        let d = &self.dragon;
+        Self::mesh_of(&self.dragon, part)
+    }
+
+    fn mesh_of(d: &DragonIds, part: Part) -> MeshId {
         match part {
             Part::Body => d.body,
             Part::Neck(_) => d.neck,
@@ -1055,6 +1071,52 @@ impl Gfx {
                     * Quat::from_rotation_y(game.player_dragon().heading),
                 Vec3::new(pos.x, ground + 0.12, pos.z),
             );
+            shadows.push(Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, strength)));
+        }
+        // The other dragons in their own colors and sizes, and the hatchling. A named one
+        // stands as tall as you, so it grows from its feet. The hatchling's body already
+        // sits low, so it shrinks round its middle. A roll for fun turns it about its
+        // length.
+        let stand = game.sim.flight.stand_height;
+        let flyers = game
+            .flock
+            .dragons
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f, false, self.kin_meshes.get(i).unwrap_or(&self.dragon)))
+            .chain(game.flock.hatchling.iter().map(|h| (h, true, &self.dragon)));
+        for (f, small, ids) in flyers {
+            let (pos, rot) = f.vis.interpolated(alpha);
+            if pos.distance(game.camera.pos) > 1800.0 {
+                continue;
+            }
+            parts.clear();
+            f.vis.parts(alpha, &mut parts);
+            let pivot = if small { pos } else { pos - Vec3::Y * stand };
+            let fwd = (rot * Vec3::Z).normalize_or(Vec3::Z);
+            let around = Mat4::from_translation(pivot)
+                * Mat4::from_scale(Vec3::splat(f.size))
+                * Mat4::from_translation(-pivot)
+                * Mat4::from_translation(pos)
+                * Mat4::from_axis_angle(fwd, f.spin)
+                * Mat4::from_translation(-pos);
+            let day = world.terrain.daylight(pos);
+            draws.extend(parts.iter().map(|(part, m, tint)| {
+                (
+                    Self::mesh_of(ids, *part),
+                    Instance::tinted(around * *m, tint.truncate().extend(tint.w * day)),
+                )
+            }));
+            let ground = world.support(pos.x, pos.z, pos.y);
+            let height = (pos.y - ground).max(0.0);
+            let radius = (2.6 + height * 0.015) * f.size;
+            let m = Mat4::from_scale_rotation_translation(
+                Vec3::new(radius, 1.0, radius * 1.3),
+                Quat::from_rotation_arc(Vec3::Y, world.ground_normal(pos.x, pos.z))
+                    * Quat::from_rotation_y(f.d.heading),
+                Vec3::new(pos.x, ground + 0.12, pos.z),
+            );
+            let strength = 1.0 - (height / 160.0).clamp(0.0, 1.0);
             shadows.push(Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, strength)));
         }
 
@@ -1319,7 +1381,12 @@ impl Gfx {
                 Vec::new()
             } else {
                 let d = game.player_dragon();
-                let hoard = game.hoard_view();
+                // Only the open journal reads the hoard, and gathering it is not free.
+                let hoard = if game.hud.book.showing() {
+                    game.hoard_view()
+                } else {
+                    None
+                };
                 let view = crate::book::View {
                     hoard: hoard.as_ref(),
                     binds: &game.bindings,
@@ -1350,7 +1417,6 @@ impl Gfx {
         let near = (game.play.is_some() && me.mode == zawnabout_sim::Mode::Ground)
             .then(|| {
                 self.life.nearest_person(
-                    &game.sim.world,
                     me.pos,
                     game.folk_search,
                     game.time as f32,
@@ -1382,6 +1448,58 @@ impl Gfx {
     }
 
     /// What finished sets bring: people come out, bunting and lanterns go up.
+    /// A fireworks show over `top`: rockets climb, burst into rings of colored stars
+    /// that drift down and fade, one after another on their own beats.
+    fn fireworks(
+        &self,
+        top: Vec3,
+        id: usize,
+        t: f32,
+        night: f32,
+        cam: Vec3,
+        fx: &mut Vec<(MeshId, Instance)>,
+    ) {
+        const COLORS: [u32; 6] = [0xFF5A5A, 0xFFD24A, 0x6AD0FF, 0x9CFF7A, 0xFF8AE0, 0xFFFFFF];
+        for k in 0..4 {
+            let beat = 3.7 + k as f32 * 0.6;
+            let phase = ((t + k as f32 * 1.3 + id as f32 * 0.7) / beat).fract();
+            let spread = Vec3::new(
+                ((k * 37 + id * 11) % 50) as f32 - 25.0,
+                (k as f32 * 9.0) % 20.0,
+                ((k * 53 + id * 7) % 50) as f32 - 25.0,
+            );
+            let center = top + spread;
+            let color = linear(Rgb(COLORS[(k + id) % COLORS.len()]), 1.0);
+            let star = |at: Vec3, size: f32, glow: f32, fx: &mut Vec<(MeshId, Instance)>| {
+                let face = Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y));
+                let s = Mat4::from_scale_rotation_translation(Vec3::splat(size), face, at);
+                fx.push((
+                    self.star,
+                    Instance::tinted(s, (color * 2.0).extend(glow * night)),
+                ));
+            };
+            if phase < 0.25 {
+                // The rocket going up.
+                let u = phase / 0.25;
+                let at = center - Vec3::Y * (1.0 - u) * top.y.max(60.0) * 0.6;
+                star(at, 1.6, 0.8, fx);
+                continue;
+            }
+            let u = (phase - 0.25) / 0.75;
+            let r = 34.0 * u.sqrt();
+            let fade = (1.0 - u) * (1.0 - u);
+            for j in 0..28 {
+                // Spread evenly round a sphere, golden-angle style.
+                let y = 1.0 - (j as f32 + 0.5) / 14.0;
+                let ring = (1.0 - y * y).max(0.0).sqrt();
+                let a = j as f32 * 2.399;
+                let dir = Vec3::new(a.cos() * ring, y, a.sin() * ring);
+                let at = center + dir * r - Vec3::Y * u * u * 14.0;
+                star(at, 3.2 * (1.0 - u * 0.5), fade, fx);
+            }
+        }
+    }
+
     fn set_effects(
         &self,
         game: &Game,
@@ -1398,10 +1516,47 @@ impl Gfx {
         let me = game.player_dragon();
         let (body, heads) = self.life.people();
         for e in crate::play::effects(play) {
+            // Fireworks light the sky at night, seen from far across the islands.
+            if e.kind == "fireworks" {
+                if night > 0.2 && e.a.distance(cam) < 4000.0 {
+                    self.fireworks(e.a, e.id, t, night, cam, fx);
+                }
+                continue;
+            }
             if e.a.distance(cam) > 500.0 {
                 continue;
             }
             let day = world.terrain.daylight(e.a + Vec3::Y);
+            if e.kind == "vane" {
+                // A pole, and a little gold dragon on top turning slowly in the wind.
+                let ground = world.support_still(e.a.x, e.a.z, e.a.y);
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, e.a.y - ground, 1.0),
+                    Quat::IDENTITY,
+                    Vec3::new(e.a.x, ground, e.a.z),
+                );
+                draws.push((
+                    self.pole,
+                    Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+                ));
+                let turn = (t * 0.15 + e.id as f32).sin() * 1.4 + e.id as f32;
+                let little =
+                    zawnabout_sim::Dragon::new(zawnabout_sim::EntityId(0), Vec3::ZERO, 0.0);
+                let mut parts = Vec::new();
+                crate::pose::DragonVisual::new(&little).parts(1.0, &mut parts);
+                let at = Mat4::from_scale_rotation_translation(
+                    Vec3::splat(0.4),
+                    Quat::from_rotation_y(turn),
+                    e.a + Vec3::Y * 0.4,
+                );
+                let gold = Vec4::new(1.25, 0.95, 0.35, day);
+                draws.extend(
+                    parts
+                        .iter()
+                        .map(|(part, m, _)| (self.mesh(*part), Instance::tinted(at * *m, gold))),
+                );
+                continue;
+            }
             if e.kind == "folk" {
                 let to = me.pos - e.a;
                 let face = if to.length() < 15.0 {
@@ -1720,55 +1875,47 @@ impl Gfx {
         for (cache, cell, step, inner, range, grow) in rings {
             let key = ((cam.x / cell).floor() as i32, (cam.z / cell).floor() as i32);
             let mut cache = cache.borrow_mut();
-            if cache.0 != key {
-                cache.0 = key;
-                cache.1.clear();
+            if cache.key != key {
+                let lawn = &mut *cache;
+                lawn.key = key;
+                lawn.out.clear();
                 let center = Vec2::new(key.0 as f32 + 0.5, key.1 as f32 + 0.5) * cell;
-                let n = (range / step).ceil() as i32;
-                let (ci, cj) = ((center.x / step) as i32, (center.y / step) as i32);
-                for j in cj - n..=cj + n {
-                    for i in ci - n..=ci + n {
-                        let seed = (i as u32).wrapping_mul(73_856_093)
-                            ^ (j as u32).wrapping_mul(19_349_663)
-                            ^ (step * 10.0) as u32;
-                        let r = |k: u32| zawnabout_sim::shape::hash(seed.wrapping_add(k));
-                        let x = (i as f32 + r(1)) * step;
-                        let z = (j as f32 + r(2)) * step;
-                        let d = Vec2::new(x, z).distance(center);
-                        if d > range || d < inner {
-                            continue;
+                // Where tufts stand only depends on the ground, so each tile of them is
+                // found once and kept while it stays in range. Moving on only finds the
+                // tiles coming into view.
+                let side = step * LAWN_TILE as f32;
+                let tile = |v: f32| (v / side).floor() as i32;
+                let (lo, hi) = (center - Vec2::splat(range), center + Vec2::splat(range));
+                lawn.tiles.retain(|&(tx, tz), _| {
+                    (tile(lo.x) - 1..=tile(hi.x) + 1).contains(&tx)
+                        && (tile(lo.y) - 1..=tile(hi.y) + 1).contains(&tz)
+                });
+                for tz in tile(lo.y)..=tile(hi.y) {
+                    for tx in tile(lo.x)..=tile(hi.x) {
+                        let tufts = lawn
+                            .tiles
+                            .entry((tx, tz))
+                            .or_insert_with(|| lawn_tile(terrain, step, tx, tz));
+                        for t in tufts.iter() {
+                            let d = Vec2::new(t.at.x, t.at.z).distance(center);
+                            if d > range || d < inner {
+                                continue;
+                            }
+                            let fade = (1.0 - smooth(range * 0.7, range, d))
+                                * smooth(inner * 0.9, inner + 8.0, d)
+                                    .max((inner == 0.0) as u8 as f32);
+                            let size = t.size * fade * grow;
+                            let m = Mat4::from_scale_rotation_translation(
+                                Vec3::new(size, size * t.tall, size),
+                                Quat::from_rotation_y(t.turn),
+                                t.at,
+                            );
+                            lawn.out.push(Instance::tinted(m, t.tint.extend(1.0)));
                         }
-                        let y = terrain.height(x, z);
-                        let at = Vec3::new(x, y, z);
-                        if terrain.water(x, z, y).is_some()
-                            || terrain.road_spot(x, z, 1.5).is_some()
-                            || terrain.on_pad(x, z)
-                        {
-                            continue;
-                        }
-                        let Some(color) =
-                            crate::terrain_mesh::lawn(terrain, at, terrain.normal(x, z))
-                        else {
-                            continue;
-                        };
-                        // The drawn ground rounds off cliff edges, so keep back from them.
-                        if terrain.rim(x, z, 5.0) > 1.2 {
-                            continue;
-                        }
-                        let fade = (1.0 - smooth(range * 0.7, range, d))
-                            * smooth(inner * 0.9, inner + 8.0, d).max((inner == 0.0) as u8 as f32);
-                        let size = (0.8 + r(3) * 0.7) * fade * grow;
-                        let m = Mat4::from_scale_rotation_translation(
-                            Vec3::new(size, size * (0.8 + r(4) * 0.5), size),
-                            Quat::from_rotation_y(r(5) * std::f32::consts::TAU),
-                            at - Vec3::Y * 0.05,
-                        );
-                        let tint = linear(color, 1.0) * (0.85 + r(6) * 0.3);
-                        cache.1.push(Instance::tinted(m, tint.extend(1.0)));
                     }
                 }
             }
-            draws.extend(cache.1.iter().map(|i| (self.tuft, *i)));
+            draws.extend(cache.out.iter().map(|i| (self.tuft, *i)));
         }
     }
 
@@ -1778,8 +1925,7 @@ impl Gfx {
         let terrain = &game.sim.world.terrain;
         let time = (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT;
         let cam = game.camera.pos;
-        for (v, mesh) in traffic.vehicles.iter().zip(&self.vehicles) {
-            let p = traffic.pose(v, time);
+        for (i, (v, mesh)) in traffic.vehicles.iter().zip(&self.vehicles).enumerate() {
             let range = if matches!(
                 v.kind,
                 zawnabout_sim::town::Kind::Car
@@ -1795,6 +1941,13 @@ impl Gfx {
                 // Big ships and planes show a long way off, small boats not so far.
                 (v.size.max_element() * 220.0).clamp(1500.0, 6000.0)
             };
+            // Where it was last tick says whether it is in range, before the costlier
+            // pose between ticks. It cannot have moved far since.
+            let last = traffic.poses.get(i).map_or(Vec3::ZERO, |p| p.pos);
+            if last.distance(cam) > range + 20.0 {
+                continue;
+            }
+            let p = traffic.pose(v, time);
             if p.pos.distance(cam) > range {
                 continue;
             }
@@ -2055,12 +2208,73 @@ impl Gfx {
     }
 
     pub fn render(&mut self, game: &Game, target: &wgpu::TextureView) {
+        let frame = self.prepare(game);
+        crate::prof::time("encode", || self.renderer.render(target, &frame));
+    }
+
+    /// Whether `frame` shows just what the last one did, with the game halted (the
+    /// journal, a card, the pause) so the host can leave the picture up instead of drawing
+    /// it all again.
+    pub fn unchanged(&mut self, game: &Game, frame: &Frame) -> bool {
+        if !game.halted() || game.wants_snap() {
+            self.still = None;
+            return false;
+        }
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        bytemuck::cast_slice::<_, u8>(&frame.hud).hash(&mut h);
+        for v in frame.view_proj.to_cols_array() {
+            v.to_bits().hash(&mut h);
+        }
+        self.renderer.size().hash(&mut h);
+        let key = h.finish();
+        let same = self.still == Some(key);
+        self.still = Some(key);
+        same
+    }
+
+    /// Draws the next frame even if nothing changed, so the host can read it back.
+    pub fn redraw(&mut self) {
+        self.still = None;
+    }
+
+    /// Everything to draw this frame.
+    pub fn prepare(&mut self, game: &Game) -> Frame {
         use crate::prof::time;
         self.load_hud_map(game);
+        if self.kin_meshes.len() != game.kin.len() {
+            self.kin_meshes = game
+                .kin
+                .iter()
+                .map(|k| {
+                    let mut m = models::dragon();
+                    m.recolor(k.tint);
+                    let r = &mut self.renderer;
+                    DragonIds {
+                        body: r.add_mesh(&m.body),
+                        neck: r.add_mesh(&m.neck),
+                        head: r.add_mesh(&m.head),
+                        eye: r.add_mesh(&m.eye),
+                        tail: r.add_mesh(&m.tail),
+                        plume: r.add_mesh(&m.plume),
+                        whisker: r.add_mesh(&m.whisker),
+                        mane: r.add_mesh(&m.mane),
+                        leg: r.add_mesh(&m.leg),
+                        arm: [r.add_mesh(&m.arm[0]), r.add_mesh(&m.arm[1])],
+                        hand: [r.add_mesh(&m.hand[0]), r.add_mesh(&m.hand[1])],
+                        star: r.add_mesh(&m.star),
+                    }
+                })
+                .collect();
+        }
         self.load_pics(game);
-        time("terrain", || self.update_terrain(game, self.chunk_budget));
-        let frame = time("frame", || self.frame(game));
-        time("encode", || self.renderer.render(target, &frame));
+        // Halted, the view stands still and the chunks around it are long done.
+        if !game.halted() {
+            time("terrain", || {
+                self.update_terrain(game, self.chunk_budget, CHUNK_SECS)
+            });
+        }
+        time("frame", || self.frame(game))
     }
 
     /// What the world sounds like this frame, for the host's [`crate::audio::Synth`].
@@ -2155,16 +2369,51 @@ impl Gfx {
                 view_formats: &[],
             });
         let view = tex.create_view(&Default::default());
+        crate::prof::enable();
         crate::prof::report();
+        // Each frame: how long the GPU took, what was drawn, and what was uploaded.
+        let mut each = Vec::new();
         for _ in 0..frames {
+            crate::prof::begin_frame();
             crate::prof::time("sim", || game.advance(1.0 / 60.0));
+            let sent = self.renderer.uploaded;
+            self.renderer.largest = 0;
             self.render(game, &view);
-            self.renderer
-                .device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .expect("poll device");
+            // Waiting for the GPU to finish counts too, so a slow GPU shows.
+            let start = crate::prof::clock();
+            crate::prof::time("gpu", || {
+                self.renderer
+                    .device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .expect("poll device")
+            });
+            let s = &self.renderer.stats;
+            each.push((
+                (crate::prof::clock() - start) * 1000.0,
+                s.triangles,
+                s.draws,
+                self.renderer.uploaded - sent,
+                self.renderer.largest,
+            ));
+            crate::prof::end_frame();
         }
-        crate::prof::report()
+        let mut order: Vec<usize> = (0..each.len()).collect();
+        order.sort_by(|a, b| each[*b].0.total_cmp(&each[*a].0));
+        let mut out = crate::prof::report();
+        let median = order.get(order.len() / 2).map_or(0.0, |&i| each[i].0);
+        out.push_str(&format!(
+            "
+ gpu median {median:.1}ms, slowest frames:"
+        ));
+        for &i in order.iter().take(5) {
+            let (ms, tris, draws, up, big) = each[i];
+            out.push_str(&format!(
+                " #{i} {ms:.0}ms {tris} tris {draws} draws {}kB up (biggest {}kB);",
+                up / 1024,
+                big / 1024
+            ));
+        }
+        out
     }
 
     /// Renders one frame offscreen and reads it back as tightly packed RGBA8. Blocks,
@@ -2175,7 +2424,7 @@ impl Gfx {
             .terrain
             .settled(&game.sim.world.terrain, game.camera.pos)
         {
-            self.update_terrain(game, usize::MAX);
+            self.update_terrain(game, usize::MAX, f64::INFINITY);
         }
         let (w, h) = self.renderer.size();
         let device = &self.renderer.device;
@@ -2257,7 +2506,10 @@ fn cave_tint(terrain: &zawnabout_sim::terrain::Terrain, p: Vec3) -> Vec3 {
     let (mut sum, mut weight) = (Vec3::ZERO, 0.0);
     for i in list {
         let v = &terrain.def.voids[i as usize];
-        if matches!(v.shape, VoidShape::Tube | VoidShape::Basin) {
+        if matches!(
+            v.shape,
+            VoidShape::Tube | VoidShape::Basin | VoidShape::Block
+        ) {
             continue;
         }
         let w = (1.0 - void_sdf(v, p).max(0.0) / reach).max(0.0);
@@ -2336,6 +2588,66 @@ fn light_shafts(
 const LOCAL_SHIRTS: [u32; 9] = [
     0x7FB069, 0xE07A5F, 0x3D5A80, 0xF2CC8F, 0x9C6ADE, 0x2A2E4A, 0x81B29A, 0xC8553D, 0x5B8E7D,
 ];
+
+/// Grass tufts kept around the camera: the tiles of them found so far, and this cell's
+/// tufts faded to the ring.
+#[derive(Default)]
+struct Lawn {
+    key: (i32, i32),
+    tiles: HashMap<(i32, i32), Vec<Tuft>>,
+    out: Vec<Instance>,
+}
+
+/// One grass tuft where it stands, before fading.
+struct Tuft {
+    at: Vec3,
+    size: f32,
+    tall: f32,
+    turn: f32,
+    tint: Vec3,
+}
+
+/// Grass spots along each side of a lawn tile.
+const LAWN_TILE: i32 = 8;
+
+/// The tufts in one tile of the grid `step` apart: on lawn, off water, roads, pads and
+/// cliff edges.
+fn lawn_tile(terrain: &zawnabout_sim::terrain::Terrain, step: f32, tx: i32, tz: i32) -> Vec<Tuft> {
+    let mut out = Vec::new();
+    for j in tz * LAWN_TILE..(tz + 1) * LAWN_TILE {
+        for i in tx * LAWN_TILE..(tx + 1) * LAWN_TILE {
+            let seed = (i as u32).wrapping_mul(73_856_093)
+                ^ (j as u32).wrapping_mul(19_349_663)
+                ^ (step * 10.0) as u32;
+            let r = |k: u32| zawnabout_sim::shape::hash(seed.wrapping_add(k));
+            let x = (i as f32 + r(1)) * step;
+            let z = (j as f32 + r(2)) * step;
+            let y = terrain.height(x, z);
+            let at = Vec3::new(x, y, z);
+            if terrain.water(x, z, y).is_some()
+                || terrain.road_spot(x, z, 1.5).is_some()
+                || terrain.on_pad(x, z)
+            {
+                continue;
+            }
+            let Some(color) = crate::terrain_mesh::lawn(terrain, at, terrain.normal(x, z)) else {
+                continue;
+            };
+            // The drawn ground rounds off cliff edges, so keep back from them.
+            if terrain.rim(x, z, 5.0) > 1.2 {
+                continue;
+            }
+            out.push(Tuft {
+                at: at - Vec3::Y * 0.05,
+                size: 0.8 + r(3) * 0.7,
+                tall: 0.8 + r(4) * 0.5,
+                turn: r(5) * std::f32::consts::TAU,
+                tint: linear(color, 1.0) * (0.85 + r(6) * 0.3),
+            });
+        }
+    }
+    out
+}
 
 fn smooth(lo: f32, hi: f32, x: f32) -> f32 {
     let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);

@@ -8,6 +8,8 @@ import { defineConfig, type Plugin } from "vite";
 // read them and reply. Only the dev server has this endpoint: a static build has no
 // server, and the page falls back to keeping notes in the browser.
 const NOTES = join(dirname(fileURLToPath(import.meta.url)), "../../../working-area/feedback");
+// Perf reports sent from `?perf`, one JSON file each, for the agent to read.
+const PERF = join(dirname(fileURLToPath(import.meta.url)), "../../../working-area/perf");
 const ID = /^[0-9]{8}-[0-9]{6}-[a-z0-9]{4}$/;
 
 function body(req: IncomingMessage): Promise<string> {
@@ -31,6 +33,30 @@ function notesPlugin(): Plugin {
   return {
     name: "zawnabout-notes",
     configureServer(server) {
+      server.middlewares.use("/__perf", async (req, res) => {
+        res.setHeader("content-type", "application/json");
+        if (req.method !== "POST") {
+          res.statusCode = 400;
+          return res.end("{}");
+        }
+        try {
+          mkdirSync(PERF, { recursive: true });
+          const report = JSON.parse(await body(req));
+          const id = newId();
+          // The screenshot goes beside the numbers as its own picture.
+          const shot = typeof report.shot === "string" ? report.shot : "";
+          delete report.shot;
+          if (shot.startsWith("data:image/jpeg;base64,")) {
+            writeFileSync(join(PERF, `${id}.jpg`), Buffer.from(shot.split(",")[1], "base64"));
+            report.shot = `${id}.jpg`;
+          }
+          writeFileSync(join(PERF, `${id}.json`), `${JSON.stringify(report, null, 2)}\n`);
+          res.end(JSON.stringify({ id }));
+        } catch (e) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: String(e) }));
+        }
+      });
       server.middlewares.use("/__notes", async (req, res) => {
         mkdirSync(NOTES, { recursive: true });
         const send = (code: number, value: unknown) => {

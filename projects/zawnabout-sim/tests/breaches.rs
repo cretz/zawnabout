@@ -710,3 +710,64 @@ fn open_spots() {
         z += step;
     }
 }
+
+/// A cave lake's basin opens up and out above its water so it always meets its cavern. It
+/// must never reach past the cavern into the rock, where it would leave a pocket of air a
+/// dragon could fly into and be pushed out of on the far side. Every lake still opens a
+/// ledge under its cavern's lower walls along the shore (flight now refuses a step deep
+/// into rock, so none can be flown through). Run by hand with `--ignored` until basins
+/// stop at their cavern's walls.
+#[test]
+#[ignore]
+fn cave_lakes_stay_in_their_caves() {
+    use zawnabout_sim::terrain::{VoidShape, void_bounds};
+    let t = Terrain::new(&WORLD);
+    let voids = t.def.voids;
+    let mut bad = Vec::new();
+    for v in voids.iter().filter(|v| v.shape == VoidShape::Basin) {
+        let b = void_bounds(v);
+        // Only caves whose bounds reach this basin can be open round it.
+        let near: Vec<_> = voids
+            .iter()
+            .filter(|o| o.shape != VoidShape::Basin)
+            .filter(|o| {
+                let ob = void_bounds(o);
+                ob.min.cmple(b.max).all() && ob.max.cmpge(b.min).all()
+            })
+            .collect();
+        let step = 6.0;
+        let mut pocket = 0;
+        let mut at = Vec3::ZERO;
+        let mut x = b.min.x;
+        while x < b.max.x {
+            let mut z = b.min.z;
+            while z < b.max.z {
+                let ground = t.height(x, z);
+                // Above the water only: under it the basin is the lake itself.
+                let mut y = v.center[1] + 2.0;
+                while y < b.max.y && y < ground - 2.0 {
+                    let p = Vec3::new(x, y, z);
+                    let open = near.iter().any(|o| void_sdf(o, p) < 2.0);
+                    if void_sdf(v, p) < -2.0 && !open {
+                        pocket += 1;
+                        at = p;
+                    }
+                    y += step;
+                }
+                z += step;
+            }
+            x += step;
+        }
+        if pocket > 0 {
+            bad.push(format!(
+                "{}: {pocket} cells of open rock, last at {at}",
+                v.id
+            ));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "cave lakes poke out of their caves:\n{}",
+        bad.join("\n")
+    );
+}

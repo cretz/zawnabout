@@ -17,6 +17,7 @@ pub enum Page {
     People,
     Flying,
     Stories,
+    Dragons,
     Map,
     #[default]
     Help,
@@ -24,12 +25,13 @@ pub enum Page {
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [
+    pub const ALL: [Page; 9] = [
         Page::Hoard,
         Page::Places,
         Page::People,
         Page::Flying,
         Page::Stories,
+        Page::Dragons,
         Page::Map,
         Page::Help,
         Page::Settings,
@@ -42,6 +44,7 @@ impl Page {
             Page::People => "people",
             Page::Flying => "flying",
             Page::Stories => "stories",
+            Page::Dragons => "dragons",
             Page::Map => "map",
             Page::Help => "help",
             Page::Settings => "settings",
@@ -59,6 +62,7 @@ impl Page {
             Page::People => "People",
             Page::Flying => "Flying",
             Page::Stories => "Stories",
+            Page::Dragons => "Dragons",
             Page::Map => "Map",
             Page::Help => "Help",
             Page::Settings => "Settings",
@@ -70,6 +74,8 @@ impl Page {
 pub enum CardKind {
     /// Something picked up.
     Find,
+    /// Good news: a set done, a town's thanks, a hatching.
+    News,
     /// Landed in a lair: make it home?
     Lair(usize),
     /// A postcard taken, with its picture's slot once painted.
@@ -88,6 +94,18 @@ pub enum CardKind {
     Story(usize),
     /// The passenger: where to, or hop off.
     Rider,
+    /// Dragon `i` talks, maybe with something to do together.
+    Kin(usize, KinAsk),
+}
+
+/// What a dragon asks to do with you.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KinAsk {
+    Chat,
+    Follow,
+    Race,
+    Trade,
+    Egg,
 }
 
 /// A card over everything, waiting to be dismissed.
@@ -172,6 +190,17 @@ pub struct StoryRow {
     pub mark: Option<String>,
 }
 
+/// A dragon for the dragons page, or the family at the end.
+#[derive(Clone, Debug, Default)]
+pub struct KinRow {
+    pub name: String,
+    pub status: String,
+    pub about: String,
+    /// What you have done together, a line each.
+    pub done: Vec<String>,
+    pub mark: Option<String>,
+}
+
 /// A postcard taken, for the places page.
 #[derive(Clone, Debug, Default)]
 pub struct PlaceRow {
@@ -189,6 +218,8 @@ pub struct HoardView {
     pub people: Vec<PersonRow>,
     pub flying: Vec<FlyRow>,
     pub stories: Vec<StoryRow>,
+    /// The dragons met or heard of, then the family.
+    pub kin: Vec<KinRow>,
     /// Towns helped, and how many favors done for each.
     pub towns: Vec<(String, usize)>,
     pub gold: u32,
@@ -247,6 +278,8 @@ pub enum Do {
     Close,
     Sound,
     PauseAway,
+    /// Do something with dragon `i`.
+    Kin(usize, KinAsk),
     /// The next time of day: passing, then held at morning, noon, sunset or night.
     TimeOfDay,
     Export,
@@ -324,8 +357,8 @@ const TAN: u32 = 0xEAD8BC;
 const COVER: u32 = 0x7A4A2E;
 const RULE: u32 = 0x9CC3E0;
 /// Each page's tab color, in the order of [`Page::ALL`].
-const TABS: [u32; 8] = [
-    0xF2C14E, 0x8FC7E8, 0xF4A3A3, 0xA8D88F, 0xC9A8E8, 0x9FD6CF, 0xF7B983, 0xD9C7AE,
+const TABS: [u32; 9] = [
+    0xF2C14E, 0x8FC7E8, 0xF4A3A3, 0xA8D88F, 0xC9A8E8, 0xE89A8A, 0x9FD6CF, 0xF7B983, 0xD9C7AE,
 ];
 
 impl Book {
@@ -381,6 +414,7 @@ impl Book {
             Page::People => view.hoard.map_or(0, |h| h.people.len()),
             Page::Flying => view.hoard.map_or(0, |h| h.flying.len()),
             Page::Stories => view.hoard.map_or(0, |h| h.stories.len()),
+            Page::Dragons => view.hoard.map_or(0, |h| h.kin.len()),
             Page::Map => view.hoard.map_or(0, |h| h.marks.len()),
             Page::Help => 0,
             Page::Settings if view.touch => Self::settings_rows(view),
@@ -447,6 +481,7 @@ impl Book {
             CardKind::Return(i) if yes => vec![Do::GiveBack(i)],
             CardKind::Story(s) if yes => vec![Do::Begin(s)],
             CardKind::Rider if yes => vec![Do::RiderMap],
+            CardKind::Kin(i, ask) if yes && ask != KinAsk::Chat => vec![Do::Kin(i, ask)],
             _ => vec![],
         }
     }
@@ -780,6 +815,7 @@ impl Book {
             Page::People => self.people_page(d, view, ui, area, hits),
             Page::Flying => self.flying_page(d, view, ui, area, hits),
             Page::Stories => self.stories_page(d, view, ui, area, hits),
+            Page::Dragons => self.dragons_page(d, view, ui, area, hits),
             Page::Map => self.map_page(d, view, ui, area, hits),
             Page::Help => self.help_page(d, view, ui, area, hits),
             Page::Settings => self.settings_page(d, view, ui, area, hits),
@@ -1154,6 +1190,81 @@ impl Book {
                 d.write(Vec2::new(a.x, ty), px * 0.9, &l, ink);
                 ty += line * 0.9;
             }
+        }
+    }
+
+    fn dragons_page(
+        &self,
+        d: &mut Draw,
+        view: &View,
+        ui: &Ui,
+        (a, b): (Vec2, Vec2),
+        hits: &mut Vec<(Vec2, Vec2, Hit)>,
+    ) {
+        let Some(hoard) = view.hoard else { return };
+        let f = crate::font::get();
+        let (px, line) = (ui.px, ui.line);
+        let ink = rgba(INK, 1.0);
+        let soft = rgba(0x8A6A50, 1.0);
+        let mut y = a.y;
+        for l in f.wrap(
+            px * 0.85,
+            "Other dragons live out on the islands. Find them, and see what they would like to do with you.",
+            b.x - a.x,
+        ) {
+            d.write(Vec2::new(a.x, y), px * 0.85, &l, soft);
+            y += line * 0.9;
+        }
+        y += line * 0.3;
+        for (i, k) in hoard.kin.iter().enumerate() {
+            let (r0, r1) = (
+                Vec2::new(a.x - px * 0.4, y - px * 0.15),
+                Vec2::new(b.x, y + line - px * 0.15),
+            );
+            self.row(d, i, r0, r1, hits);
+            d.write(Vec2::new(a.x, y), px * 0.9, &k.name, ink);
+            let sw = f.measure(px * 0.8, &k.status);
+            d.write(
+                Vec2::new(b.x - sw - px * 0.4, y + px * 0.1),
+                px * 0.8,
+                &k.status,
+                soft,
+            );
+            y += line;
+        }
+        let Some(k) = hoard.kin.get(self.sel) else {
+            return;
+        };
+        y += line * 0.4;
+        d.rect(Vec2::new(a.x - px * 0.4, y - px * 0.3), b, rgba(TAN, 0.7));
+        Self::show_me_button(
+            d,
+            view,
+            ui,
+            k.mark.as_deref(),
+            Vec2::new(b.x - px * 0.4, b.y - px * 2.2),
+            hits,
+        );
+        for l in f
+            .wrap(px * 0.9, &k.about, b.x - a.x - px)
+            .into_iter()
+            .take(4)
+        {
+            d.write(Vec2::new(a.x, y), px * 0.9, &l, ink);
+            y += line * 0.9;
+        }
+        y += line * 0.2;
+        for done in &k.done {
+            if y > b.y - line * 2.4 {
+                break;
+            }
+            d.rect(
+                Vec2::new(a.x, y + px * 0.25),
+                Vec2::new(a.x + px * 0.5, y + px * 0.75),
+                rgba(GOLD, 1.0),
+            );
+            d.write(Vec2::new(a.x + px * 0.9, y), px * 0.85, done, ink);
+            y += line * 0.85;
         }
     }
 
@@ -1896,6 +2007,7 @@ fn draw_card(d: &mut Draw, card: &Card, ui: &Ui, hits: &mut Vec<(Vec2, Vec2, Hit
     let (px, line) = (ui.px * 1.1, ui.line * 1.1);
     let buttons: &[(&str, Hit)] = match card.kind {
         CardKind::Find => &[("Into the hoard!", Hit::Yes)],
+        CardKind::News => &[("Hooray!", Hit::Yes)],
         CardKind::Lair(_) => &[("Make it my lair", Hit::Yes), ("Not now", Hit::No)],
         CardKind::Postcard(_) => &[("Keep it!", Hit::Yes)],
         CardKind::Say => &[("Bye!", Hit::Yes)],
@@ -1909,6 +2021,13 @@ fn draw_card(d: &mut Draw, card: &Card, ui: &Ui, hits: &mut Vec<(Vec2, Vec2, Hit
             ("Hop off here", Hit::Alt),
             ("Keep flying", Hit::No),
         ],
+        CardKind::Kin(_, KinAsk::Chat) => &[("See you!", Hit::Yes)],
+        CardKind::Kin(_, KinAsk::Follow) => {
+            &[("Lead the way!", Hit::Yes), ("Maybe later", Hit::No)]
+        }
+        CardKind::Kin(_, KinAsk::Race) => &[("Ready, set, go!", Hit::Yes), ("Not now", Hit::No)],
+        CardKind::Kin(_, KinAsk::Trade) => &[("Swap!", Hit::Yes), ("I'll keep mine", Hit::No)],
+        CardKind::Kin(_, KinAsk::Egg) => &[("I'll keep it warm", Hit::Yes)],
     };
     // Wide enough for every button, which shrink if the screen is not.
     let need: f32 = buttons
@@ -1920,14 +2039,18 @@ fn draw_card(d: &mut Draw, card: &Card, ui: &Ui, hits: &mut Vec<(Vec2, Vec2, Hit
     let bpx = px * ((bw - px * 1.8) / (need - px * 1.8)).min(1.0);
     let inner = bw - px * 2.4;
     let body = f.wrap(px, &card.body, inner);
+    // The foot wraps too: a long hint stays on the card.
+    let foot = if card.foot.is_empty() {
+        Vec::new()
+    } else {
+        f.wrap(px * 0.9, &card.foot, inner)
+    };
     // A postcard shows its picture above the words.
     let pic_h = match card.kind {
         CardKind::Postcard(_) => inner * 9.0 / 16.0 + px,
         _ => 0.0,
     };
-    let bh = line * (3.6 + body.len() as f32 + if card.foot.is_empty() { 0.0 } else { 1.0 })
-        + px * 2.0
-        + pic_h;
+    let bh = line * (3.6 + body.len() as f32 + foot.len() as f32 * 0.9) + px * 2.0 + pic_h;
     let p0 = Vec2::new((w - bw) * 0.5, (h - bh) * 0.5);
     let p1 = p0 + Vec2::new(bw, bh);
     d.rect(Vec2::ZERO, d.size, rgba(0x14202C, 0.35));
@@ -1951,8 +2074,9 @@ fn draw_card(d: &mut Draw, card: &Card, ui: &Ui, hits: &mut Vec<(Vec2, Vec2, Hit
         d.write(Vec2::new(x, y), px, l, rgba(INK, 1.0));
         y += line;
     }
-    if !card.foot.is_empty() {
-        d.write(Vec2::new(x, y), px * 0.9, &card.foot, rgba(GOLD, 1.0));
+    for l in &foot {
+        d.write(Vec2::new(x, y), px * 0.9, l, rgba(GOLD, 1.0));
+        y += line * 0.9;
     }
     let mut bx = p1.x - px * 1.2;
     for (k, (label, hit)) in buttons.iter().enumerate() {

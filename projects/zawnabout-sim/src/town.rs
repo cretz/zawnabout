@@ -243,6 +243,10 @@ pub enum Kind {
     Billboard,
     /// A concrete dam holding back a reservoir.
     Dam,
+    /// The Sea Doors: a great hall built into a sea cliff, through to a cavern.
+    SeaDoors,
+    /// Basalt Gate: a grand railway station built into a mountain, through to a cavern.
+    BasaltGate,
 }
 
 /// A bridge tower leg's width across the deck and depth along it.

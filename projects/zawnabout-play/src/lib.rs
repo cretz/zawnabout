@@ -8,9 +8,13 @@ use zawnabout_sim::dragon::{Dragon, Mode};
 use zawnabout_sim::world::World;
 
 pub use flying::{CourseDef, Flying, GateDef, RaceDef, Run, StuntDef};
+pub use happen::{FavorDef, HappeningDef, Happenings};
+pub use kin::{Egg, Kin, KinDef, KinNews};
 pub use story::{LampDef, RegionDef, Stories, StoryDef};
 
 pub mod flying;
+pub mod happen;
+pub mod kin;
 pub mod paint;
 pub mod save;
 pub mod story;
@@ -62,6 +66,8 @@ pub struct FindDef {
     pub hint: &'static str,
     /// How much it adds to the heap.
     pub gold: u32,
+    /// Only out in the dark: it glows at night and is nowhere to be seen by day.
+    pub night: bool,
 }
 
 /// A beautiful spot. Landing there takes a postcard: a painted picture of the view.
@@ -140,6 +146,9 @@ pub struct PlayDef {
     pub courses: &'static [CourseDef],
     pub races: &'static [RaceDef],
     pub stories: &'static [StoryDef],
+    pub kin: &'static [KinDef],
+    pub happenings: &'static [HappeningDef],
+    pub favors: &'static [FavorDef],
 }
 
 include!(concat!(env!("OUT_DIR"), "/play.rs"));
@@ -201,6 +210,10 @@ pub enum Event {
     RegionLit(usize, usize),
     /// Every lamp of story `s` is lit.
     StoryDone(usize),
+    /// Got to happening `i` while it was on.
+    Happening(usize),
+    /// A town put up its thanks `i`.
+    Favor(usize),
 }
 
 /// A small thing a townsperson asks, just for fun: no gold and no favor, so there is
@@ -323,6 +336,23 @@ pub struct Play {
     /// Stories, and where each one's lamps stand: story, region, lamp.
     pub stories: Stories,
     pub story_lamps: Vec<Vec<Vec<Vec3>>>,
+    /// Whether it is night now, set by the game, for finds that only come out then.
+    pub night: bool,
+    /// The happening on now, and every one seen.
+    pub happen: Happenings,
+    /// Each happening's effects, their ends on the ground.
+    pub happen_at: Vec<Vec<(Vec3, Vec3)>>,
+    /// Towns' thanks put up so far, and where each one's effects stand.
+    pub favored: Vec<bool>,
+    pub favor_at: Vec<Vec<(Vec3, Vec3)>>,
+    /// Other dragons and the family.
+    pub kin: Kin,
+    /// Each named dragon's home, then its perches, resting on what is under them.
+    pub kin_at: Vec<Vec<Vec3>>,
+    /// The find each collector took in a trade.
+    pub kin_traded_find: Vec<Option<usize>>,
+    /// Each named dragon's way to its secret, stop by stop, resting on what is under.
+    pub kin_way: Vec<Vec<Vec3>>,
     /// Sections of a loaded save this build does not know, kept as they were.
     other: String,
     /// Something to save changed.
@@ -401,8 +431,50 @@ impl Play {
             .iter()
             .map(|s| s.effects.iter().map(|e| (lift(e.a), lift(e.b))).collect())
             .collect();
+        let happen_at = def
+            .happenings
+            .iter()
+            .map(|h| h.effects.iter().map(|e| (lift(e.a), lift(e.b))).collect())
+            .collect();
+        let favor_at = def
+            .favors
+            .iter()
+            .map(|f| f.effects.iter().map(|e| (lift(e.a), lift(e.b))).collect())
+            .collect();
         let n = def.locals.len();
+        let settle = |p: [f32; 3]| {
+            let below = if p[1].is_nan() { 5000.0 } else { p[1] + 2.0 };
+            Vec3::new(p[0], world.support_still(p[0], p[2], below), p[2])
+        };
+        let kin_at = def
+            .kin
+            .iter()
+            .map(|k| {
+                std::iter::once([k.x, k.y.unwrap_or(f32::NAN), k.z])
+                    .chain(k.perches.iter().copied())
+                    .map(settle)
+                    .collect()
+            })
+            .collect();
+        let kin_way = def
+            .kin
+            .iter()
+            .map(|k| k.way.iter().copied().map(settle).collect())
+            .collect();
         Self {
+            night: false,
+            happen: Happenings {
+                current: 0,
+                seen_now: false,
+                seen: vec![false; def.happenings.len()],
+            },
+            happen_at,
+            favored: vec![false; def.favors.len()],
+            favor_at,
+            kin: Kin::new(def.kin.len()),
+            kin_at,
+            kin_way,
+            kin_traded_find: vec![None; def.kin.len()],
             def,
             spots,
             lairs,
@@ -461,7 +533,7 @@ impl Play {
                 } else {
                     s.pos.distance(me.pos) < REACH + 1.0
                 };
-                if !self.found[i] && near {
+                if !self.found[i] && near && (self.night || !self.def.finds[i].night) {
                     self.found[i] = true;
                     self.changed = true;
                     out.push(Event::Found(i));
@@ -583,6 +655,7 @@ impl Play {
                 out.push(Event::Lair(i));
             }
         }
+        out.extend(self.happen_tick(me));
         out
     }
 
@@ -703,12 +776,13 @@ impl Play {
     /// Whether find `i` went back to whoever lost it.
     pub fn returned(&self, i: usize) -> bool {
         let id = self.def.finds[i].id;
-        self.def.locals.iter().zip(&self.errands).any(|(l, e)| {
-            *e == Errand::Done
-                && l.request
-                    .as_ref()
-                    .is_some_and(|r| r.kind == "return" && r.target == id)
-        })
+        self.traded_away(i)
+            || self.def.locals.iter().zip(&self.errands).any(|(l, e)| {
+                *e == Errand::Done
+                    && l.request
+                        .as_ref()
+                        .is_some_and(|r| r.kind == "return" && r.target == id)
+            })
     }
 
     /// Named finds picked up and still in the hoard, in the order of the file.
@@ -731,6 +805,7 @@ impl Play {
             .filter_map(|(l, _)| l.request.as_ref()?.gift.as_ref())
             .chain(self.prizes())
             .chain(self.story_prizes())
+            .chain(self.kin_gifts())
     }
 
     /// Favors done for the people of `town`.
@@ -867,6 +942,8 @@ impl Play {
                     .zip(&self.effect_at[s])
                     .map(|(e, (a, b))| (e, *a, *b))
             })
+            .chain(self.happening_effects())
+            .chain(self.favor_effects())
     }
 
     pub fn sets(&self) -> Vec<SetView> {
@@ -909,6 +986,12 @@ impl Play {
         self.offered = None;
         self.flying.reset();
         self.stories.reset();
+        self.kin.reset();
+        self.happen.current = 0;
+        self.happen.seen_now = false;
+        self.happen.seen.iter_mut().for_each(|s| *s = false);
+        self.favored.iter_mut().for_each(|f| *f = false);
+        self.kin_traded_find.iter_mut().for_each(|t| *t = None);
         self.other.clear();
         self.changed = true;
     }
@@ -944,6 +1027,7 @@ mod tests {
                 set: Some("cups"),
                 hint: "Somewhere.",
                 gold: 5,
+                night: false,
             },
             FindDef {
                 id: "pile",
@@ -956,6 +1040,7 @@ mod tests {
                 set: None,
                 hint: "",
                 gold: 20,
+                night: false,
             },
         ],
         postcards: &[],
@@ -964,6 +1049,9 @@ mod tests {
         courses: &[],
         races: &[],
         stories: &[],
+        kin: &[],
+        happenings: &[],
+        favors: &[],
     };
 
     /// Everything set out in the file rests somewhere a dragon can reach: finds and lost
@@ -1003,8 +1091,20 @@ mod tests {
                 bad.push(format!("{}'s lost thing is in the water", l.id));
             }
         }
-        for (s, ends) in PLAY.sets.iter().zip(&play.effect_at) {
-            for (e, (a, _)) in s.effects.iter().zip(ends) {
+        let groups = PLAY
+            .sets
+            .iter()
+            .map(|s| s.effects)
+            .zip(&play.effect_at)
+            .chain(
+                PLAY.happenings
+                    .iter()
+                    .map(|h| h.effects)
+                    .zip(&play.happen_at),
+            )
+            .chain(PLAY.favors.iter().map(|f| f.effects).zip(&play.favor_at));
+        for (effects, ends) in groups {
+            for (e, (a, _)) in effects.iter().zip(ends) {
                 if e.kind == "folk" {
                     let foot = *a - Vec3::Y * e.a[1];
                     standing(e.name, foot, None, &mut bad);
@@ -1056,7 +1156,8 @@ mod tests {
             .iter()
             .position(|s| s.id == "moon-chess")
             .expect("set");
-        assert_eq!(play.effects().count(), 0);
+        // The happening on now has its own effects, there from the start.
+        let base = play.effects().count();
         let pieces: Vec<usize> = (0..PLAY.finds.len())
             .filter(|i| PLAY.finds[*i].set == Some("moon-chess"))
             .collect();
@@ -1068,7 +1169,7 @@ mod tests {
             assert!(events.contains(&Event::Found(*i)));
             assert_eq!(events.contains(&Event::SetDone(s)), k + 1 == pieces.len());
         }
-        assert_eq!(play.effects().count(), PLAY.sets[s].effects.len());
+        assert_eq!(play.effects().count(), base + PLAY.sets[s].effects.len());
         // Everything stands on the ground, not under it or up in the air.
         for (e, a, _) in play.effects() {
             let ground = sim.world.support_still(a.x, a.z, a.y + 1.0);

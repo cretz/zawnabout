@@ -203,6 +203,10 @@ impl Pose {
     }
 }
 
+/// Vehicles nearer a dragon than this move every tick (m). Further off they move a tick
+/// in a few, which nothing can see: drawing finds its own pose between ticks.
+pub const STIR: f32 = 2000.0;
+
 #[derive(Clone, Debug, Default)]
 pub struct Traffic {
     pub paths: Vec<Path>,
@@ -1121,13 +1125,39 @@ impl Traffic {
 
     /// Moves every vehicle to `time`.
     pub fn update(&mut self, time: f32) {
-        std::mem::swap(&mut self.prev, &mut self.poses);
-        self.poses.resize(self.vehicles.len(), Pose::default());
-        for i in 0..self.vehicles.len() {
-            self.poses[i] = self.pose(&self.vehicles[i], time);
+        self.update_near(time, &[], 0, 1);
+    }
+
+    /// Brings vehicle `i` up to `time` at once, still, as when a dragon is put straight
+    /// onto it from far off.
+    pub fn refresh(&mut self, i: usize, time: f32) {
+        if let Some(v) = self.vehicles.get(i) {
+            let p = self.pose(v, time);
+            self.poses[i] = p;
+            self.prev[i] = p;
         }
-        if self.prev.len() != self.poses.len() {
-            self.prev = self.poses.clone();
+    }
+
+    /// Moves the vehicles within [`STIR`] of any of `near` to `time`, and of the rest only
+    /// one in `every`, in turn by `tick`: nothing far off can touch them, and drawing
+    /// finds its own pose for each.
+    pub fn update_near(&mut self, time: f32, near: &[Vec3], tick: u64, every: usize) {
+        std::mem::swap(&mut self.prev, &mut self.poses);
+        if self.prev.len() != self.vehicles.len() {
+            self.prev = (0..self.vehicles.len())
+                .map(|i| self.pose(&self.vehicles[i], time))
+                .collect();
+        }
+        self.poses.clone_from(&self.prev);
+        let turn = tick as usize % every.max(1);
+        for i in 0..self.vehicles.len() {
+            let close = || {
+                let at = self.prev[i].pos;
+                near.iter().any(|p| p.distance_squared(at) < STIR * STIR)
+            };
+            if i % every.max(1) == turn || close() {
+                self.poses[i] = self.pose(&self.vehicles[i], time);
+            }
         }
     }
 

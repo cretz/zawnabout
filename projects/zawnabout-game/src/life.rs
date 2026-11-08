@@ -42,6 +42,8 @@ struct Walker {
     /// Underground, the height to look down for the floor from: the cavern town's own
     /// ground rather than the hill far overhead.
     under: Option<f32>,
+    /// The ground under the way, evenly from `a` to `b`, found once when the way is laid.
+    ground: Vec<f32>,
 }
 
 /// A ski run beside a chairlift: from its top station down to its bottom one.
@@ -168,7 +170,7 @@ impl Life {
 
     /// Where walker `i` is at `time`, and which way they walk. None when they are
     /// indoors for the night.
-    fn walker_at(&self, i: usize, world: &World, time: f32, night: f32) -> Option<(Vec3, Vec2)> {
+    fn walker_at(&self, i: usize, time: f32, night: f32) -> Option<(Vec3, Vec2)> {
         let w = &self.walkers[i];
         let s = i as u32 * 31;
         if night > 0.5 && hash(s + 1) < 0.7 {
@@ -182,11 +184,11 @@ impl Life {
         } else {
             (2.0 - u, w.a - w.b)
         };
-        let p = w.a.lerp(w.b, t.clamp(0.0, 1.0));
-        let top = w
-            .under
-            .unwrap_or_else(|| world.terrain.height(p.x, p.y) + STEP_UP);
-        let y = world.support(p.x, p.y, top);
+        let t = t.clamp(0.0, 1.0);
+        let p = w.a.lerp(w.b, t);
+        let at = t * (w.ground.len() - 1) as f32;
+        let k = (at as usize).min(w.ground.len() - 2);
+        let y = w.ground[k] + (w.ground[k + 1] - w.ground[k]) * (at - k as f32);
         let bob = (time * 9.0 + s as f32).sin().abs() * 0.07;
         Some((Vec3::new(p.x, y + bob, p.y), toward))
     }
@@ -195,7 +197,6 @@ impl Life {
     /// alone, for what they say.
     pub fn nearest_person(
         &self,
-        world: &World,
         at: Vec3,
         reach: f32,
         time: f32,
@@ -210,7 +211,7 @@ impl Life {
                 w.a.distance(flat) < len + reach && w.b.distance(flat) < len + reach
             })
             .filter_map(|(i, _)| {
-                let (p, _) = self.walker_at(i, world, time, night)?;
+                let (p, _) = self.walker_at(i, time, night)?;
                 let d = Vec2::new(p.x, p.z).distance(flat);
                 (d < reach && (p.y - at.y).abs() < 4.0).then_some((d, p, i as u32 * 31))
             })
@@ -305,30 +306,35 @@ impl Life {
             // Cavern towns are busy at every hour, so they have twice the people.
             // Only a way with nothing solid across it: no walking through walls.
             // and no sudden drop or climb, which they would float over.
+            // The ground found along the way, when it is clear.
             let clear = |a: Vec2, b: Vec2| {
-                let n = (a.distance(b) / 0.8).ceil() as usize;
-                let mut last: Option<f32> = None;
-                (0..=n).all(|k| {
-                    let p = a.lerp(b, k as f32 / n.max(1) as f32);
+                let n = (a.distance(b) / 0.8).ceil().max(1.0) as usize;
+                let mut ground: Vec<f32> = Vec::with_capacity(n + 1);
+                for k in 0..=n {
+                    let p = a.lerp(b, k as f32 / n as f32);
                     let top = under.unwrap_or_else(|| world.terrain.height(p.x, p.y) + STEP_UP);
                     let y = world.support_still(p.x, p.y, top);
-                    let step = last.is_none_or(|l| (y - l).abs() < 2.0);
-                    last = Some(y);
+                    let step = ground.last().is_none_or(|l| (y - l).abs() < 2.0);
                     // By the doors themselves they step in and out of the house.
                     let door = p.distance(a).min(p.distance(b)) < 3.0;
-                    step && (door || !world.in_building(Vec3::new(p.x, y + 1.0, p.y)))
-                })
+                    if !step || (!door && world.in_building(Vec3::new(p.x, y + 1.0, p.y))) {
+                        return None;
+                    }
+                    ground.push(y);
+                }
+                Some(ground)
             };
             if (i % 4 == 0 || (under.is_some() && i % 2 == 0))
                 && a.distance(b) > 3.0
                 && a.distance(b) < 120.0
-                && clear(a, b)
+                && let Some(ground) = clear(a, b)
             {
                 walkers.push(Walker {
                     a,
                     b,
                     kind: (hash(i as u32 * 17) * 3.0) as u8,
                     under,
+                    ground,
                 });
             }
         }
@@ -847,7 +853,7 @@ impl Life {
             if !near(w.a, 450.0) || riding == Some(s) {
                 continue;
             }
-            let Some((at, toward)) = self.walker_at(i, world, time, night) else {
+            let Some((at, toward)) = self.walker_at(i, time, night) else {
                 continue;
             };
             let p = Vec2::new(at.x, at.z);

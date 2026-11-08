@@ -202,9 +202,10 @@ caves vault {
     }
     mouth eye-shaft kind=chimney w=50 hidden=#true light=#true {
         note "Ringed at the top by tall lantern stones, so it reads as a way down people made, not a hole."
+        note "Straight down from the top, then a long slope into the vault, so it can be flown up and down without bumping the walls."
         p 100 60 0
-        p 100 -100 0
-        p 120 -520 30
+        p 100 -60 0
+        p 490 -600 310
     }
     mouth hill-door kind=cliff w=90 light=#true {
         note "Opens in the outer face of moon hill."
@@ -282,6 +283,12 @@ railway moon-subway subway=#true {
     station subway-west x=-900 z=1187
 }
 caves moon-metro {
+    // The open cutting down to each stair, cut square so the gate's walls line it and no
+    // rough rim shows round the tunnel where it meets the street.
+    cavern subway-central-cut x=-1133.5 y=-0.1 z=418.8 w=19.2 h=38 d=42 rot=30 shape=block glow=0 decor=bare
+    cavern subway-canals-cut x=-665.5 y=-0.4 z=976.8 w=19.2 h=38 d=42 rot=30 shape=block glow=0 decor=bare
+    cavern subway-hill-cut x=-515.8 y=0.2 z=1236.5 w=19.2 h=38 d=42 rot=60 shape=block glow=0 decor=bare
+    cavern subway-west-cut x=-904.5 y=-5.9 z=1117.2 w=19.2 h=38 d=42 rot=150 shape=block glow=0 decor=bare
     cavern subway-central-hall x=-1122 y=-34 z=337 w=120 h=26 d=38 rot=17 shape=carved glow=0.75 decor=tiled
     mouth subway-central-stairs kind=chimney w=20 tight=#true decor=tiled {
         p -1096 -39 353

@@ -34,7 +34,15 @@ use crate::{Errand, Play, paint};
 
 const HEAD: &str = "zawnabout save 1";
 /// The sections this build reads. Any other is kept as it was.
-const KNOWN: [&str; 5] = ["hoard", "places", "people", "flying", "stories"];
+const KNOWN: [&str; 7] = [
+    "hoard",
+    "places",
+    "people",
+    "flying",
+    "stories",
+    "dragons",
+    "happenings",
+];
 
 impl Play {
     pub fn save(&self) -> String {
@@ -113,6 +121,62 @@ impl Play {
                 }
             }
         }
+        s += "[dragons]\n";
+        let k = &self.kin;
+        for (i, d) in self.def.kin.iter().enumerate() {
+            if k.met[i] {
+                let _ = writeln!(s, "dragon {}", d.id);
+            } else if k.coaxed[i] > 0 {
+                let _ = writeln!(s, "coaxed {} {}", d.id, k.coaxed[i]);
+            }
+            for (on, word) in [
+                (k.followed[i], "followed"),
+                (k.won[i], "beat"),
+                (k.gifted[i], "gifted"),
+            ] {
+                if on {
+                    let _ = writeln!(s, "{word} {}", d.id);
+                }
+            }
+            if let Some(f) = self.kin_traded_find[i] {
+                let _ = writeln!(s, "traded {} {}", d.id, self.def.finds[f].id);
+            }
+        }
+        match k.egg {
+            crate::Egg::None => {}
+            crate::Egg::Given => s += "egg given\n",
+            crate::Egg::Hatched => s += "egg hatched\n",
+        }
+        for (f, (name, _)) in crate::kin::FIRSTS.iter().enumerate() {
+            if k.firsts[f] {
+                let _ = writeln!(s, "first {name}");
+            }
+        }
+        s += "[happenings]\n";
+        if let Some(i) = self.happening() {
+            let _ = writeln!(s, "now {}", self.def.happenings[i].id);
+            if self.happen.seen_now {
+                s += "here\n";
+            }
+        }
+        for (h, _) in self
+            .def
+            .happenings
+            .iter()
+            .zip(&self.happen.seen)
+            .filter(|(_, s)| **s)
+        {
+            let _ = writeln!(s, "saw {}", h.id);
+        }
+        for (f, _) in self
+            .def
+            .favors
+            .iter()
+            .zip(&self.favored)
+            .filter(|(_, d)| **d)
+        {
+            let _ = writeln!(s, "thanks {}", f.id);
+        }
         s + &self.other
     }
 
@@ -135,6 +199,10 @@ impl Play {
             }
             if !KNOWN.contains(&section.as_str()) {
                 let _ = writeln!(self.other, "{line}");
+                continue;
+            }
+            if line == "here" {
+                self.happen.seen_now = true;
                 continue;
             }
             let card = |id: &str| self.def.postcards.iter().position(|c| c.id == id);
@@ -225,6 +293,65 @@ impl Play {
                         self.flying.won[i] = true;
                     }
                 }
+                Some(("dragon", id)) => {
+                    if let Some(i) = self.def.kin.iter().position(|k| k.id == id) {
+                        self.kin.met[i] = true;
+                    }
+                }
+                Some((word @ ("followed" | "beat" | "gifted"), id)) => {
+                    if let Some(i) = self.def.kin.iter().position(|k| k.id == id) {
+                        let k = &mut self.kin;
+                        match word {
+                            "followed" => k.followed[i] = true,
+                            "beat" => k.won[i] = true,
+                            _ => k.gifted[i] = true,
+                        }
+                    }
+                }
+                Some(("coaxed", rest)) => {
+                    if let Some((id, n)) = rest.split_once(' ')
+                        && let Some(i) = self.def.kin.iter().position(|k| k.id == id)
+                        && let Ok(n) = n.parse::<u8>()
+                    {
+                        self.kin.coaxed[i] = n.min(crate::kin::COAX);
+                    }
+                }
+                Some(("traded", rest)) => {
+                    if let Some((id, find)) = rest.split_once(' ')
+                        && let Some(i) = self.def.kin.iter().position(|k| k.id == id)
+                        && let Some(f) = self.def.finds.iter().position(|d| d.id == find)
+                    {
+                        self.kin.traded[i] = true;
+                        self.kin_traded_find[i] = Some(f);
+                    }
+                }
+                Some(("egg", state)) => {
+                    self.kin.egg = match state {
+                        "hatched" => crate::Egg::Hatched,
+                        "given" => crate::Egg::Given,
+                        _ => crate::Egg::None,
+                    };
+                }
+                Some(("first", name)) => {
+                    if let Some(f) = crate::kin::FIRSTS.iter().position(|(n, _)| *n == name) {
+                        self.kin.firsts[f] = true;
+                    }
+                }
+                Some(("now", id)) => {
+                    if let Some(i) = self.def.happenings.iter().position(|h| h.id == id) {
+                        self.happen.current = i;
+                    }
+                }
+                Some(("saw", id)) => {
+                    if let Some(i) = self.def.happenings.iter().position(|h| h.id == id) {
+                        self.happen.seen[i] = true;
+                    }
+                }
+                Some(("thanks", id)) => {
+                    if let Some(i) = self.def.favors.iter().position(|f| f.id == id) {
+                        self.favored[i] = true;
+                    }
+                }
                 Some(("found", id)) => {
                     if let Some(i) = self.def.finds.iter().position(|f| f.id == id) {
                         self.found[i] = true;
@@ -277,6 +404,12 @@ mod tests {
             play.taken[0] = true;
             play.set_pic(0, &vec![200; paint::PIC.0 * paint::PIC.1 * 4]);
         }
+        if !play.def.kin.is_empty() {
+            play.kin.met[0] = true;
+            play.kin.followed[0] = true;
+            play.kin.egg = crate::Egg::Hatched;
+            play.kin.firsts[1] = true;
+        }
         let text = play.save() + "[later]\nthing 1\n";
         let mut back = Play::new(&sim.world);
         back.load(&text).expect("loads");
@@ -291,6 +424,9 @@ mod tests {
         assert_eq!(back.flying.won, play.flying.won);
         assert_eq!(back.stories.active, play.stories.active);
         assert_eq!(back.stories.lit, play.stories.lit);
+        assert_eq!(back.kin.met, play.kin.met);
+        assert_eq!(back.kin.egg, play.kin.egg);
+        assert_eq!(back.kin.firsts, play.kin.firsts);
         assert_eq!(back.save(), text);
         assert!(back.load("hello").is_err());
         assert_eq!(back.found, play.found);

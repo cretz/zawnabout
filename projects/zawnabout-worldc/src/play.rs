@@ -62,6 +62,22 @@ const NODES: &[(&str, &[Prop])] = &[
     ),
     ("set", &[("name", 's', true), ("done", 's', false)]),
     (
+        "happening",
+        &[
+            ("name", 's', true),
+            ("place", 's', true),
+            ("rumor", 's', true),
+            ("seen", 's', true),
+            ("x", 'n', true),
+            ("z", 'n', true),
+            ("r", 'n', false),
+        ],
+    ),
+    (
+        "favor",
+        &[("town", 's', true), ("at", 'n', true), ("done", 's', true)],
+    ),
+    (
         "find",
         &[
             ("kind", 's', true),
@@ -73,6 +89,7 @@ const NODES: &[(&str, &[Prop])] = &[
             ("set", 's', false),
             ("hint", 's', false),
             ("gold", 'n', false),
+            ("when", 's', false),
         ],
     ),
     (
@@ -161,6 +178,37 @@ const NODES: &[(&str, &[Prop])] = &[
             ("prize-kind", 's', true),
             ("prize-name", 's', true),
             ("prize-story", 's', true),
+        ],
+    ),
+    (
+        "dragon",
+        &[
+            ("name", 's', true),
+            ("kind", 's', true),
+            ("island", 's', true),
+            ("x", 'n', true),
+            ("y", 'n', false),
+            ("z", 'n', true),
+            ("tint", 's', false),
+            ("size", 'n', false),
+            ("meet", 's', true),
+            ("about", 's', true),
+            ("rumor", 's', true),
+            ("secret", 's', true),
+            ("gift-kind", 's', true),
+            ("gift-name", 's', true),
+            ("gift-story", 's', true),
+            ("race-to", 's', false),
+            ("race-x", 'n', false),
+            ("race-z", 'n', false),
+            ("race-r", 'n', false),
+            ("prize-kind", 's', false),
+            ("prize-name", 's', false),
+            ("prize-story", 's', false),
+            ("want", 's', false),
+            ("trade-kind", 's', false),
+            ("trade-name", 's', false),
+            ("trade-story", 's', false),
         ],
     ),
     (
@@ -317,6 +365,21 @@ fn effect(kid: &KdlNode) -> Result<String, String> {
                 n("look") as u32,
             ))
         }
+        // A show of fireworks over `x`, `z`, bursting `h` up, at night. A weather vane
+        // on a pole `h` tall: a little gold dragon turning in the wind.
+        "fireworks" | "vane" => {
+            if num(kid, "x").is_none() || num(kid, "z").is_none() {
+                return Err(format!("{kind} needs x and z"));
+            }
+            let h = num(kid, "h").unwrap_or(if kind == "vane" { 8.0 } else { 90.0 });
+            Ok(format!(
+                "EffectDef {{ kind: {kind:?}, a: [{:.2}, {h:.2}, {:.2}], b: [{:.2}, {h:.2}, {:.2}], name: \"\", line: \"\", facing: 0.0, look: 0 }}",
+                n("x"),
+                n("z"),
+                n("x"),
+                n("z"),
+            ))
+        }
         "bunting" | "lanterns" => {
             if ["x1", "z1", "x2", "z2"]
                 .iter()
@@ -340,15 +403,37 @@ fn effect(kid: &KdlNode) -> Result<String, String> {
 
 /// A prize from `prize-kind`, `prize-name` and `prize-story`, as Rust source.
 fn prize(node: &KdlNode) -> Result<String, String> {
-    let kind = text(node, "prize-kind").unwrap_or_default();
+    gift(node, "prize")
+}
+
+/// A gift from `{key}-kind`, `{key}-name` and `{key}-story`, as Rust source.
+fn gift(node: &KdlNode, key: &str) -> Result<String, String> {
+    let kind = text(node, &format!("{key}-kind")).unwrap_or_default();
     if !KINDS.contains(&kind.as_str()) {
-        return Err(format!("unknown prize-kind {kind}"));
+        return Err(format!("unknown {key}-kind {kind}"));
     }
     Ok(format!(
         "GiftDef {{ kind: {kind:?}, name: {:?}, story: {:?} }}",
-        text(node, "prize-name").unwrap_or_default(),
-        text(node, "prize-story").unwrap_or_default()
+        text(node, &format!("{key}-name")).unwrap_or_default(),
+        text(node, &format!("{key}-story")).unwrap_or_default()
     ))
+}
+
+/// Points from children named `want`, as `[x, y, z]` with y NaN when not given.
+fn points(src: &str, node: &KdlNode, want: &str, errors: &mut Vec<String>) -> Vec<String> {
+    node.iter_children()
+        .filter(|k| k.name().value() == want)
+        .filter_map(|k| match (num(k, "x"), num(k, "z")) {
+            (Some(x), Some(z)) => Some(format!(
+                "[{x:.2}, {}, {z:.2}]",
+                num(k, "y").map_or("f32::NAN".into(), |y| format!("{y:.2}"))
+            )),
+            _ => {
+                errors.push(format!("play.kdl:{}: {want} needs x and z", line(src, k)));
+                None
+            }
+        })
+        .collect()
 }
 
 fn line(src: &str, node: &KdlNode) -> usize {
@@ -390,6 +475,10 @@ pub fn compile(path: &Path) -> Result<String, String> {
     let mut locals = String::new();
     let (mut stunts, mut courses, mut races) = (String::new(), String::new(), String::new());
     let mut stories = String::new();
+    let mut kin = String::new();
+    let (mut happenings, mut favors) = (String::new(), String::new());
+    // Secrets the dragons lead to, checked once every find is read: (line, find id).
+    let mut secrets: Vec<(usize, String)> = Vec::new();
     // Story givers, checked once every local is read: (line, local id).
     let mut givers: Vec<(usize, String)> = Vec::new();
     // Request targets, checked once every node is read: (line, kind, target).
@@ -704,6 +793,101 @@ pub fn compile(path: &Path) -> Result<String, String> {
                 );
                 errors.extend(bad);
             }
+            "dragon" => {
+                let kind = text(node, "kind").unwrap_or_default();
+                if !["wise", "racer", "shy", "collector"].contains(&kind.as_str()) {
+                    err(format!("unknown kind {kind}"));
+                }
+                let mut bad = Vec::new();
+                let perches = points(&src, node, "perch", &mut bad);
+                let way = points(&src, node, "way", &mut bad);
+                if way.is_empty() {
+                    bad.push(format!(
+                        "play.kdl:{}: a dragon needs a way",
+                        line(&src, node)
+                    ));
+                }
+                let lines: Vec<String> = node
+                    .iter_children()
+                    .filter(|k| k.name().value() == "line")
+                    .filter_map(|k| k.entries().first()?.value().as_string())
+                    .map(|t| format!("{t:?}"))
+                    .collect();
+                for k in node.iter_children() {
+                    if !["perch", "way", "line"].contains(&k.name().value()) {
+                        bad.push(format!(
+                            "play.kdl:{}: a dragon holds perch, way and line",
+                            line(&src, k)
+                        ));
+                    }
+                }
+                let g = gift(node, "gift").unwrap_or_else(|e| {
+                    err(e);
+                    String::new()
+                });
+                let race = match (
+                    text(node, "race-to"),
+                    num(node, "race-x"),
+                    num(node, "race-z"),
+                ) {
+                    (Some(to), Some(rx), Some(rz)) => {
+                        let p = prize(node).unwrap_or_else(|e| {
+                            err(e);
+                            String::new()
+                        });
+                        format!(
+                            "Some(({to:?}, [{rx:.2}, {rz:.2}], {:.2}, {p}))",
+                            num(node, "race-r").unwrap_or(60.0)
+                        )
+                    }
+                    _ => "None".into(),
+                };
+                let trade = match text(node, "want") {
+                    Some(want) => {
+                        if !KINDS.contains(&want.as_str()) {
+                            err(format!("unknown want {want}"));
+                        }
+                        let t = gift(node, "trade").unwrap_or_else(|e| {
+                            err(e);
+                            String::new()
+                        });
+                        format!("Some(({want:?}, {t}))")
+                    }
+                    None => "None".into(),
+                };
+                if kind == "racer" && race == "None" {
+                    err("a racer needs race-to, race-x and race-z".into());
+                }
+                if kind == "collector" && trade == "None" {
+                    err("a collector needs a want".into());
+                }
+                let secret = text(node, "secret").unwrap_or_default();
+                secrets.push((line(&src, node), secret.clone()));
+                let tint = text(node, "tint")
+                    .map(|t| u32::from_str_radix(t.trim_start_matches('#'), 16))
+                    .unwrap_or(Ok(0x808080))
+                    .unwrap_or_else(|_| {
+                        err("tint wants hex like 80A0FF".into());
+                        0x808080
+                    });
+                let _ = writeln!(
+                    kin,
+                    "    KinDef {{ id: {id:?}, name: {:?}, kind: {kind:?}, island: {:?}, x: {:.2}, y: {}, z: {:.2}, tint: {tint:#08X}, size: {:.2}, meet: {:?}, about: {:?}, rumor: {:?}, lines: &[{}], perches: &[{}], way: &[{}], secret: {secret:?}, gift: {g}, race: {race}, trade: {trade} }},",
+                    text(node, "name").unwrap_or_default(),
+                    text(node, "island").unwrap_or_default(),
+                    x.unwrap_or(0.0),
+                    opt(y),
+                    z.unwrap_or(0.0),
+                    num(node, "size").unwrap_or(1.0),
+                    text(node, "meet").unwrap_or_default(),
+                    text(node, "about").unwrap_or_default(),
+                    text(node, "rumor").unwrap_or_default(),
+                    lines.join(", "),
+                    perches.join(", "),
+                    way.join(", "),
+                );
+                errors.extend(bad);
+            }
             "race" => {
                 let vehicle = text(node, "vehicle").unwrap_or_default();
                 if !VEHICLES.contains(&vehicle.as_str()) {
@@ -727,6 +911,43 @@ pub fn compile(path: &Path) -> Result<String, String> {
                     text(node, "rumor").unwrap_or_default(),
                     num(node, "gold").unwrap_or(0.0) as u32,
                 );
+            }
+            "happening" | "favor" => {
+                let mut effects = Vec::new();
+                let mut bad = Vec::new();
+                for kid in node.iter_children() {
+                    match effect(kid) {
+                        Ok(e) => effects.push(e),
+                        Err(e) => bad.push(format!("play.kdl:{}: {e}", line(&src, kid))),
+                    }
+                }
+                if effects.is_empty() {
+                    err("needs effects to show".into());
+                }
+                if name == "happening" {
+                    let _ = writeln!(
+                        happenings,
+                        "    HappeningDef {{ id: {id:?}, name: {:?}, place: {:?}, rumor: {:?}, seen: {:?}, x: {:.2}, z: {:.2}, r: {:.2}, effects: &[{}] }},",
+                        text(node, "name").unwrap_or_default(),
+                        text(node, "place").unwrap_or_default(),
+                        text(node, "rumor").unwrap_or_default(),
+                        text(node, "seen").unwrap_or_default(),
+                        x.unwrap_or(0.0),
+                        z.unwrap_or(0.0),
+                        num(node, "r").unwrap_or(90.0),
+                        effects.join(", "),
+                    );
+                } else {
+                    let _ = writeln!(
+                        favors,
+                        "    FavorDef {{ id: {id:?}, town: {:?}, at: {}, done: {:?}, effects: &[{}] }},",
+                        text(node, "town").unwrap_or_default(),
+                        num(node, "at").unwrap_or(1.0) as usize,
+                        text(node, "done").unwrap_or_default(),
+                        effects.join(", "),
+                    );
+                }
+                errors.extend(bad);
             }
             "set" => {
                 set_ids.push(id.clone());
@@ -769,6 +990,10 @@ pub fn compile(path: &Path) -> Result<String, String> {
                 if set.is_some() && node.get("hint").is_none() {
                     err("a set piece needs a hint".into());
                 }
+                let when = text(node, "when");
+                if when.as_deref().is_some_and(|w| w != "night") {
+                    err("when can only be night".into());
+                }
                 let gold = if coins {
                     num(node, "n")
                 } else {
@@ -777,7 +1002,7 @@ pub fn compile(path: &Path) -> Result<String, String> {
                 .unwrap_or(5.0);
                 let _ = writeln!(
                     finds,
-                    "    FindDef {{ id: {id:?}, kind: {kind:?}, name: {:?}, story: {:?}, x: {:.2}, y: {}, z: {:.2}, set: {:?}, hint: {:?}, gold: {} }},",
+                    "    FindDef {{ id: {id:?}, kind: {kind:?}, name: {:?}, story: {:?}, x: {:.2}, y: {}, z: {:.2}, set: {:?}, hint: {:?}, gold: {}, night: {} }},",
                     text(node, "name").unwrap_or_default(),
                     text(node, "story").unwrap_or_default(),
                     x.unwrap_or(0.0),
@@ -786,9 +1011,15 @@ pub fn compile(path: &Path) -> Result<String, String> {
                     set,
                     text(node, "hint").unwrap_or_default(),
                     gold as u32,
+                    when.is_some(),
                 );
             }
             _ => {}
+        }
+    }
+    for (at, secret) in secrets {
+        if !finds.contains(&format!("FindDef {{ id: {secret:?}")) {
+            errors.push(format!("play.kdl:{at}: dragon: no find {secret}"));
         }
     }
     for (at, giver) in givers {
@@ -814,6 +1045,6 @@ pub fn compile(path: &Path) -> Result<String, String> {
         return Err(errors.join("\n"));
     }
     Ok(format!(
-        "pub static PLAY: PlayDef = PlayDef {{\n  lairs: &[\n{lairs}  ],\n  sets: &[\n{sets}  ],\n  finds: &[\n{finds}  ],\n  postcards: &[\n{cards}  ],\n  locals: &[\n{locals}  ],\n  stunts: &[\n{stunts}  ],\n  courses: &[\n{courses}  ],\n  races: &[\n{races}  ],\n  stories: &[\n{stories}  ],\n}};\n"
+        "pub static PLAY: PlayDef = PlayDef {{\n  lairs: &[\n{lairs}  ],\n  sets: &[\n{sets}  ],\n  finds: &[\n{finds}  ],\n  postcards: &[\n{cards}  ],\n  locals: &[\n{locals}  ],\n  stunts: &[\n{stunts}  ],\n  courses: &[\n{courses}  ],\n  races: &[\n{races}  ],\n  stories: &[\n{stories}  ],\n  kin: &[\n{kin}  ],\n  happenings: &[\n{happenings}  ],\n  favors: &[\n{favors}  ],\n}};\n"
     ))
 }

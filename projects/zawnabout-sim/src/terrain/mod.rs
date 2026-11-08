@@ -83,7 +83,7 @@ pub fn void_bounds(v: &Void) -> Bounds {
         VoidShape::Hall => 1.4 * (he.y * 0.14 + 1.25),
         VoidShape::Dome | VoidShape::Shaft => 1.4 * 0.12 * he.min_element().max(he.x.min(he.z)),
         VoidShape::Tube => 1.4 * v.r * 0.16,
-        VoidShape::Carved | VoidShape::Basin => 0.0,
+        VoidShape::Carved | VoidShape::Block | VoidShape::Basin => 0.0,
     };
     let pad = 8.0 + rough;
     match v.shape {
@@ -181,6 +181,10 @@ pub fn void_sdf(v: &Void, p: Vec3) -> f32 {
                             (flat * k - (q.y * 0.8).min(wide)).max(q.y - up)
                         }
                     }
+                }
+                VoidShape::Block => {
+                    let e = q.abs() - he;
+                    e.max(Vec3::ZERO).length() + e.max_element().min(0.0)
                 }
                 VoidShape::Carved => {
                     let k = (q.abs() - he).max(Vec3::ZERO).length();

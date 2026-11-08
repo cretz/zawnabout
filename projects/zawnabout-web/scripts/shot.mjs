@@ -1,7 +1,7 @@
 // Drives the real page in headless Chromium and takes screenshots, for checking the
 // browser build without a person at the keyboard.
 //
-// node scripts/shot.mjs SCRIPT OUT_DIR [--size WxH] [--touch] [--swiftshader]
+// node scripts/shot.mjs SCRIPT OUT_DIR [--size WxH] [--touch] [--swiftshader] [--perf]
 //
 // SCRIPT lines run in real time:
 //   wait SECONDS        let time pass
@@ -26,7 +26,7 @@ const opt = (name, fallback) => {
 };
 const [scriptPath, outDir] = args.filter((a, i) => !a.startsWith("--") && !args[i - 1]?.startsWith("--size"));
 if (!scriptPath || !outDir) {
-  console.error("usage: node scripts/shot.mjs SCRIPT OUT_DIR [--size WxH] [--touch] [--swiftshader]");
+  console.error("usage: node scripts/shot.mjs SCRIPT OUT_DIR [--size WxH] [--touch] [--swiftshader] [--perf]");
   process.exit(2);
 }
 const [width, height] = opt("--size", "1280x720").split("x").map(Number);
@@ -45,7 +45,7 @@ const page = await browser.newPage({ viewport: { width, height }, hasTouch: flag
 page.on("console", (m) => console.log(`[page] ${m.text()}`));
 page.on("pageerror", (e) => console.log(`[page error] ${e.message}`));
 
-const query = `?nowelcome&debug${flag("--touch") ? "&touch" : ""}`;
+const query = `?nowelcome&debug${flag("--touch") ? "&touch" : ""}${flag("--perf") ? "&perf" : ""}`;
 await page.goto(url + query);
 await page.waitForFunction(() => window.zawnabout?.ready, null, { timeout: 30000 });
 

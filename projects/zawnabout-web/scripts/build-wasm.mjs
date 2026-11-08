@@ -1,4 +1,5 @@
-// Builds the wasm crate in release and generates JS bindings into pkg/.
+// Builds the wasm crate with the web profile and generates JS bindings into pkg/.
+// Wasm SIMD is on: every browser with WebGPU has it, and the vector math uses it.
 // The wasm-bindgen CLI must match the crate version exactly, so a matching CLI is
 // installed into the cargo target dir when the one on PATH differs.
 import { execFileSync } from "node:child_process";
@@ -10,7 +11,9 @@ const here = dirname(fileURLToPath(import.meta.url));
 const projects = join(here, "..", "..");
 const run = (cmd, args, opts = {}) => execFileSync(cmd, args, { stdio: "inherit", cwd: projects, ...opts });
 
-run("cargo", ["build", "--release", "--target", "wasm32-unknown-unknown", "-p", "zawnabout-web"]);
+run("cargo", ["build", "--profile", "web", "--target", "wasm32-unknown-unknown", "-p", "zawnabout-web"], {
+  env: { ...process.env, RUSTFLAGS: "-C target-feature=+simd128" },
+});
 
 const lock = readFileSync(join(projects, "Cargo.lock"), "utf8");
 const version = lock.match(/name = "wasm-bindgen"\nversion = "([^"]+)"/)[1];
@@ -30,5 +33,5 @@ if (onPath !== version) {
     run("cargo", ["install", "wasm-bindgen-cli", "--version", version, "--locked", "--root", toolRoot]);
   }
 }
-const wasm = join(projects, "target", "wasm32-unknown-unknown", "release", "zawnabout_web.wasm");
+const wasm = join(projects, "target", "wasm32-unknown-unknown", "web", "zawnabout_web.wasm");
 run(bindgen, ["--target", "web", "--out-dir", join(here, "..", "pkg"), wasm]);

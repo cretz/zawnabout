@@ -3641,6 +3641,7 @@ dependencies = [
  "bytemuck",
  "fontdue",
  "glam",
+ "web-sys",
  "wgpu",
  "zawnabout-play",
  "zawnabout-sim",

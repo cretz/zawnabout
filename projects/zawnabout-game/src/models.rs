@@ -3574,3 +3574,74 @@ pub fn clock_hand() -> MeshBuilder {
     );
     m
 }
+
+impl DragonMeshes {
+    /// Every mesh, for changing them all alike.
+    fn all_mut(&mut self) -> impl Iterator<Item = &mut MeshBuilder> {
+        [
+            &mut self.body,
+            &mut self.neck,
+            &mut self.head,
+            &mut self.eye,
+            &mut self.tail,
+            &mut self.plume,
+            &mut self.whisker,
+            &mut self.mane,
+            &mut self.leg,
+            &mut self.star,
+        ]
+        .into_iter()
+        .chain(self.arm.iter_mut())
+        .chain(self.hand.iter_mut())
+    }
+
+    /// Recolors the scales toward `color` (0xRRGGBB): the corals and oranges turn to
+    /// its hue, while the cream belly, gold, horns and eyes stay as they are.
+    pub fn recolor(&mut self, color: u32) {
+        let (to, sat, _) = hsv([(color >> 16) as u8, (color >> 8) as u8, color as u8]);
+        let from = hsv([0xF2, 0x84, 0x5C]).0;
+        for m in self.all_mut() {
+            for v in &mut m.verts {
+                let (h, s, val) = hsv([v.color[0], v.color[1], v.color[2]]);
+                if (h < 33.0 || h > 340.0) && s > 0.2 {
+                    let h = (h - from + to).rem_euclid(360.0);
+                    let s = (s * (0.5 + sat * 0.6)).min(1.0);
+                    let rgb = from_hsv(h, s, val);
+                    v.color[..3].copy_from_slice(&rgb);
+                }
+            }
+        }
+    }
+}
+
+/// Hue (degrees), saturation and value of an sRGB color.
+fn hsv(c: [u8; 3]) -> (f32, f32, f32) {
+    let [r, g, b] = c.map(|x| x as f32 / 255.0);
+    let (hi, lo) = (r.max(g).max(b), r.min(g).min(b));
+    let d = hi - lo;
+    let h = if d < 1e-5 {
+        0.0
+    } else if hi == r {
+        60.0 * ((g - b) / d).rem_euclid(6.0)
+    } else if hi == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    (h, if hi > 0.0 { d / hi } else { 0.0 }, hi)
+}
+
+fn from_hsv(h: f32, s: f32, v: f32) -> [u8; 3] {
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0).rem_euclid(2.0) - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = v - c;
+    [r, g, b].map(|k| ((k + m) * 255.0).round().clamp(0.0, 255.0) as u8)
+}

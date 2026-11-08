@@ -14,6 +14,10 @@ wgpu = { workspace = true }
 zawnabout-play = { workspace = true, optional = true }
 zawnabout-sim = { workspace = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The page's clock, for profiling on the device.
+web-sys = { version = "0.3", features = ["Performance", "Window"] }
+
 [features]
 # Gameplay on top of the islands. Without it the game is the islands alone.
 default = ["play"]

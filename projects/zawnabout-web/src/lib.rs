@@ -64,9 +64,7 @@ mod web {
             };
             surface.configure(&device, &config);
             let game = Game::new(seed as u64);
-            let mut gfx = Gfx::new(Renderer::new(device, queue, view_format, size), &game);
-            // One terrain chunk per frame keeps phones smooth while flying.
-            gfx.chunk_budget = 1;
+            let gfx = Gfx::new(Renderer::new(device, queue, view_format, size), &game);
             Ok(App {
                 game,
                 gfx,
@@ -102,8 +100,20 @@ mod web {
                     self.script = None;
                 }
             }
-            self.game.advance(dt);
-            let tex = match self.surface.get_current_texture() {
+            zawnabout_game::prof::begin_frame();
+            zawnabout_game::prof::time("sim", || self.game.advance(dt));
+            let frame = self.gfx.prepare(&self.game);
+            // Halted with nothing new to show, the canvas keeps the last picture.
+            if self.gfx.unchanged(&self.game, &frame) {
+                zawnabout_game::prof::end_frame();
+                return host.join(
+                    "
+",
+                );
+            }
+            // Getting the next picture to draw into can wait on the GPU, so it is timed too.
+            let next = zawnabout_game::prof::time("acquire", || self.surface.get_current_texture());
+            let tex = match next {
                 wgpu::CurrentSurfaceTexture::Success(t)
                 | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
                 wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
@@ -117,8 +127,9 @@ mod web {
                 format: Some(self.gfx.renderer.format),
                 ..Default::default()
             });
-            self.gfx.render(&self.game, &view);
-            self.gfx.renderer.queue.present(tex);
+            zawnabout_game::prof::time("encode", || self.gfx.renderer.render(&view, &frame));
+            zawnabout_game::prof::time("present", || self.gfx.renderer.queue.present(tex));
+            zawnabout_game::prof::end_frame();
             // A postcard's view: the page reads the canvas and hands it to `take_snap`.
             if self.game.wants_snap() {
                 host.push("snap".into());
@@ -128,6 +139,51 @@ mod web {
                 self.synth.set(mix);
             }
             host.join("\n")
+        }
+
+        /// Starts timing each part of a frame, for [`App::perf_report`].
+        pub fn perf_start(&self) {
+            zawnabout_game::prof::enable();
+        }
+
+        /// The time each part of a frame took since the last report, and the slowest
+        /// frame's parts.
+        pub fn perf_report(&self) -> String {
+            zawnabout_game::prof::report()
+        }
+
+        /// Draws the next frame even when halted with nothing new, for a screenshot.
+        pub fn redraw(&mut self) {
+            self.gfx.redraw();
+        }
+
+        /// What the last frame drew and where from, as JSON, for a perf report: draws and
+        /// triangles by kind, the camera, and how far underground it is.
+        pub fn perf_view(&self) -> String {
+            let s = &self.gfx.renderer.stats;
+            let c = &self.game.camera;
+            let world = &self.game.sim.world;
+            format!(
+                "{{\"draws\":{},\"draws_static\":{},\"draws_terrain\":{},\"draws_water\":{},\"triangles\":{},\"terrain\":{},\"props\":{},\"water\":{},\"meshes\":{},\"cam\":[{:.1},{:.1},{:.1}],\"look\":[{:.1},{:.1},{:.1}],\"daylight\":{:.2},\"halted\":{},\"time\":{:.1}}}",
+                s.draws,
+                s.draws_static,
+                s.draws_terrain,
+                s.draws_water,
+                s.triangles,
+                s.terrain,
+                s.props,
+                s.water,
+                s.meshes,
+                c.pos.x,
+                c.pos.y,
+                c.pos.z,
+                c.look.x,
+                c.look.y,
+                c.look.z,
+                world.terrain.daylight(c.pos),
+                self.game.halted(),
+                self.game.time,
+            )
         }
 
         /// Whether the sound is turned off, with U or the pause card.

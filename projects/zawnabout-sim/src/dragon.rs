@@ -13,6 +13,8 @@ use crate::world::World;
 /// walk.
 pub const SWIM_SINK: f32 = 0.85;
 const SWIM_PACE: f32 = 1.3;
+/// How high a step the dragon walks straight up onto (m).
+const STEP_UP: f32 = 1.5;
 
 crate::params! {
     /// Flight and ground movement tunables.
@@ -662,6 +664,15 @@ impl Dragon {
             self.pos.z -= n.y * into;
             flat -= n * flat.dot(n).min(0.0);
         }
+        // Low things underfoot, a kerb or a pool's rim, are stepped up onto, not pushed
+        // against.
+        if !riding && !self.swimming {
+            let feet = self.pos.y - p.stand_height;
+            let top = world.support(self.pos.x, self.pos.z, feet + STEP_UP);
+            if top > feet + 0.05 && top <= feet + STEP_UP {
+                self.pos.y = top + p.stand_height;
+            }
+        }
         let (pushed, n) = if riding {
             (self.pos, Vec3::ZERO)
         } else {
@@ -880,8 +891,18 @@ impl Dragon {
         }
 
         let feet_before = self.pos.y - p.stand_height;
+        let before = self.pos;
         self.vel += acc * dt;
         self.pos += self.vel * dt;
+        // A step that ends deep in rock from somewhere clear went through a wall: pushed
+        // out from in there, it could come out on the far side. Stay put and bounce off.
+        if world.terrain.sdf(self.pos) < -p.body_radius * 2.0
+            && world.terrain.sdf(before) > -p.body_radius
+        {
+            self.pos = before;
+            self.vel *= -0.3;
+            self.bonk = 0.0;
+        }
 
         let (pushed, n) = world.push_out(self.pos, p.body_radius);
         if n != Vec3::ZERO {

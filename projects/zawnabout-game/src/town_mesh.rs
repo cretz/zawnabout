@@ -2495,7 +2495,9 @@ fn building(
         | Kind::School
         | Kind::TownHall
         | Kind::Farm
-        | Kind::Port => {
+        | Kind::Port
+        | Kind::SeaDoors
+        | Kind::BasaltGate => {
             landmark(b, &mut n, &mut f);
         }
         Kind::Lantern => {
@@ -2810,6 +2812,8 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
             M::Concrete => Rgb(0xC8C4BC),
             M::Asphalt => Rgb(0x6F6E73),
             M::Rock => Rgb(0xB4A08A),
+            M::Pale => Rgb(0xE4DCCB),
+            M::Basalt => Rgb(0x4B4A52),
             M::Hidden => continue,
         };
         // Water is not lit like windows: their lights come on in patches, which on a
@@ -2873,12 +2877,13 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
                 Mat4::from_translation(at) * Mat4::from_rotation_y(yaw)
             }
             Form::Round { at, h, r0, r1 } => {
-                one.ring(10, 0.0, r0, h, r1, col);
+                let sides = if piece.mat == M::Basalt { 6 } else { 10 };
+                one.ring(sides, 0.0, r0, h, r1, col);
                 if r1 > 0.05 {
-                    one.disc(10, h, r1, col);
+                    one.disc(sides, h, r1, col);
                 }
                 if r0 > 0.05 {
-                    one.disc(10, 0.0, r0, col);
+                    one.disc(sides, 0.0, r0, col);
                 }
                 Mat4::from_translation(at)
             }
@@ -2892,8 +2897,11 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
         let add = |p: &mut Parts| {
             let from = p.m.verts.len();
             p.m.append(&one.m, place);
-            // Lamps underground are lit all day.
-            if (b.kind == Kind::Metro || b.style == Style::Cavern) && matches!(piece.mat, M::Lamp) {
+            // Lamps underground are lit all day, and so are those of the halls that run
+            // into caves.
+            let under = matches!(b.kind, Kind::Metro | Kind::SeaDoors | Kind::BasaltGate)
+                || b.style == Style::Cavern;
+            if under && matches!(piece.mat, M::Lamp) {
                 p.m.glow_from(from);
             } else if lit {
                 p.night_from(from);
@@ -3648,11 +3656,24 @@ pub fn build(
                     .add(&far.verts, lo, hi);
             }
         }
+        // The halls that run from the open air into a cave draw from both sides.
+        let both = matches!(b.kind, Kind::SeaDoors | Kind::BasaltGate)
+            .then(|| (near.clone(), far.clone()));
         if near.verts.len() > HEAVY * 3 {
             tile.heavy.push((near, far));
         } else {
             tile.near.verts.extend_from_slice(&near.verts);
             tile.far.verts.extend_from_slice(&far.verts);
+        }
+        if let Some(meshes) = both {
+            caves
+                .entry(key)
+                .or_insert_with(|| Tile {
+                    cave: true,
+                    ..Default::default()
+                })
+                .heavy
+                .push(meshes);
         }
     }
     // Everything roads add draws a touch nearer the camera than it is (see vs_lit), so

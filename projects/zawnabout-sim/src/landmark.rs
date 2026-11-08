@@ -45,6 +45,11 @@ pub enum Mat {
     Asphalt,
     /// Bare cliff rock, for figures carved out of it.
     Rock,
+    /// Pale sea-washed stone, for the Sea Doors.
+    Pale,
+    /// Dark volcanic stone. Round pieces of it are drawn as six-sided columns, the way
+    /// basalt sets.
+    Basalt,
     /// Not drawn: a solid stand-in for something the client draws itself, smoothly.
     Hidden,
 }
@@ -84,7 +89,7 @@ pub struct Piece {
 }
 
 /// The kinds a world file can name, and what they become.
-pub const KINDS: [(&str, Kind); 93] = [
+pub const KINDS: [(&str, Kind); 95] = [
     ("faces", Kind::Faces),
     ("warden", Kind::Warden),
     ("stones", Kind::Stones),
@@ -178,6 +183,8 @@ pub const KINDS: [(&str, Kind); 93] = [
     ("townhall", Kind::TownHall),
     ("farm", Kind::Farm),
     ("port", Kind::Port),
+    ("seadoors", Kind::SeaDoors),
+    ("basaltgate", Kind::BasaltGate),
 ];
 
 /// Where a fairground wheel turns, in the landmark's frame, and its radius.
@@ -1115,7 +1122,7 @@ pub const STAIR_SLOPE: f32 = 0.625;
 /// along both sides of the open cutting and across its far end, a paved apron in front
 /// and two lit "M" totems either side of it.
 fn metro_gate(out: &mut Vec<Piece>) {
-    let cut = 30.0;
+    let cut = 42.0;
     out.push(soft(bx(
         Vec3::new(0.0, -0.4, 6.0),
         Vec3::new(13.0, 0.55, 6.0),
@@ -1135,7 +1142,7 @@ fn metro_gate(out: &mut Vec<Piece>) {
         Mat::Canvas(0),
     )));
     // Concrete retaining walls down both sides of the cutting, stepping down with the
-    // stairs, a paved edge over the rim behind them and a lintel across the tunnel mouth.
+    // stairs, and a paved edge over the rim behind them.
     for x in [-1.0f32, 1.0] {
         let mut z = 0.0f32;
         while z > -cut {
@@ -1154,9 +1161,12 @@ fn metro_gate(out: &mut Vec<Piece>) {
             Mat::Concrete,
         ));
     }
+    // A headwall over the tunnel mouth at the foot of the cutting, framing it square so
+    // the round bore behind never shows its rim.
+    let foot = -cut * STAIR_SLOPE - 2.0;
     out.push(bx(
-        Vec3::new(0.0, -2.5, -cut - 0.4),
-        Vec3::new(9.0, 2.8, 0.6),
+        Vec3::new(0.0, foot + 9.0, -cut - 0.4),
+        Vec3::new(9.8, 0.3 - foot - 9.0, 0.6),
         Mat::Concrete,
     ));
     // Railings: posts and a top rail along each side of the cutting, and across its end.
@@ -4579,6 +4589,10 @@ pub fn clocks(kind: Kind) -> Vec<(Vec3, Vec3, f32)> {
             sides.iter().map(|n| (t + *n * 3.05, *n, 1.6)).collect()
         }
         Kind::University => vec![(Vec3::new(0.0, 19.0, 9.7), Vec3::Z, 1.6)],
+        Kind::BasaltGate => vec![
+            (Vec3::new(0.0, 106.0, BASALT_FRONT + 1.5), Vec3::Z, 6.5),
+            (Vec3::new(0.0, 106.0, BASALT_BACK - 1.5), -Vec3::Z, 6.5),
+        ],
         _ => Vec::new(),
     }
 }
@@ -7580,6 +7594,8 @@ pub fn pieces(kind: Kind, seed: u32, text: &str) -> Vec<Piece> {
         Kind::TownHall => town_hall(&mut out),
         Kind::Farm => farm(&mut out),
         Kind::Port => port(&mut out, seed),
+        Kind::SeaDoors => sea_doors(&mut out),
+        Kind::BasaltGate => basalt_gate(&mut out, r),
         Kind::Station => {
             // A railway station: a long platform with a canopy, a waiting hall, a clock
             // and benches.
@@ -7733,6 +7749,620 @@ pub fn pieces(kind: Kind, seed: u32, text: &str) -> Vec<Piece> {
         .collect();
     out.extend(plinths);
     out
+}
+
+/// A box spanning `x`, `y` and `z` in the landmark's frame.
+fn slab(out: &mut Vec<Piece>, x: [f32; 2], y: [f32; 2], z: [f32; 2], mat: Mat) {
+    out.push(bx(
+        Vec3::new((x[0] + x[1]) * 0.5, y[0], (z[0] + z[1]) * 0.5),
+        Vec3::new((x[1] - x[0]) * 0.5, y[1] - y[0], (z[1] - z[0]) * 0.5),
+        mat,
+    ));
+}
+
+/// The same box and its mirror across x = 0.
+fn slabs(out: &mut Vec<Piece>, x: [f32; 2], y: [f32; 2], z: [f32; 2], mat: Mat) {
+    slab(out, x, y, z, mat);
+    slab(out, [-x[1], -x[0]], y, z, mat);
+}
+
+/// The Sea Doors' inside: half the hall's width and its height.
+const SEA_W: f32 = 26.0;
+const SEA_H: f32 = 78.0;
+/// Where its two fronts face out: to sea (+z) and into the cavern (-z).
+const SEA_FRONT: f32 = 44.0;
+const SEA_BACK: f32 = -374.0;
+
+/// The Sea Doors: a hall of pale stone built into a sea cliff, through the rock to a
+/// cavern. Its doors open on a quay at the water (+z), tall and stepped at the top, under
+/// a portico of round columns, a band of waves and a copper sun. Inside, rows of columns
+/// and lamps run the length of the hall to doors just like them on the far side, high in
+/// the cavern's wall, where a broad stair comes down to an underground lake. The rock is
+/// cut a little wider than the hall, and both fronts reach past the cuts into the rock,
+/// so no cut edge shows. The frame's origin is on the hall floor at the sea doors.
+fn sea_doors(out: &mut Vec<Piece>) {
+    let (w, h) = (SEA_W, SEA_H);
+    for (face, inner, out_dir) in [(SEA_FRONT, -40.0f32, 1.0f32), (SEA_BACK, -318.0, -1.0)] {
+        let z = if out_dir > 0.0 {
+            [inner, face]
+        } else {
+            [face, inner]
+        };
+        let (bottom, top) = if out_dir > 0.0 {
+            (-14.0, 170.0)
+        } else {
+            (-54.0, 154.0)
+        };
+        // The front itself, round the door.
+        slabs(out, [w, 104.0], [bottom, top], z, Mat::Pale);
+        slab(out, [-w, w], [h, top], z, Mat::Stone);
+        if out_dir < 0.0 {
+            slab(out, [-w, w], [bottom, -5.0], z, Mat::Pale);
+        }
+        // The door's top steps in three times.
+        let lip = [face - out_dir * 10.0, face];
+        let lip = [lip[0].min(lip[1]), lip[0].max(lip[1])];
+        for k in 1..=3 {
+            let k = k as f32;
+            slabs(
+                out,
+                [w - 5.0 * k, w],
+                [h - 6.0 * (4.0 - k), h],
+                lip,
+                Mat::Pale,
+            );
+        }
+        // Everything standing proud of it, `d` out from the face.
+        let at = |d: f32| face + out_dir * d;
+        let span = |a: f32, b: f32| [at(a).min(at(b)), at(a).max(at(b))];
+        slabs(out, [w, w + 5.0], [0.0, h], span(0.0, 3.0), Mat::White);
+        slab(
+            out,
+            [-w - 5.0, w + 5.0],
+            [h, h + 5.0],
+            span(0.0, 3.0),
+            Mat::White,
+        );
+        // The portico: a tall pair of columns by the doors, a shorter pair outside.
+        let foot = if out_dir > 0.0 { 0.0 } else { -50.0 };
+        for (x, tall, r) in [(42.0f32, 118.0f32, 5.5f32), (78.0, 104.0, 4.6)] {
+            for s in [-1.0f32, 1.0] {
+                let cz = at(8.0);
+                slab(
+                    out,
+                    [s * x - 7.0, s * x + 7.0],
+                    [foot, foot + 5.0],
+                    [cz - 7.0, cz + 7.0],
+                    Mat::Pale,
+                );
+                out.push(round(
+                    Vec3::new(s * x, foot + 5.0, cz),
+                    tall - foot - 10.0,
+                    r,
+                    r * 0.88,
+                    Mat::White,
+                ));
+                slab(
+                    out,
+                    [s * x - 7.5, s * x + 7.5],
+                    [tall - 5.0, tall],
+                    [cz - 7.5, cz + 7.5],
+                    Mat::Pale,
+                );
+            }
+        }
+        slab(
+            out,
+            [-52.0, 52.0],
+            [118.0, 126.0],
+            span(-2.0, 16.0),
+            Mat::Stone,
+        );
+        slabs(
+            out,
+            [70.0, 86.0],
+            [104.0, 110.0],
+            span(-2.0, 16.0),
+            Mat::Stone,
+        );
+        // A band of waves along the top: green copper crests on white.
+        for i in -8..=8 {
+            let x = i as f32 * 6.0;
+            let mat = if i % 2 == 0 { Mat::Copper } else { Mat::White };
+            let lift = if i % 2 == 0 { 4.0 } else { 2.5 };
+            slab(
+                out,
+                [x - 3.0, x + 3.0],
+                [126.0, 126.0 + lift],
+                span(10.0, 16.0),
+                mat,
+            );
+        }
+        // A copper sun over the doors, and tall lit slits either side of them.
+        out.push(ball(Vec3::new(0.0, 99.0, face), 10.0, Mat::Copper));
+        slabs(out, [59.0, 63.0], [20.0, 60.0], span(0.0, 0.6), Mat::Lamp);
+        // Three windows up top, lit from within.
+        for x in [-40.0f32, 0.0, 40.0] {
+            slab(
+                out,
+                [x - 6.0, x + 6.0],
+                [131.0, 152.0],
+                span(0.0, 0.4),
+                Mat::Dark,
+            );
+            slab(
+                out,
+                [x - 2.0, x + 2.0],
+                [136.0, 146.0],
+                span(0.4, 0.8),
+                Mat::Lamp,
+            );
+        }
+        // A stepped crown.
+        for (k, half) in [80.0f32, 56.0, 32.0].into_iter().enumerate() {
+            let y = top + k as f32 * 6.0;
+            slab(
+                out,
+                [-half, half],
+                [y, y + 6.0],
+                span(-60.0, 2.0 - k as f32 * 4.0),
+                Mat::Pale,
+            );
+        }
+        out.push(ball(Vec3::new(0.0, top + 24.0, at(-8.0)), 6.0, Mat::Copper));
+    }
+
+    // Wings either side of the cavern front, stepping back into the rock, so the front
+    // meets the curving cave wall without a narrowing gap a dragon could wedge into.
+    for k in 0..4 {
+        let k = k as f32;
+        slabs(
+            out,
+            [104.0 + 12.0 * k, 116.0 + 12.0 * k],
+            [-54.0, 150.0 - 20.0 * k],
+            [SEA_BACK + 12.0 * (k + 1.0), -318.0],
+            Mat::Pale,
+        );
+    }
+
+    // The quay at the sea doors, with steps down to the water and two braziers.
+    let f = SEA_FRONT;
+    slab(
+        out,
+        [-110.0, 110.0],
+        [-16.0, 0.0],
+        [f, f + 40.0],
+        Mat::Stone,
+    );
+    for k in 1..=3 {
+        let z = f + 36.0 + k as f32 * 4.0;
+        slab(
+            out,
+            [-60.0, 60.0],
+            [-16.0, -1.3 * k as f32],
+            [z, z + 4.0],
+            Mat::Stone,
+        );
+    }
+    for x in [-50.0f32, 50.0] {
+        let z = f + 30.0;
+        out.push(round(Vec3::new(x, 0.0, z), 7.0, 0.7, 0.7, Mat::Metal));
+        out.push(round(Vec3::new(x, 7.0, z), 1.8, 1.2, 2.4, Mat::Copper));
+        out.push(soft(ball(Vec3::new(x, 9.2, z), 1.4, Mat::Lamp)));
+    }
+    for i in 0..10 {
+        let x = -90.0 + i as f32 * 20.0;
+        out.push(round(Vec3::new(x, 0.0, f + 38.0), 1.6, 0.8, 0.7, Mat::Dark));
+    }
+
+    // The hall: floor, walls and ceiling lining the rock, the length of it.
+    let (inner_f, inner_b) = (-40.0f32, -318.0f32);
+    slab(out, [-33.0, 33.0], [-5.0, 0.0], [SEA_BACK, f], Mat::Pale);
+    slabs(out, [w, 33.0], [0.0, h], [inner_b, inner_f], Mat::Pale);
+    slab(
+        out,
+        [-33.0, 33.0],
+        [h, 85.0],
+        [inner_b, inner_f],
+        Mat::Stone,
+    );
+    // A water channel down the middle of the floor, between two white lines.
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.0, (SEA_BACK + f) * 0.5),
+        Vec3::new(3.0, 0.15, (f - SEA_BACK) * 0.5 - 2.0),
+        Mat::Water,
+    )));
+    for s in [-11.0f32, 11.0] {
+        out.push(soft(bx(
+            Vec3::new(s, 0.0, (SEA_BACK + f) * 0.5),
+            Vec3::new(1.0, 0.08, (f - SEA_BACK) * 0.5 - 2.0),
+            Mat::White,
+        )));
+    }
+    // Two rows of columns set against the walls, out of the way of anyone flying
+    // through, with beams across, and lamps on the walls between.
+    for k in 0..9 {
+        let z = -60.0 - k as f32 * 30.0;
+        for x in [-(w - 2.6), w - 2.6] {
+            slab(
+                out,
+                [x - 3.5, x + 3.5],
+                [0.0, 3.0],
+                [z - 3.5, z + 3.5],
+                Mat::Stone,
+            );
+            out.push(round(Vec3::new(x, 3.0, z), 66.0, 2.6, 2.3, Mat::White));
+            slab(
+                out,
+                [x - 4.0, x + 4.0],
+                [69.0, 73.0],
+                [z - 4.0, z + 4.0],
+                Mat::Stone,
+            );
+        }
+        slab(out, [-w, w], [73.0, h], [z - 2.0, z + 2.0], Mat::Stone);
+        let z = z - 15.0;
+        slabs(
+            out,
+            [w - 0.6, w],
+            [24.0, 36.0],
+            [z - 1.0, z + 1.0],
+            Mat::Lamp,
+        );
+        slabs(
+            out,
+            [w - 1.5, w],
+            [22.5, 24.0],
+            [z - 2.0, z + 2.0],
+            Mat::Stone,
+        );
+    }
+    // Halfway along, a round pool and a copper wave rising from it.
+    let mid = -180.0;
+    out.push(round(Vec3::new(0.0, 0.0, mid), 1.2, 10.0, 10.0, Mat::Stone));
+    out.push(soft(round(
+        Vec3::new(0.0, 1.2, mid),
+        0.1,
+        9.0,
+        9.0,
+        Mat::Water,
+    )));
+    out.push(round(Vec3::new(0.0, 1.2, mid), 10.0, 2.0, 1.2, Mat::Copper));
+    out.push(ball(Vec3::new(0.0, 13.0, mid), 3.0, Mat::Copper));
+
+    // From the cavern doors a broad stair comes down to the lake, between low walls with
+    // lamps, onto a landing at the water.
+    let b = SEA_BACK;
+    for k in 1..=10 {
+        let (k, z) = (k as f32, b - k as f32 * 4.0);
+        slab(out, [-w, w], [-54.0, -2.0 * k], [z, z + 4.0], Mat::Pale);
+        slabs(
+            out,
+            [w + 0.3, w + 3.3],
+            [-54.0, -2.0 * k + 3.0],
+            [z, z + 3.9],
+            Mat::Stone,
+        );
+        if (k as u32).is_multiple_of(5) {
+            for s in [-1.0f32, 1.0] {
+                out.push(soft(ball(
+                    Vec3::new(s * (w + 1.5), -2.0 * k + 4.0, z + 2.0),
+                    1.0,
+                    Mat::Lamp,
+                )));
+            }
+        }
+    }
+    slab(
+        out,
+        [-40.0, 40.0],
+        [-54.0, -19.5],
+        [b - 56.0, b - 40.0],
+        Mat::Stone,
+    );
+}
+
+/// Basalt Gate's inside: half the hall's width and its height.
+const BASALT_W: f32 = 34.0;
+const BASALT_H: f32 = 66.0;
+/// Where its two fronts face out: down the gorge (+z) and into the cavern (-z).
+pub const BASALT_FRONT: f32 = 16.0;
+const BASALT_BACK: f32 = -334.0;
+/// Where the railway ends, at the cave station.
+pub const BASALT_END: f32 = -590.0;
+
+/// Basalt Gate: a railway station built through a mountain, from a gorge (+z) to a
+/// cavern (-z). Each front is a wall of dark stone round a great round portal ringed in
+/// copper, with the station's name and a clock above, between banks of six-sided basalt
+/// columns that rise like the rock they came from. Inside, platforms either side of the
+/// track under copper arches and hanging lamps. Out the back the track crosses the
+/// cavern on a viaduct to a station on a tall stone pier at the far side. The rock is cut
+/// a little wider than the hall, and both fronts reach past the cuts into the rock, so no
+/// cut edge shows. The frame's origin is on the track at the gorge front.
+fn basalt_gate(out: &mut Vec<Piece>, r: impl Fn(u32) -> f32) {
+    let (w, h) = (BASALT_W, BASALT_H);
+    // The portal: straight sides up to the spring, then round over.
+    let (spring, rad) = (30.0f32, 34.0f32);
+    for (face, inner, out_dir) in [
+        (BASALT_FRONT, -45.0f32, 1.0f32),
+        (BASALT_BACK, -270.0, -1.0),
+    ] {
+        let z = if out_dir > 0.0 {
+            [inner, face]
+        } else {
+            [face, inner]
+        };
+        let (bottom, top) = if out_dir > 0.0 {
+            (-4.0, 166.0)
+        } else {
+            (-76.0, 156.0)
+        };
+        let at = |d: f32| face + out_dir * d;
+        let span = |a: f32, b: f32| [at(a).min(at(b)), at(a).max(at(b))];
+        slabs(out, [w, 94.0], [bottom, top], z, Mat::Stone);
+        slab(out, [-w, w], [h, top], z, Mat::Stone);
+        if out_dir < 0.0 {
+            slab(out, [-w, w], [bottom, -1.8], z, Mat::Stone);
+        }
+        // Round the portal's top through the front's thickness.
+        let mut y = spring;
+        while y < h {
+            let mid = (y + 1.5 - spring).min(rad);
+            let open = (rad * rad - mid * mid).max(0.0).sqrt();
+            if open < w {
+                slabs(out, [open, w], [y, y + 3.0], z, Mat::Stone);
+            }
+            y += 3.0;
+        }
+        // A copper ring round it, a keystone, and the station's name and clock above.
+        slabs(
+            out,
+            [rad + 2.0, rad + 6.0],
+            [0.0, spring],
+            span(0.0, 2.0),
+            Mat::Copper,
+        );
+        for i in 0..=15 {
+            let a = i as f32 / 15.0 * std::f32::consts::PI;
+            let (x, yy) = (a.cos() * (rad + 4.0), spring + a.sin() * (rad + 4.0));
+            slab(
+                out,
+                [x - 2.4, x + 2.4],
+                [yy - 2.4, yy + 2.4],
+                span(0.0, 2.0),
+                Mat::Copper,
+            );
+        }
+        slab(out, [-4.0, 4.0], [h, h + 10.0], span(0.0, 4.0), Mat::Copper);
+        let read = if out_dir > 0.0 { 2.0 } else { -2.0 };
+        spell(
+            out,
+            "BASALT GATE",
+            Vec3::new(0.0, 80.0, at(0.3)),
+            read,
+            0.2,
+            Mat::Lamp,
+            false,
+        );
+        slab(out, [-9.0, 9.0], [97.0, 115.0], span(0.0, 1.0), Mat::Copper);
+        slab(out, [-8.0, 8.0], [98.0, 114.0], span(1.0, 1.4), Mat::White);
+        // Lit windows in a row, and a green copper cornice.
+        // Clear of the clock's frame.
+        for i in -4i32..=4 {
+            if i.abs() < 2 {
+                continue;
+            }
+            let x = i as f32 * 9.0;
+            slab(
+                out,
+                [x - 2.5, x + 2.5],
+                [100.0, 114.0],
+                span(0.0, 0.5),
+                Mat::Lamp,
+            );
+        }
+        slab(
+            out,
+            [-95.0, 95.0],
+            [140.0, 146.0],
+            span(-60.0, 8.0),
+            Mat::Copper,
+        );
+        // Banks of basalt columns either side, taller toward the gorge walls, so the
+        // front grows out of the mountain.
+        for (row, dz) in [(0u32, 6.0f32), (1, 11.0)] {
+            let mut x = 46.0 + row as f32 * 2.7;
+            let mut k = row * 100;
+            while x < 92.0 {
+                for s in [-1.0f32, 1.0] {
+                    k += 1;
+                    let tall = 90.0 + (x - 46.0) * 1.1 + r(k) * 18.0 - row as f32 * 22.0;
+                    out.push(round(
+                        Vec3::new(s * x, bottom, at(dz)),
+                        tall - bottom,
+                        3.0,
+                        3.0,
+                        Mat::Basalt,
+                    ));
+                }
+                x += 5.4;
+            }
+        }
+        // A stepped crown on top, set back into the mountain.
+        for (k, half) in [70.0f32, 46.0].into_iter().enumerate() {
+            let y = 146.0 + k as f32 * 8.0;
+            slab(
+                out,
+                [-half, half],
+                [y, y + 8.0],
+                span(-60.0, 2.0 - k as f32 * 4.0),
+                Mat::Basalt,
+            );
+        }
+    }
+
+    // The hall: floor, walls and copper ceiling lining the rock.
+    let (inner_f, inner_b) = (-45.0f32, -270.0f32);
+    slab(
+        out,
+        [-40.8, 40.8],
+        [-1.8, -0.6],
+        [BASALT_BACK + 0.4, BASALT_FRONT - 0.4],
+        Mat::Basalt,
+    );
+    slabs(out, [w, 41.0], [-1.8, h], [inner_b, inner_f], Mat::Stone);
+    slab(
+        out,
+        [-41.0, 41.0],
+        [h, 73.0],
+        [inner_b, inner_f],
+        Mat::Copper,
+    );
+    // Platforms either side of the track, with lamps and benches.
+    slabs(
+        out,
+        [4.5, 22.0],
+        [-0.3, 1.3],
+        [-250.0, -60.0],
+        Mat::Concrete,
+    );
+    slabs(out, [4.5, 5.0], [1.3, 1.36], [-250.0, -60.0], Mat::Lamp);
+    for k in 0..8 {
+        let z = -72.0 - k as f32 * 25.0;
+        for s in [-1.0f32, 1.0] {
+            out.push(round(
+                Vec3::new(s * 16.0, 1.3, z),
+                5.0,
+                0.25,
+                0.25,
+                Mat::Metal,
+            ));
+            out.push(soft(ball(Vec3::new(s * 16.0, 6.8, z), 0.8, Mat::Lamp)));
+            slab(
+                out,
+                [s * 19.0 - 0.6, s * 19.0 + 0.6],
+                [1.3, 2.0],
+                [z + 6.0, z + 9.0],
+                Mat::Wood,
+            );
+        }
+    }
+    // Copper arches across the hall, basalt columns down the walls, lamps hung between.
+    for k in 0..9 {
+        let z = -50.0 - k as f32 * 25.0;
+        for i in 1..=11 {
+            let a = i as f32 / 12.0 * std::f32::consts::PI;
+            let (x, y) = (a.cos() * w, 32.0 + a.sin() * w);
+            slab(
+                out,
+                [x - 1.6, x + 1.6],
+                [y - 1.6, y + 1.6],
+                [z - 1.2, z + 1.2],
+                Mat::Copper,
+            );
+        }
+        for s in [-1.0f32, 1.0] {
+            out.push(round(
+                Vec3::new(s * (w - 2.6), -0.3, z),
+                32.3,
+                2.6,
+                2.6,
+                Mat::Basalt,
+            ));
+            // Hung on thin rods that wings pass through.
+            let z = z - 12.5;
+            out.push(soft(round(
+                Vec3::new(s * 12.0, 42.0, z),
+                24.0,
+                0.15,
+                0.15,
+                Mat::Metal,
+            )));
+            out.push(soft(ball(Vec3::new(s * 12.0, 41.0, z), 1.6, Mat::Lamp)));
+        }
+    }
+
+    // The viaduct across the cavern, and the cave station on its pier.
+    let (b, end) = (BASALT_BACK, BASALT_END);
+    slab(out, [-6.0, 6.0], [-3.0, -0.6], [end + 30.0, b], Mat::Stone);
+    slabs(out, [5.0, 6.0], [-0.3, 1.2], [end + 30.0, b], Mat::Stone);
+    let mut z = b - 30.0;
+    while z > end + 40.0 {
+        slab(
+            out,
+            [-5.0, 5.0],
+            [-84.0, -3.0],
+            [z - 3.0, z + 3.0],
+            Mat::Basalt,
+        );
+        for (d, drop) in [(3.0f32, 10.0f32), (8.0, 6.0)] {
+            slab(
+                out,
+                [-6.0, 6.0],
+                [-3.0 - drop, -3.0],
+                [z + d, z + d + 5.0],
+                Mat::Stone,
+            );
+            slab(
+                out,
+                [-6.0, 6.0],
+                [-3.0 - drop, -3.0],
+                [z - d - 5.0, z - d],
+                Mat::Stone,
+            );
+        }
+        z -= 30.0;
+    }
+    slab(
+        out,
+        [-24.0, 24.0],
+        [-84.0, -0.6],
+        [end - 20.0, end + 30.0],
+        Mat::Basalt,
+    );
+    slabs(
+        out,
+        [4.5, 20.0],
+        [-0.3, 1.3],
+        [end - 15.0, end + 25.0],
+        Mat::Concrete,
+    );
+    slabs(
+        out,
+        [4.5, 5.0],
+        [1.3, 1.36],
+        [end - 15.0, end + 25.0],
+        Mat::Lamp,
+    );
+    slab(
+        out,
+        [10.0, 20.0],
+        [1.3, 8.0],
+        [end - 12.0, end + 2.0],
+        Mat::Stone,
+    );
+    slab(
+        out,
+        [9.0, 21.0],
+        [8.0, 9.0],
+        [end - 13.0, end + 3.0],
+        Mat::Copper,
+    );
+    slab(
+        out,
+        [-2.0, 2.0],
+        [-0.3, 1.5],
+        [end - 6.0, end - 3.0],
+        Mat::Red,
+    );
+    for (x, z) in [
+        (-20.0f32, end - 15.0),
+        (-20.0, end + 25.0),
+        (20.0, end + 25.0),
+    ] {
+        out.push(round(Vec3::new(x, 1.3, z), 5.0, 0.25, 0.25, Mat::Metal));
+        out.push(soft(ball(Vec3::new(x, 6.8, z), 0.8, Mat::Lamp)));
+    }
 }
 
 /// How far broad ground paving reaches down under a landmark's foot.

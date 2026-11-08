@@ -246,6 +246,10 @@ pub struct Renderer {
     shadow: wgpu::RenderPipeline,
     glow: wgpu::RenderPipeline,
     fx: wgpu::RenderPipeline,
+    /// Bytes of mesh handed to the GPU so far, for seeing what a frame uploaded, and the
+    /// biggest single mesh since `largest` was last cleared.
+    pub uploaded: u64,
+    pub largest: u64,
     meshes: Vec<Option<GpuMesh>>,
     free: Vec<u32>,
     statics: Vec<StaticBatch>,
@@ -593,6 +597,8 @@ impl Renderer {
             shadow,
             glow,
             fx,
+            uploaded: 0,
+            largest: 0,
             meshes: Vec::new(),
             free: Vec::new(),
             statics: Vec::new(),
@@ -724,6 +730,9 @@ impl Renderer {
     }
 
     pub fn add_mesh(&mut self, mesh: &MeshBuilder) -> MeshId {
+        let bytes = (mesh.verts.len() * std::mem::size_of::<crate::mesh::Vertex>()) as u64;
+        self.uploaded += bytes;
+        self.largest = self.largest.max(bytes);
         let buf = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

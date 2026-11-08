@@ -167,6 +167,9 @@ pub enum VoidShape {
     Shaft,
     /// Straight walls cut by people long ago.
     Carved,
+    /// A sharp box cut square into rock, open air or not: a recess in a cliff for a
+    /// building's front to stand in.
+    Block,
     /// One capsule of a passage or mouth, from `a` to `b` with radius `r`.
     Tube,
     /// A lake basin in a cave floor: `half` is the radii, with depth as y, and `center.y`

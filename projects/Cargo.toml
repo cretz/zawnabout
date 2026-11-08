@@ -25,3 +25,10 @@ too_many_arguments = "allow"
 # Release only, native and wasm alike. Debug builds are too slow to judge a game by.
 [profile.release]
 panic = "abort"
+
+# The browser build: optimized as one whole program, which runs noticeably faster on
+# tablets than the quicker to build release profile.
+[profile.web]
+inherits = "release"
+lto = true
+codegen-units = 1

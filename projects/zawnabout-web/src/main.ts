@@ -7,6 +7,8 @@ import { setupTouch } from "./touch.ts";
 
 const query = new URLSearchParams(location.search);
 const debug = query.has("debug");
+// `?perf` shows how long frames take on this device, and what in them takes the time.
+const perf = query.has("perf");
 const SETTINGS_KEY = "zawnabout.settings";
 // What the game keeps in the browser: settings, keys, and the save slot.
 const PREFS_KEY = "zawnabout.prefs";
@@ -45,6 +47,99 @@ function keep(key: string, value: string) {
   } catch {
     // Kept for this visit only.
   }
+}
+
+/** One two-second reading of the perf readout. */
+interface Reading {
+  at: string;
+  fps: number;
+  worst: number;
+  parts: string;
+  slowest: string;
+  view: unknown;
+}
+
+/**
+ * A readout of frame times, refreshed every two seconds, with a button that sends the
+ * last twenty seconds of it to the dev server for the agent to read. Returns the
+ * per-frame tick.
+ */
+function setupPerf(app: App, canvas: HTMLCanvasElement) {
+  app.perf_start();
+  const panel = document.createElement("div");
+  panel.id = "perf";
+  const box = document.createElement("pre");
+  const send = document.createElement("button");
+  send.textContent = "Send perf";
+  panel.append(box, send);
+  document.body.append(panel);
+  const readings: Reading[] = [];
+  for (const ev of ["pointerdown", "pointerup", "touchstart", "touchend", "mousedown", "mouseup"]) {
+    send.addEventListener(ev, (e) => e.stopPropagation());
+  }
+  // The picture is read right after the next frame is drawn, while it is still there.
+  let wanted = false;
+  send.addEventListener("click", (e) => {
+    e.stopPropagation();
+    send.textContent = "Sending...";
+    app.redraw();
+    wanted = true;
+  });
+  const post = async (shot: string) => {
+    const report = {
+      sent: new Date().toISOString(),
+      agent: navigator.userAgent,
+      dpr: window.devicePixelRatio,
+      screen: [screen.width, screen.height],
+      canvas: [canvas.width, canvas.height],
+      readings,
+      shot,
+    };
+    try {
+      const res = await fetch("/__perf", { method: "POST", body: JSON.stringify(report) });
+      send.textContent = res.ok ? "Sent, thanks!" : `Failed (${res.status})`;
+    } catch {
+      send.textContent = "No server to send to";
+    }
+    setTimeout(() => (send.textContent = "Send perf"), 3000);
+  };
+  const grab = () => {
+    const scale = Math.min(1, 1280 / canvas.width);
+    const c = document.createElement("canvas");
+    c.width = Math.round(canvas.width * scale);
+    c.height = Math.round(canvas.height * scale);
+    c.getContext("2d")?.drawImage(canvas, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.8);
+  };
+  let [from, last, frames, worst] = [performance.now(), performance.now(), 0, 0];
+  return (now: number) => {
+    if (wanted) {
+      wanted = false;
+      void post(grab());
+    }
+    frames++;
+    worst = Math.max(worst, now - last);
+    last = now;
+    if (now - from < 2000) return;
+    const [parts, slowest] = app.perf_report().split("\n");
+    const fps = (frames * 1000) / (now - from);
+    readings.push({
+      at: new Date().toISOString(),
+      fps: Math.round(fps * 10) / 10,
+      worst: Math.round(worst),
+      parts,
+      slowest,
+      view: JSON.parse(app.perf_view()),
+    });
+    if (readings.length > 10) readings.shift();
+    const lines = parts.split("; ").slice(0, 10);
+    box.textContent =
+      `${fps.toFixed(1)} fps, worst gap ${worst.toFixed(0)} ms, ` +
+      `canvas ${canvas.width}x${canvas.height}\n` +
+      lines.join("\n") +
+      `\n${slowest.trim().split("; ").slice(0, 8).join("\n  ")}`;
+    [from, frames, worst] = [now, 0, 0];
+  };
 }
 
 function sizeCanvas(canvas: HTMLCanvasElement) {
@@ -294,6 +389,7 @@ async function start() {
     if (document.visibilityState === "hidden") keepGame();
   });
 
+  const perfShow = perf ? setupPerf(app, canvas) : null;
   const pad = { had: false };
   let last = performance.now();
   const loop = (now: number) => {
@@ -318,6 +414,7 @@ async function start() {
       if (cmd === "snap") snap();
     }
     debugPanel?.update();
+    perfShow?.(now);
     minimap.update(notes.active() ? notes.spots() : []);
     requestAnimationFrame(loop);
   };

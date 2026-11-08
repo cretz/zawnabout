@@ -71,7 +71,10 @@ impl Sim {
     /// Advances one tick. Dragons without an input entry get a neutral one.
     pub fn step(&mut self, inputs: &[(EntityId, DragonInput)]) {
         // Vehicles move first, so riders are carried to where they are now.
-        self.world.traffic.update((self.tick + 1) as f32 * DT);
+        let near: Vec<Vec3> = self.dragons.iter().map(|d| d.pos).collect();
+        self.world
+            .traffic
+            .update_near((self.tick + 1) as f32 * DT, &near, self.tick, 8);
         for dragon in &mut self.dragons {
             let input = inputs
                 .iter()

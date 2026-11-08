@@ -22,6 +22,12 @@ pub enum Play {}
 #[derive(Clone, Debug)]
 pub enum Chore {}
 
+/// What came of finding a dragon: met, with its card, or the shy one flying off.
+pub enum Meet {
+    Card(Card),
+    Flee(String, String),
+}
+
 /// An unfound find to draw: where, its model, and whether it is a coin pile.
 pub struct Shiny {
     pub id: usize,
@@ -102,7 +108,9 @@ pub struct Heap {
 #[cfg(feature = "play")]
 mod on {
     use super::*;
-    use crate::book::{CardKind, FlyRow, Mark, MarkGroup, PersonRow, PlaceRow, SetRow, StoryRow};
+    use crate::book::{
+        CardKind, FlyRow, KinAsk, KinRow, Mark, MarkGroup, PersonRow, PlaceRow, SetRow, StoryRow,
+    };
     use zawnabout_play::{Chore, ChoreKind, Errand, Talk};
 
     /// An island's name as people say it.
@@ -267,7 +275,22 @@ mod on {
                         title: set.name.into(),
                         body: set.done.into(),
                         foot: "Every piece found!".into(),
-                        kind: CardKind::Find,
+                        kind: CardKind::News,
+                    }
+                }
+                Event::Happening(h) => {
+                    let h = &def.happenings[h];
+                    news.cheer = true;
+                    news.toasts.push((h.name.into(), h.seen.into()));
+                    continue;
+                }
+                Event::Favor(f) => {
+                    let f = &def.favors[f];
+                    Card {
+                        title: format!("{} thanks you!", f.town),
+                        body: f.done.into(),
+                        foot: "Go and see!".into(),
+                        kind: CardKind::News,
                     }
                 }
                 Event::Lamp(..)
@@ -919,8 +942,26 @@ mod on {
 
     /// While there is no lair yet, a townsperson's tip about one, picked by `seed`.
     pub fn lair_tip(play: &Play, seed: u32) -> Option<String> {
-        if play.lair.is_some() {
-            return None;
+        // Now and then, word of what is going on somewhere.
+        if let Some(i) = play.happening()
+            && !play.happen.seen_now
+            && seed.is_multiple_of(3)
+        {
+            return Some(play.def.happenings[i].rumor.to_string());
+        }
+        // Every other tip is word of a dragon not met yet.
+        let unmet: Vec<_> = play
+            .def
+            .kin
+            .iter()
+            .zip(&play.kin.met)
+            .filter(|(_, m)| !**m)
+            .map(|(k, _)| k.rumor)
+            .collect();
+        if !unmet.is_empty() && (seed / 3).is_multiple_of(2) || play.lair.is_some() {
+            return unmet
+                .get(seed as usize % unmet.len().max(1))
+                .map(|r| r.to_string());
         }
         const TIPS: [&str; 4] = [
             "A dragon needs a lair, my gran always said. There's a snug little cave at the foot of the big cliff, west of the big meadow. Fern Hollow, they call it.",
@@ -1333,6 +1374,31 @@ mod on {
                 })
                 .collect(),
         });
+        if let Some(i) = play.happening() {
+            let h = &def.happenings[i];
+            out.push(MarkGroup {
+                key: "happening".into(),
+                name: "Going on now".into(),
+                about: "Something is happening here. Go and see! Once you have, another starts somewhere else.".into(),
+                spots: vec![Mark {
+                    at: glam::Vec2::new(h.x, h.z),
+                    done: play.happen.seen_now,
+                    label: format!("{}, {}", h.name, h.place),
+                }],
+            });
+        }
+        out.push(MarkGroup {
+            key: "dragons".into(),
+            name: "Dragon friends".into(),
+            about: "Where the dragons you have met like to sit.".into(),
+            spots: def
+                .kin
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| play.kin.met[*i])
+                .map(|(i, k)| mark(play.kin_at[i][0], false, k.name))
+                .collect(),
+        });
         out
     }
 
@@ -1399,6 +1465,7 @@ mod on {
                 towns
             },
             flying: flying(play),
+            kin: kin_rows(play),
             stories: play
                 .def
                 .stories
@@ -1456,7 +1523,7 @@ mod on {
 
     pub fn shinies(play: &Play, out: &mut Vec<Shiny>) {
         for (i, (f, s)) in play.def.finds.iter().zip(&play.spots).enumerate() {
-            if !play.found[i] {
+            if !play.found[i] && (play.night || !f.night) {
                 out.push(Shiny {
                     id: i,
                     pos: s.pos,
@@ -1464,6 +1531,342 @@ mod on {
                 });
             }
         }
+    }
+
+    pub fn set_night(play: &mut Play, night: bool) {
+        play.night = night;
+    }
+
+    pub fn thank_all(play: &mut Play) {
+        play.favored.iter_mut().for_each(|f| *f = true);
+    }
+
+    /// The named dragons, as the game flies and draws them.
+    pub fn kin_info(play: &Play) -> Vec<crate::kin::KinInfo> {
+        play.def
+            .kin
+            .iter()
+            .enumerate()
+            .map(|(i, k)| crate::kin::KinInfo {
+                name: k.name.into(),
+                kind: k.kind,
+                tint: k.tint,
+                size: k.size,
+                spots: play.kin_at[i].clone(),
+                way: play.kin_way[i].clone(),
+                // The finish's height is left for the game to find on the ground.
+                race: k
+                    .race
+                    .as_ref()
+                    .map(|(to, at, r, _)| (to.to_string(), Vec3::new(at[0], f32::NAN, at[1]), *r)),
+            })
+            .collect()
+    }
+
+    /// Whether dragon `i` is met.
+    pub fn kin_met(play: &Play, i: usize) -> bool {
+        play.kin.met[i]
+    }
+
+    pub fn kin_name(play: &Play, i: usize) -> &'static str {
+        play.def.kin[i].name
+    }
+
+    /// Dragon `i` is found: met with a card, or the shy one flies off.
+    pub fn find_kin(play: &mut Play, i: usize) -> Option<Meet> {
+        let k = &play.def.kin[i];
+        Some(match play.find_kin(i)? {
+            zawnabout_play::KinNews::Shy(_, n) => Meet::Flee(
+                "A little dragon!".into(),
+                if n == 1 {
+                    "It squeaked and flew off to another needle! Maybe it will stay if you find it again.".into()
+                } else {
+                    "Off it goes again! It peeked back at you, though. One more try.".into()
+                },
+            ),
+            _ => Meet::Card(Card {
+                title: k.name.into(),
+                body: k.meet.into(),
+                foot: "A new dragon friend! See the Dragons page in your journal.".into(),
+                kind: CardKind::Say,
+            }),
+        })
+    }
+
+    /// What dragon `i` would like to do now, most wanted first.
+    fn kin_ask(play: &Play, i: usize) -> KinAsk {
+        let (k, s) = (&play.def.kin[i], &play.kin);
+        if k.kind == "wise" && play.all_kin_met() && s.egg == zawnabout_play::Egg::None {
+            KinAsk::Egg
+        } else if play.trade_offer(i).is_some() {
+            KinAsk::Trade
+        } else if k.race.is_some() && (!s.won[i] || s.followed[i]) {
+            // A racer wants a race first, and then shows its secret to whoever won.
+            KinAsk::Race
+        } else if !s.followed[i] {
+            KinAsk::Follow
+        } else {
+            KinAsk::Chat
+        }
+    }
+
+    /// Talking to dragon `i`: a line, and maybe something to do together.
+    pub fn kin_talk(play: &Play, i: usize, seed: u32) -> Card {
+        let k = &play.def.kin[i];
+        let ask = kin_ask(play, i);
+        let line = k
+            .lines
+            .get(seed as usize % k.lines.len().max(1))
+            .copied()
+            .unwrap_or("");
+        let (body, foot) = match ask {
+            KinAsk::Egg => (
+                format!(
+                    "You found them all! Every dragon on the islands, after all these years. Here, I've kept this egg warm for a long, long time. It should be with a young dragon. Take it to your lair and warm it with your fire{}.",
+                    if play.lair.is_none() {
+                        ", once you have a lair"
+                    } else {
+                        ""
+                    }
+                ),
+                "An egg of your own!".to_string(),
+            ),
+            KinAsk::Trade => {
+                let f = play.trade_offer(i).map_or("", |f| play.def.finds[f].name);
+                let gift = k.trade.as_ref().map_or("", |t| t.1.name);
+                (
+                    format!(
+                        "Ooh! Is that {f}? I'd trade you {gift} for it. Only if you like, of course!"
+                    ),
+                    String::new(),
+                )
+            }
+            KinAsk::Follow => (
+                format!("{line} Want to see something? Follow me, I'll wait for you at each stop."),
+                String::new(),
+            ),
+            KinAsk::Race => {
+                let to = k.race.as_ref().map_or("", |r| r.0);
+                (
+                    format!("{line} Race you to {to}? Last one there is a slow old cloud!"),
+                    if play.kin.won[i] {
+                        "You've beaten Blaze before. Blaze would like that not to happen again."
+                            .replace("Blaze", k.name)
+                    } else {
+                        String::new()
+                    },
+                )
+            }
+            KinAsk::Chat => {
+                let hint = if k.kind == "wise" {
+                    play.sets()
+                        .into_iter()
+                        .flat_map(|s| s.pieces.into_iter())
+                        .find(|p| !p.1)
+                        .map(|p| format!(" A little hint, if you like: {}", p.0.hint))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                (format!("{line}{hint}"), String::new())
+            }
+        };
+        Card {
+            title: k.name.into(),
+            body,
+            foot,
+            kind: CardKind::Kin(i, ask),
+        }
+    }
+
+    /// The egg is given or the trade made. Its card, when there is one.
+    pub fn kin_do(play: &mut Play, i: usize, ask: KinAsk) -> Option<Card> {
+        let k = &play.def.kin[i];
+        match ask {
+            KinAsk::Egg if play.give_egg() => Some(Card {
+                title: "A dragon egg".into(),
+                body: "It's warm and smooth, with little gold speckles. Something inside is already wriggling. Keep it in your lair and warm it with your fire to hatch it.".into(),
+                foot: "Breathe fire on it by your heap.".into(),
+                kind: CardKind::Find,
+            }),
+            KinAsk::Trade if play.trade(i) => {
+                let t = &k.trade.as_ref()?.1;
+                Some(Card {
+                    title: t.name.into(),
+                    body: t.story.into(),
+                    foot: format!("A swap with {}!", k.name),
+                    kind: CardKind::Find,
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// Dragon `i` showed you its secret.
+    pub fn kin_shown(play: &mut Play, i: usize) -> (String, String) {
+        play.followed(i);
+        (
+            play.def.kin[i].name.into(),
+            "Here it is! My secret spot. Have a look around, there's something here for you."
+                .into(),
+        )
+    }
+
+    /// The race is over: a card for a first win, a line otherwise.
+    pub fn kin_raced(play: &mut Play, i: usize, won: bool) -> Result<Card, (String, String)> {
+        let k = &play.def.kin[i];
+        let name = k.name.to_string();
+        if !won {
+            return Err((
+                name,
+                "Ha! Beat you! Good race though. Come back for a rematch any time!".into(),
+            ));
+        }
+        if play.beat(i)
+            && let Some((_, _, _, prize)) = &k.race
+        {
+            return Ok(Card {
+                title: prize.name.into(),
+                body: prize.story.into(),
+                foot: format!("You beat {name}!"),
+                kind: CardKind::Find,
+            });
+        }
+        Err((name, "You won again?! I'm going to practice. A lot.".into()))
+    }
+
+    /// A friend has left a gift by the heap, if one has not yet.
+    pub fn kin_gift(play: &mut Play) -> Option<Card> {
+        let i = (0..play.def.kin.len()).find(|&i| play.leave_gift(i))?;
+        let k = &play.def.kin[i];
+        Some(Card {
+            title: k.gift.name.into(),
+            body: format!(
+                "{} left this by your heap while you were out. {}",
+                k.name, k.gift.story
+            ),
+            foot: "A gift from a friend!".into(),
+            kind: CardKind::Find,
+        })
+    }
+
+    /// 0 with no egg, 1 waiting to hatch, 2 hatched.
+    pub fn egg(play: &Play) -> u8 {
+        match play.kin.egg {
+            zawnabout_play::Egg::None => 0,
+            zawnabout_play::Egg::Given => 1,
+            zawnabout_play::Egg::Hatched => 2,
+        }
+    }
+
+    pub fn hatch(play: &mut Play) -> Option<Card> {
+        play.hatch().then(|| Card {
+            title: "It hatched!".into(),
+            body: "Crack, crack, pop! A tiny dragon tumbles out, blinks at you, and sneezes a little puff of smoke. It's going to follow you everywhere now.".into(),
+            foot: "Share some firsts with it and watch it grow. See the Dragons page.".into(),
+            kind: CardKind::News,
+        })
+    }
+
+    /// The hatchling's first `name`: a line about it, the first time.
+    pub fn first(play: &mut Play, name: &str) -> Option<(String, String)> {
+        let k = play.first(name)?;
+        let line = match k {
+            0 => "Your little one flew beside you the whole way! Its wings are getting stronger.",
+            1 => "Splash! Your little one loved the water. It's a bit bigger now.",
+            2 => "Your little one breathed its very first flame. A tiny one, but a real one!",
+            _ => "Your little one tried that stunt too! Upside down, but it counts.",
+        };
+        Some(("Little one".into(), line.into()))
+    }
+
+    pub fn hatchling_size(play: &Play) -> f32 {
+        play.kin.hatchling_size()
+    }
+
+    /// The dragons page: each named dragon met or heard of, then the family.
+    fn kin_rows(play: &Play) -> Vec<KinRow> {
+        let s = &play.kin;
+        let mut out: Vec<KinRow> = play
+            .def
+            .kin
+            .iter()
+            .enumerate()
+            .map(|(i, k)| {
+                let island = match k.island {
+                    "home" => "the home island".to_string(),
+                    id => island_name(id).replacen("The ", "the ", 1),
+                };
+                if !s.met[i] {
+                    return KinRow {
+                        name: "A dragon?".into(),
+                        status: "Not met".into(),
+                        about: format!("Folk say there's a dragon living on {island}."),
+                        done: Vec::new(),
+                        mark: None,
+                    };
+                }
+                let mut done = vec![format!("Lives on {island}")];
+                if s.followed[i] {
+                    done.push("Showed you its secret".into());
+                }
+                if s.won[i] {
+                    done.push("You beat it in a race".into());
+                }
+                if s.traded[i] {
+                    done.push("Made a swap with you".into());
+                }
+                if s.gifted[i] {
+                    done.push(format!("Left you {}", k.gift.name));
+                }
+                KinRow {
+                    name: k.name.into(),
+                    status: match k.kind {
+                        "wise" => "Wise",
+                        "racer" => "Racer",
+                        "shy" => "Shy",
+                        _ => "Collector",
+                    }
+                    .into(),
+                    about: k.about.into(),
+                    done,
+                    mark: Some("dragons".into()),
+                }
+            })
+            .collect();
+        let family = match s.egg {
+            zawnabout_play::Egg::None => None,
+            zawnabout_play::Egg::Given => Some(KinRow {
+                name: "Your egg".into(),
+                status: "Waiting".into(),
+                about: "A gift from Grandmother Cinder. Keep it in your lair and warm it with your fire to hatch it.".into(),
+                done: Vec::new(),
+                mark: None,
+            }),
+            zawnabout_play::Egg::Hatched => Some(KinRow {
+                name: "Your little one".into(),
+                status: format!(
+                    "{} of {} firsts",
+                    s.firsts.iter().filter(|f| **f).count(),
+                    s.firsts.len()
+                ),
+                about: "Your hatchling, always at your side. It grows a little with every first you share.".into(),
+                done: zawnabout_play::kin::FIRSTS
+                    .iter()
+                    .zip(s.firsts)
+                    .map(|((_, label), done)| {
+                        if done {
+                            label.to_string()
+                        } else {
+                            "...".into()
+                        }
+                    })
+                    .collect(),
+                mark: None,
+            }),
+        };
+        out.extend(family);
+        out
     }
 
     pub fn heap(play: &Play) -> Option<Heap> {
@@ -1474,6 +1877,7 @@ mod on {
                 .treasures()
                 .map(|f| f.kind)
                 .chain(play.gifts().map(|g| g.kind))
+                .chain((play.kin.egg == zawnabout_play::Egg::Given).then_some("egg"))
                 .collect(),
         })
     }
@@ -1591,6 +1995,7 @@ mod on {
 #[cfg(not(feature = "play"))]
 mod on {
     use super::*;
+    use crate::book::KinAsk;
 
     pub fn start(_: &World) -> Option<Play> {
         None
@@ -1742,6 +2147,51 @@ mod on {
         match *play {}
     }
     pub fn shinies(play: &Play, _: &mut Vec<Shiny>) {
+        match *play {}
+    }
+    pub fn kin_info(play: &Play) -> Vec<crate::kin::KinInfo> {
+        match *play {}
+    }
+    pub fn set_night(play: &mut Play, _: bool) {
+        match *play {}
+    }
+    pub fn thank_all(play: &mut Play) {
+        match *play {}
+    }
+    pub fn kin_met(play: &Play, _: usize) -> bool {
+        match *play {}
+    }
+    pub fn kin_name(play: &Play, _: usize) -> &'static str {
+        match *play {}
+    }
+    pub fn find_kin(play: &mut Play, _: usize) -> Option<Meet> {
+        match *play {}
+    }
+    pub fn kin_talk(play: &Play, _: usize, _: u32) -> Card {
+        match *play {}
+    }
+    pub fn kin_do(play: &mut Play, _: usize, _: KinAsk) -> Option<Card> {
+        match *play {}
+    }
+    pub fn kin_shown(play: &mut Play, _: usize) -> (String, String) {
+        match *play {}
+    }
+    pub fn kin_raced(play: &mut Play, _: usize, _: bool) -> Result<Card, (String, String)> {
+        match *play {}
+    }
+    pub fn kin_gift(play: &mut Play) -> Option<Card> {
+        match *play {}
+    }
+    pub fn egg(play: &Play) -> u8 {
+        match *play {}
+    }
+    pub fn hatch(play: &mut Play) -> Option<Card> {
+        match *play {}
+    }
+    pub fn first(play: &mut Play, _: &str) -> Option<(String, String)> {
+        match *play {}
+    }
+    pub fn hatchling_size(play: &Play) -> f32 {
         match *play {}
     }
     pub fn heap(play: &Play) -> Option<Heap> {

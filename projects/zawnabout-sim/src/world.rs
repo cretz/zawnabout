@@ -329,7 +329,11 @@ impl World {
             // Given a height deep under the ground, it stands on the cavern floor there,
             // and is drawn with the cave insides.
             // Carvings stand at a cliff's face with their backs in the rock, never inside.
-            let carved = matches!(kind, Kind::Faces | Kind::Warden);
+            // So do the halls built into a cliff, which run on into a cave behind.
+            let carved = matches!(
+                kind,
+                Kind::Faces | Kind::Warden | Kind::SeaDoors | Kind::BasaltGate
+            );
             let under = !m.ground && !carved && self.terrain.height(x, z) > m.pos[1] + 20.0;
             let y = if m.ground {
                 self.terrain.height(x, z)
@@ -549,6 +553,18 @@ impl World {
             let Some((i, k)) = nearest_rail(def, at) else {
                 continue;
             };
+            // A stop inside Basalt Gate has the station it is built as.
+            let built = self.buildings.iter().any(|b| {
+                let d = at - Vec2::new(b.pos.x, b.pos.z);
+                let (x, z) = (d.dot(b.axis), d.dot(b.front()));
+                b.kind == Kind::BasaltGate
+                    && x.abs() < 50.0
+                    && z < crate::landmark::BASALT_FRONT
+                    && z > crate::landmark::BASALT_END - 40.0
+            });
+            if built {
+                continue;
+            }
             let line = def.roads[i].pts;
             let pt = |j: usize| Vec2::new(line[j][0], line[j][1]);
             let mut track = pt(k);

@@ -274,7 +274,8 @@ fn decorate_one(t: &Terrain, v: &Void, seed: u64, out: &mut Vec<Placed>) {
             let at = Vec3::new(x, floor - 0.6, z);
             // Open just above (not in a pillar or another wall). Only crystals grow under
             // cave water, glowing up through it.
-            let wet = t.cave_water(x, z, floor).is_some();
+            let water = t.cave_water(x, z, floor);
+            let wet = water.is_some();
             if t.sdf(at + Vec3::Y * 2.5) < 0.5 || (wet && roll >= crystal) || in_town(t, at) {
                 continue;
             }
@@ -287,6 +288,14 @@ fn decorate_one(t: &Terrain, v: &Void, seed: u64, out: &mut Vec<Placed>) {
                 } else {
                     1.2 + size * 2.4
                 };
+                // Under water it stays under, its tip clear of the surface.
+                let scale = match water {
+                    Some(level) => scale.min((level - at.y - 0.5) / CRYSTAL_TALL),
+                    None => scale,
+                };
+                if scale < 0.4 {
+                    continue;
+                }
                 (PropKind::Crystal, at, scale, color)
             } else if roll < crystal + shroom_w {
                 (PropKind::Shroom, at, 1.0 + size * 1.6, shroom)
@@ -298,6 +307,9 @@ fn decorate_one(t: &Terrain, v: &Void, seed: u64, out: &mut Vec<Placed>) {
         u += SPACING;
     }
 }
+
+/// How tall a crystal stands at scale 1, its center shard.
+const CRYSTAL_TALL: f32 = 3.2;
 
 /// Dressing round every cave opening, so a mouth reads as a place rather than a hole
 /// punched in the hill: boulders heaped round its rim and vines hanging over its lip, or
