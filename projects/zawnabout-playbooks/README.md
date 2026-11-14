@@ -6,7 +6,7 @@ Scripted headless runs that check the game end to end, such as flying somewhere,
 target/release/zawnabout --headless --script zawnabout-playbooks/NAME.txt --out DIR
 ```
 
-Run them all, several at once, with `cargo test --release -p zawnabout-native --features playbooks --test playbooks -- --nocapture`. It is behind the `playbooks` feature because it needs a GPU (a software one does).
+Run them all, several at once, with `cargo test --release -p zawnabout-native --features playbooks --test playbooks -- --nocapture`. It is behind the `playbooks` feature because it needs a GPU (a software one does). Set `ZAWNABOUT_PLAYBOOKS=flight,cave-town` to run only those.
 
 It exits with 1 if any `expect` fails. `wait` plays game time out (fast, but not free), so keep waits short: to set up a vehicle somewhere, `skip SECS` jumps the clock and every vehicle at once instead. Cards for things found are logged and dismissed so runs carry on, unless the playbook says `cards keep`. Name vehicles (`ride tour`, `land-on ferry.1`), not numbers, because the numbers shift when routes change.
 

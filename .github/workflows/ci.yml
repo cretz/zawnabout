@@ -67,9 +67,14 @@ jobs:
       - run: cargo build --release --locked
       - run: cargo test --release --locked
       # Every playbook, against the binary built above, on the runner's software GPU.
+      # Windows runs a few only: its software GPU (WARP) takes about 20 s to load each
+      # playbook's world, since wgpu uploads through memory WARP reads slowly
+      # (gfx-rs/wgpu#9123). The few still cover starting, flying, landing, a ride, a cave
+      # and a postcard on Windows.
       - name: Playbooks
         env:
           ZAWNABOUT_PLAYBOOK_OUT: ${{ runner.temp }}/playbooks
+          ZAWNABOUT_PLAYBOOKS: ${{ runner.os == 'Windows' && 'flight,land-town,ride-train,cave-town,take-postcard' || '' }}
         run: cargo test --release --locked -p zawnabout-native --features playbooks --test playbooks -- --nocapture
       - name: Keep the playbook logs and shots
         if: failure()

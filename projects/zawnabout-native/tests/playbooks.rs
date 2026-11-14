@@ -7,7 +7,8 @@
 //! ```
 //!
 //! Each one's log and shots go under `ZAWNABOUT_PLAYBOOK_OUT` if set, else under the
-//! target directory.
+//! target directory. `ZAWNABOUT_PLAYBOOKS` picks some by name, comma separated, instead of
+//! running them all.
 
 #![cfg(feature = "playbooks")]
 
@@ -26,6 +27,19 @@ fn every_playbook_passes() {
         .collect();
     books.sort();
     assert!(!books.is_empty(), "no playbooks found");
+    let stem = |p: &PathBuf| p.file_stem().map(|s| s.to_string_lossy().into_owned());
+    if let Ok(pick) = std::env::var("ZAWNABOUT_PLAYBOOKS")
+        && !pick.trim().is_empty()
+    {
+        let names: Vec<&str> = pick.split(',').map(str::trim).collect();
+        for name in &names {
+            assert!(
+                books.iter().any(|b| stem(b).as_deref() == Some(name)),
+                "no playbook named {name}"
+            );
+        }
+        books.retain(|b| stem(b).is_some_and(|s| names.contains(&s.as_str())));
+    }
     let out = std::env::var_os("ZAWNABOUT_PLAYBOOK_OUT")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_TARGET_TMPDIR")).join("playbooks"));

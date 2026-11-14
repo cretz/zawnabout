@@ -35,8 +35,12 @@ class Store {
 
   async save(note: Note): Promise<Note> {
     if (this.server) {
-      const res = await fetch("/__notes", { method: "POST", body: JSON.stringify(note) });
-      if (res.ok) return await res.json();
+      try {
+        const res = await fetch("/__notes", { method: "POST", body: JSON.stringify(note) });
+        if (res.ok) return await res.json();
+      } catch {
+        // The dev server went away, so keep the note here instead.
+      }
       this.server = false;
     }
     const all = this.local();

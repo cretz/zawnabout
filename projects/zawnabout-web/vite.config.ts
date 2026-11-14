@@ -21,6 +21,18 @@ function body(req: IncomingMessage): Promise<string> {
   });
 }
 
+// Whether a request comes from the game's own page. Any other page open in the same
+// browser can send a plain POST here without asking, and only its origin tells it apart.
+function sameOrigin(req: IncomingMessage): boolean {
+  const origin = req.headers.origin;
+  if (!origin) return true;
+  try {
+    return new URL(origin).host === req.headers.host;
+  } catch {
+    return false;
+  }
+}
+
 function newId(): string {
   const d = new Date();
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
@@ -35,7 +47,7 @@ function notesPlugin(): Plugin {
     configureServer(server) {
       server.middlewares.use("/__perf", async (req, res) => {
         res.setHeader("content-type", "application/json");
-        if (req.method !== "POST") {
+        if (req.method !== "POST" || !sameOrigin(req)) {
           res.statusCode = 400;
           return res.end("{}");
         }
@@ -64,6 +76,7 @@ function notesPlugin(): Plugin {
           res.setHeader("content-type", "application/json");
           res.end(JSON.stringify(value));
         };
+        if (req.method !== "GET" && !sameOrigin(req)) return send(403, { error: "other origin" });
         try {
           const id = (req.url ?? "/").replace(/^\//, "").split("?")[0];
           if (req.method === "GET") {
@@ -95,6 +108,18 @@ function notesPlugin(): Plugin {
   };
 }
 
+// Nunito is built into the wasm, so its license goes out beside it.
+function fontLicense(): Plugin {
+  const ofl = join(dirname(fileURLToPath(import.meta.url)), "../zawnabout-game/assets/nunito-OFL.txt");
+  return {
+    name: "zawnabout-font-license",
+    apply: "build",
+    generateBundle() {
+      this.emitFile({ type: "asset", fileName: "nunito-OFL.txt", source: readFileSync(ofl, "utf8") });
+    },
+  };
+}
+
 // One static page: index.html, a script bundle and the wasm file. `--mode lan` serves
 // HTTPS with the self-signed certificate from scripts/lan-cert.mjs, for phones on the LAN.
 export default defineConfig(({ mode }) => {
@@ -107,6 +132,6 @@ export default defineConfig(({ mode }) => {
     base: "./",
     server: { port: mode === "lan" ? 5443 : 5180, https },
     build: { target: "es2024", assetsInlineLimit: 0 },
-    plugins: [notesPlugin()],
+    plugins: [notesPlugin(), fontLicense()],
   };
 });

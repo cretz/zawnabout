@@ -66,13 +66,17 @@ impl Swoop {
 
         // Clear the tallest thing under the straight line, with room to spare, but only
         // things near the line: the hill over a cave is no reason to climb. And never
-        // rise into a roof overhead.
+        // rise into a roof overhead, which only a sample in open air can have: one inside
+        // a hill has the hill above it, and that is to be cleared.
         let mut top = pos.y.max(end.y);
         let mut roof = f32::MAX;
         let reach_up = top + 60.0;
         for i in 0..=24 {
             let p = pos.lerp(end, i as f32 / 24.0);
             top = top.max(world.support(p.x, p.z, reach_up) + stand_height);
+            if world.solid_at(p) {
+                continue;
+            }
             if let Some(k) = (1..=20).find(|k| world.solid_at(p + Vec3::Y * (*k as f32 * 4.0))) {
                 roof = roof.min(p.y + k as f32 * 4.0);
             }
@@ -149,7 +153,8 @@ impl Swoop {
         let left = self.length() - self.travelled;
         // Short hops stay gentle, long trips go all out, and very long ones rush.
         let top = top_speed.max((self.length() * 0.06).min(320.0));
-        let cruise = (self.length() * 0.18).clamp(18.0, top);
+        // At least 18 m/s, unless the top speed itself is lower.
+        let cruise = (self.length() * 0.18).max(18.0).min(top);
         // Rush in, then brake hard enough to touch down gently.
         self.braking = (cruise * cruise / (2.0 * BRAKE_DISTANCE)).max(BRAKING);
         let brake_limit = (2.0 * self.braking * left + TOUCHDOWN * TOUCHDOWN).sqrt();

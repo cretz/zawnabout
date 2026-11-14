@@ -84,6 +84,7 @@ caves grotto {
         p -950 -95 -280
         p -600 -120 -150
         p -150 -100 -50
+        p -10 -92 -15
     }
     cavern hidden-grotto x=50 y=-70 z=0 w=200 h=80 d=180 shape=dome glow=0.35 decor=shroom {
         spout grotto-spout x=80 z=30 w=6

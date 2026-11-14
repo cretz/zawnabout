@@ -61,18 +61,19 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="${GITHUB_REF#refs/tags/}"; else tag="manual-${GITHUB_SHA::8}"; fi
           echo "name=zawnabout-$tag-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+      # The game and the license of the font built into it.
       - name: Archive (tar.gz)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           mkdir -p dist
-          tar -C projects/target/${{ matrix.target }}/release -czf dist/${{ steps.meta.outputs.name }}.tar.gz ${{ matrix.bin }}
+          tar -czf dist/${{ steps.meta.outputs.name }}.tar.gz -C projects/target/${{ matrix.target }}/release ${{ matrix.bin }} -C "$GITHUB_WORKSPACE/projects/zawnabout-game/assets" nunito-OFL.txt
       - name: Archive (zip)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Compress-Archive -Path projects/target/${{ matrix.target }}/release/${{ matrix.bin }} -DestinationPath dist/${{ steps.meta.outputs.name }}.zip
+          Compress-Archive -Path projects/target/${{ matrix.target }}/release/${{ matrix.bin }}, projects/zawnabout-game/assets/nunito-OFL.txt -DestinationPath dist/${{ steps.meta.outputs.name }}.zip
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.meta.outputs.name }}

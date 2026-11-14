@@ -34,6 +34,9 @@ export function setupSound(app: App) {
       app.set_sound(true);
     }
   };
+  for (const ev of ["pointerdown", "pointerup", "touchend", "click", "keydown"]) {
+    addEventListener(ev, start, { capture: true });
+  }
   // Quiet while the page is hidden.
   document.addEventListener("visibilitychange", () => {
     if (!started) return;
