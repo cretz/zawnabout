@@ -37,6 +37,8 @@ set festival-lanterns name="Festival lanterns" done="All five festival lanterns 
 
 find chess-king kind=chess set=moon-chess name="The Moon King" x=-650 z=2300 hint="He likes a light that turns all night, by the bay on the home island." story="The king of the moon chess set. He rolled all the way to a lighthouse and liked the view."
 find chess-queen kind=chess set=moon-chess name="The Moon Queen" x=-50 z=-5200 hint="She watches the tide from the lighthouse on the twin islands." story="The queen of the moon chess set, found keeping watch over the boats."
+find captains-hat kind=hat name="The Old Captain's Hat" x=-44 z=-5196 story="It sailed round the world twice on a captain's head, then blew off at the lighthouse. Dragons can wear hats. This one fits."
+find sun-hat kind=hat name="The Straw Sun Hat" x=-1727 z=1491 story="A wide straw hat for sunny market days. Somebody left it on a bench and the wind did the rest."
 find chess-rook kind=chess set=moon-chess name="The Moon Rook" x=1500 z=-3800 hint="A castle piece on a little castle of rock, all alone at sea." story="A rook is a castle, so of course it moved into the lonely lighthouse rock."
 find chess-knight kind=chess set=moon-chess name="The Moon Knight" x=-4300 z=3600 hint="Knights love a high perch. Try the tallest of the needles." story="The knight jumped higher than any knight should, right to the top of the great needle."
 find chess-bishop kind=chess set=moon-chess name="The Moon Bishop" x=-1975 z=1135 hint="Close to where you first woke up, beside a beacon waiting to be lit." story="The bishop never went far. It was waiting by the beacon all along."
@@ -328,11 +330,11 @@ course gull-nooks name="The Gull Nooks" line="Five little caves in the home isla
     gate x=-900 z=-750 r=25 lo=60 hi=120
 }
 course fang-nooks name="Fang's Hidey-Holes" line="Six little caves in Fang's cliffs. Peek into every one." rumor="Fang's cliffs are full of little hidey-holes. A good place to keep a secret, they say." gold=10 prize-kind=ribbon prize-name="The Hidey-Hole Ribbon" prize-story="A ribbon that was hidden in a hidey-hole. Now it's hidden in your hoard." {
-    gate x=3100 z=2370 r=25 lo=30 hi=90
-    gate x=3400 z=2210 r=25 lo=110 hi=170
-    gate x=3850 z=2220 r=25 lo=60 hi=120
-    gate x=4150 z=2150 r=25 lo=90 hi=150
-    gate x=2750 z=2540 r=25 lo=10 hi=70
+    gate x=3100 z=2735 r=25 lo=250 hi=290
+    gate x=3400 z=2555 r=25 lo=172 hi=212
+    gate x=3850 z=2555 r=25 lo=263 hi=303
+    gate x=4150 z=2100 r=25 lo=25 hi=65
+    gate x=2750 z=3285 r=25 lo=16 hi=56
     gate x=4700 z=2650 r=25 lo=30 hi=90
 }
 
@@ -436,7 +438,7 @@ find fossil-seals kind=fossil set=fossils name="The Curly Shell" x=-596 z=2291 h
 find fossil-nook kind=fossil set=fossils name="The Gull Nook Bone" x=-1994 y=62 z=-840 hint="In one of the little gull caves along the home island's north cliffs." story="The gulls thought it was a very old fish. They were nearly right."
 find fossil-rim kind=fossil set=fossils name="The Volcano Fern" x=3720 z=3060 hint="Up on the rim of the old volcano, where it's warm under your feet." story="A fern pressed into stone by the volcano, a long, long time ago."
 find fossil-elder kind=fossil set=fossils name="The Elder Tooth" x=-1925 z=-4680 hint="On the cold summit of the old stone island." story="A tooth as big as a dragon's foot. Nobody wants to meet whoever it belonged to."
-find fossil-strait kind=fossil set=fossils name="The Strait Starfish" x=-900 y=16 z=-4618 hint="In the little cave just above the waves on the younger twin's north shore." story="A stone starfish, waving one arm. It has been waving for a million years."
+find fossil-strait kind=fossil set=fossils name="The Strait Starfish" x=-900 y=16 z=-4618 hint="On the beach just above the waves, on the younger twin's north shore by the strait." story="A stone starfish, waving one arm. It has been waving for a million years."
 find fossil-gullrock kind=fossil set=fossils name="The Feathered Stone" x=-5345 z=-3046 hint="On a lonely gull rock far west of the atoll." story="Feathers in the stone! Maybe there were dragons long before you."
 
 find pearl-reef kind=pearl set=atoll-pearls name="The Reef Pearl" x=-3222 z=-2496 hint="By the old trading ship asleep on the atoll's outer reef." story="The ship's cook kept it for luck. The ship stayed lucky. Everyone got home."
@@ -822,6 +824,12 @@ happening palm-party name="A Beach Party" place="Palm Ring" x=-4241 z=-3057 r=10
     folk name="Grandma Moana" x=-4236 z=-3056 facing=270 look=7 line="I've danced at every beach party for eighty years. I'm only just warming up."
     fireworks x=-4241 z=-3120 h=60
 }
+happening geese-south name="Geese Heading South" place="the bay south of Kettle Harbor" x=-1000 z=2600 r=320 rumor="The geese are gathering out over the bay, south of Kettle Harbor. They fly round and round before they set off. I've always wanted to fly with them." seen="You're flying with the geese! They honk hello and make room for you at the end of the line." {
+    geese x=-1000 z=2600 h=70 r=260
+}
+happening ghost-ship name="The Ghost Ship" place="the open sea past the Needles" x=-3500 z=4500 r=300 rumor="Fishermen say a ghost ship rides at anchor out past the Needles, but only at night. A friendly one! It glows, and somebody aboard hums sea songs." seen="The ghost ship! It glows like moonlight on the water, and its lanterns wink hello. Somewhere aboard, somebody is humming an old sea song." {
+    ghostship x=-3500 z=4500 r=40
+}
 
 // Towns thank you as you help their people: at each step, something new goes up.
 favor kettle-band town="Kettle Harbor" at=2 done="Kettle Harbor has hung bunting by the harbor and got the town band out to play for you. Go and hear them!" {
@@ -873,6 +881,19 @@ favor palm-vane town="Palm Ring" at=4 done="Palm Ring put a golden dragon weathe
 
 // Night lights: six little things that only come out after dark, glowing softly where
 // they lie. Find them all and Lantern Hollow lights up for a night festival.
+// Five singing things tucked away in hidden caves. Each one rings like wind chimes
+// until it is found, so they are found by ear: follow the sound, louder and to one side.
+set rock-songs name="Songs in the rock" done="All five singing things are found! Stonehold's musicians have learned every one of their songs, and they're playing them in the market square. Go and listen." {
+    lanterns x1=-1842 z1=-4264 h1=6 x2=-1812 z2=-4264 h2=6
+    folk name="Fiddler Bram" x=-1832 z=-4262 facing=180 look=6 line="Five songs from five caves! This one's from the tarn. It goes round and round like a whirlpool."
+    folk name="Piper Wren" x=-1822 z=-4262 facing=180 look=1 line="I play the harp's song on my pipe. It's harder than it sounds. Well, it sounds lovely, so it's very hard."
+}
+find song-tarn kind=bell set=rock-songs sound="chimes" name="The Tarn Bell" x=-2450 y=462 z=-360 hint="High on the home island, a little bell rings in the rock by the crater tarn. Listen for it." story="A silver bell no bigger than a thimble. It rings by itself whenever the wind finds its way in."
+find song-gull kind=harp set=rock-songs sound="chimes" name="The Gull Nook Harp" x=-2400 y=125 z=-715 hint="In a gull cave high in the home island's north cliffs, a little harp plays to itself. Listen for it." story="Its strings are thin as spider silk. The breeze through the nook plays it better than any harpist."
+find song-hollow kind=music-box set=rock-songs sound="chimes" name="The Hollow Music Box" x=-4450 y=38 z=4050 hint="Inside one of the Needles, in a hollow room, a music box is still playing. Listen for it." story="Wound up a hundred years ago and it has never run down. Nobody knows the name of the tune."
+find song-fang kind=bell set=rock-songs sound="chimes" name="The Glass Bell" x=3400 y=190 z=2585 hint="In one of the little nooks along Fang's north cliffs, a glass bell chimes. Listen for it." story="Clear as an icicle and just as cold. Its note makes the gulls stop and listen."
+find song-strait kind=shell set=rock-songs sound="chimes" name="The Singing Shell" x=-1900 y=150 z=-4720 hint="Inside the elder twin, in the old stone hall, a shell sings to the ruins. Listen for it." story="Hold it to your ear and it sings, not the sea, but a little tune. The sea taught it."
+
 set night-lights name="Night lights" done="All six night lights are found! Lantern Hollow is having a night festival, with lanterns strung all through the hollow. Go and see after dark." {
     lanterns x1=-1778 z1=1149 h1=6 x2=-1750 z2=1149 h2=6
     lanterns x1=-1778 z1=1155 h1=6 x2=-1750 z2=1155 h2=6

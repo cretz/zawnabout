@@ -5,7 +5,7 @@ use glam::{Quat, Vec2, Vec3};
 
 use crate::cave::{self, BEACON_RIM, BEACON_TOP, Part};
 use crate::shape::{Block, Frustum, Shape, place, spire_tiers};
-use crate::terrain::{CoverKind, Density, Mark, Style, Terrain, Trees};
+use crate::terrain::{CoverKind, Density, Flowers, Mark, Style, Terrain, Trees};
 use crate::town::{self, Building, Kind};
 use crate::traffic::Traffic;
 
@@ -1572,9 +1572,16 @@ impl World {
                     });
                 }
                 CoverKind::Meadow => {
+                    let (first, kinds) = cover.flowers.variants();
+                    // A mixed meadow is a famous sight, so it blooms nearly everywhere.
+                    let bare = if cover.flowers == Flowers::Mixed {
+                        0.85
+                    } else {
+                        0.55
+                    };
                     Self::scatter(&mut rng, cover.pts, 40.0, |rng, cx, cz| {
-                        let v = (rng.next_u64() % 4) as u8;
-                        if rng.f32() > 0.55 || !mine(cx, cz) {
+                        let v = first + (rng.next_u64() % kinds as u64) as u8;
+                        if rng.f32() > bare || !mine(cx, cz) {
                             return;
                         }
                         for _ in 0..10 {

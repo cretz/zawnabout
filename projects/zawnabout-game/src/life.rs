@@ -129,6 +129,9 @@ pub struct Life {
     horse: MeshId,
     dog: MeshId,
     body: MeshId,
+    /// A body with one arm, and the other arm, for waving at the dragon.
+    body_waving: MeshId,
+    arm: MeshId,
     /// Body and head as two boxes, for afar.
     body_far: MeshId,
     heads: [MeshId; 3],
@@ -161,6 +164,11 @@ impl Life {
     /// The townsfolk meshes, body and heads, for others to draw people with.
     pub fn people(&self) -> (MeshId, [MeshId; 3]) {
         (self.body, self.heads)
+    }
+
+    /// A gull, which tinted brown makes a goose.
+    pub fn gull(&self) -> MeshId {
+        self.gull
     }
 
     /// A person seen from afar, standing in for body and head.
@@ -541,6 +549,8 @@ impl Life {
             horse: renderer.add_mesh(&models::horse()),
             dog: renderer.add_mesh(&models::dog()),
             body: renderer.add_mesh(&models::townsfolk_body()),
+            body_waving: renderer.add_mesh(&models::townsfolk_body_waving()),
+            arm: renderer.add_mesh(&models::townsfolk_arm()),
             body_far: renderer.add_mesh(&models::townsfolk_far()),
             heads: [0, 1, 2].map(|v| renderer.add_mesh(&models::townsfolk_head(v))),
             dolphin: renderer.add_mesh(&models::dolphin()),
@@ -553,6 +563,7 @@ impl Life {
         &self,
         world: &World,
         cam: Vec3,
+        dragon: Vec3,
         time: f32,
         sim_time: f32,
         night: f32,
@@ -857,13 +868,29 @@ impl Life {
                 continue;
             };
             let p = Vec2::new(at.x, at.z);
+            // Most turn and wave when the dragon comes by low or lands close.
+            let to = Vec2::new(dragon.x, dragon.z) - p;
+            let up = dragon.y - at.y;
+            let waving = to.length() < 35.0 && (-4.0..30.0).contains(&up) && hash(s + 11) < 0.7;
+            let face = if waving { to } else { toward };
             let m = Mat4::from_scale_rotation_translation(
                 Vec3::splat(0.95 + hash(s + 2) * 0.15),
-                Quat::from_rotation_y(toward.x.atan2(toward.y)),
+                Quat::from_rotation_y(face.x.atan2(face.y)),
                 at,
             );
             let shirt = linear(SHIRTS[(hash(s + 3) * 8.0) as usize % 8]);
-            draws.push((self.body, Instance::tinted(m, shirt.extend(1.0))));
+            let tint = Instance::tinted(m, shirt.extend(1.0));
+            if waving {
+                let wave = 2.6 + (time * 9.0 + s as f32).sin() * 0.35;
+                let arm = m * Mat4::from_rotation_translation(
+                    Quat::from_rotation_z(-wave),
+                    Vec3::new(-0.27, 1.38, 0.0),
+                );
+                draws.push((self.body_waving, tint));
+                draws.push((self.arm, Instance::tinted(arm, shirt.extend(1.0))));
+            } else {
+                draws.push((self.body, tint));
+            }
             draws.push((self.heads[w.kind as usize % 3], Instance::new(m)));
             // Underground, many carry a lantern, swinging as they go.
             if w.under.is_some() && hash(s + 9) < 0.5 {

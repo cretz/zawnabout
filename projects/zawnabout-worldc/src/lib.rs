@@ -151,6 +151,7 @@ struct Cover {
     kind: &'static str,
     density: &'static str,
     trees: &'static str,
+    flowers: &'static str,
     pts: Vec<[f64; 2]>,
 }
 
@@ -819,6 +820,17 @@ impl Compiler {
                     "snowfield" => ("snow", "open", "pine"),
                     _ => ("town", "open", "round"),
                 };
+                let flowers = if name == "meadow" {
+                    self.word(
+                        ctx,
+                        node,
+                        "flowers",
+                        &["garden", "poppy", "lupine", "daisy", "hibiscus", "mixed"],
+                        "garden",
+                    )
+                } else {
+                    "garden"
+                };
                 let pts = self.outline(ctx, node, 0.0, seed);
                 if name == "city" || name == "village" {
                     let tech = self.word(
@@ -868,6 +880,7 @@ impl Compiler {
                         kind,
                         density,
                         trees,
+                        flowers,
                         pts,
                     });
                 }
@@ -1614,11 +1627,12 @@ impl Compiler {
             };
             let _ = writeln!(
                 s,
-                "Cover {{ id: {:?}, kind: CoverKind::{}, density: Density::{}, trees: Trees::{}, pts: &[{}] }},",
+                "Cover {{ id: {:?}, kind: CoverKind::{}, density: Density::{}, trees: Trees::{}, flowers: Flowers::{}, pts: &[{}] }},",
                 c.id,
                 cap(c.kind),
                 cap(c.density),
                 cap(c.trees),
+                cap(c.flowers),
                 p2(&c.pts)
             );
         }

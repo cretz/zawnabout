@@ -942,28 +942,14 @@ fn building(
             }
         }
         Kind::Crane => {
+            // Only the tower. The jib turns, so park life draws it with its load.
             for p in [&mut n, &mut f] {
                 p.cube(
                     Vec3::new(0.0, h * 0.5, 0.0),
                     Vec3::new(1.2, h * 0.5, 1.2),
                     Rgb(0xF2B134),
                 );
-                p.cube(
-                    Vec3::new(0.0, h + 1.0, d * 0.35),
-                    Vec3::new(0.8, 0.8, d * 0.6),
-                    Rgb(0xF2B134),
-                );
-                p.cube(
-                    Vec3::new(0.0, h + 0.5, -d * 0.2),
-                    Vec3::new(1.6, 1.6, 2.0),
-                    STEEL,
-                );
             }
-            n.cube(
-                Vec3::new(0.0, h * 0.6, d * 0.85),
-                Vec3::new(0.08, h * 0.4, 0.08),
-                STEEL,
-            );
         }
         Kind::Hull => {
             for p in [&mut n, &mut f] {

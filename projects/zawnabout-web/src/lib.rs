@@ -22,6 +22,11 @@ mod web {
         /// The world's sound, filled in by the page's audio node once it starts.
         synth: zawnabout_game::audio::Synth,
         sound: bool,
+        /// Milliseconds from handing the last finished frame to the GPU until it was
+        /// done, waits included, as `f64` bits. Below zero once taken.
+        gpu: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        /// Whether the last frame was drawn, not kept from the one before.
+        drew: bool,
     }
 
     #[wasm_bindgen]
@@ -63,7 +68,8 @@ mod web {
                 color_space: wgpu::SurfaceColorSpace::Auto,
             };
             surface.configure(&device, &config);
-            let game = Game::new(seed as u64);
+            let mut game = Game::new(seed as u64);
+            game.scales = true;
             let gfx = Gfx::new(Renderer::new(device, queue, view_format, size), &game);
             Ok(App {
                 game,
@@ -74,6 +80,8 @@ mod web {
                 logs: Vec::new(),
                 synth: zawnabout_game::audio::Synth::new(),
                 sound: false,
+                gpu: std::sync::Arc::new((-1.0f64).to_bits().into()),
+                drew: false,
             })
         }
 
@@ -100,16 +108,16 @@ mod web {
                     self.script = None;
                 }
             }
+            self.gfx.frame_gap(dt);
             zawnabout_game::prof::begin_frame();
+            let start = zawnabout_game::prof::clock();
             zawnabout_game::prof::time("sim", || self.game.advance(dt));
             let frame = self.gfx.prepare(&self.game);
+            self.drew = false;
             // Halted with nothing new to show, the canvas keeps the last picture.
             if self.gfx.unchanged(&self.game, &frame) {
                 zawnabout_game::prof::end_frame();
-                return host.join(
-                    "
-",
-                );
+                return host.join("\n");
             }
             // Getting the next picture to draw into can wait on the GPU, so it is timed too.
             let next = zawnabout_game::prof::time("acquire", || self.surface.get_current_texture());
@@ -129,7 +137,19 @@ mod web {
             });
             zawnabout_game::prof::time("encode", || self.gfx.renderer.render(&view, &frame));
             zawnabout_game::prof::time("present", || self.gfx.renderer.queue.present(tex));
+            // From handing the frame over to the GPU being done with it, waits included.
+            let (sent, gpu) = (zawnabout_game::prof::clock(), self.gpu.clone());
+            self.gfx.renderer.queue.on_submitted_work_done(move || {
+                let took = zawnabout_game::prof::clock() - sent;
+                zawnabout_game::prof::add("gpu", took);
+                gpu.store(
+                    (took * 1000.0).to_bits(),
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+            });
+            self.drew = true;
             zawnabout_game::prof::end_frame();
+            self.gfx.frame_took(zawnabout_game::prof::clock() - start);
             // A postcard's view: the page reads the canvas and hands it to `take_snap`.
             if self.game.wants_snap() {
                 host.push("snap".into());
@@ -150,6 +170,31 @@ mod web {
         /// frame's parts.
         pub fn perf_report(&self) -> String {
             zawnabout_game::prof::report()
+        }
+
+        /// Whether the last call to [`App::frame`] drew, not kept the picture as it was.
+        pub fn drew(&self) -> bool {
+            self.drew
+        }
+
+        /// How long the GPU took over the latest frame it finished, in milliseconds, once.
+        /// Below zero when no frame has finished since it was last asked.
+        pub fn take_gpu(&self) -> f64 {
+            f64::from_bits(
+                self.gpu
+                    .swap((-1.0f64).to_bits(), std::sync::atomic::Ordering::Relaxed),
+            )
+        }
+
+        /// How many times more pixels across the screen would have at full sharpness than
+        /// the canvas has, so the HUD keeps its size.
+        pub fn set_ui_scale(&mut self, k: f32) {
+            self.game.ui_scale = k;
+        }
+
+        /// The sharpness picked in Settings: `auto`, `sharp`, `balanced` or `fast`.
+        pub fn sharpness(&self) -> String {
+            zawnabout_game::book::SHARPNESS[self.game.sharpness].to_lowercase()
         }
 
         /// Draws the next frame even when halted with nothing new, for a screenshot.
@@ -379,6 +424,21 @@ mod web {
         /// `map::places`).
         pub fn map_places(&self) -> String {
             zawnabout_game::map::places(&self.game.sim.world.terrain)
+        }
+
+        /// The lairs, one a line: `home` for the one the hoard is in, else `lair`, then
+        /// its id, x, z and name. None with gameplay off.
+        pub fn map_lairs(&self) -> String {
+            let Some(play) = &self.game.play else {
+                return String::new();
+            };
+            zawnabout_game::play::lairs(play)
+                .into_iter()
+                .map(|(id, name, at, home)| {
+                    let kind = if home { "home" } else { "lair" };
+                    format!("{kind} {id} {:.0} {:.0} {name}\n", at.x, at.z)
+                })
+                .collect()
         }
 
         /// What the map arrow shows: x, z and heading of the dragon, or of the camera in

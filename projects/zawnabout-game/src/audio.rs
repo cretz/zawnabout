@@ -1,6 +1,7 @@
 //! Sound, all made here from noise and simple tones, no recordings: wind that rises with
 //! speed and height, surf along the shore, rain, waterfalls, the murmur of towns,
-//! birdsong over the land by day, church bells on the hour, a fairground organ, and
+//! birdsong over the land by day, church bells on the hour, a fairground organ, wind
+//! chimes by finds hidden away (heard off to one side, so they can be found by ear), and
 //! thunder that follows the lightning late by the speed of sound.
 //!
 //! [`Listener`] runs with the game and says what can be heard this frame, as a [`Mix`].
@@ -23,6 +24,9 @@ pub struct Mix {
     pub bustle: f32,
     pub birds: f32,
     pub organ: f32,
+    /// Wind chimes, and which way they are: -1 all left, 1 all right.
+    pub chimes: f32,
+    pub chime_pan: f32,
     /// Everything at once: 0 when the sound is off.
     pub master: f32,
     pub events: Vec<Event>,
@@ -122,6 +126,21 @@ impl Listener {
             // Loud only right by the falls, falling away fast.
             .map(|(p, w)| near(p.distance(cam), 15.0 + w, 90.0 + w * 3.0).powi(2))
             .fold(0.0f32, f32::max);
+        // The nearest wind chimes still ringing, heard from 200 m, and which side.
+        let (chimes, chime_pan) = game
+            .play
+            .as_ref()
+            .map(crate::play::chimes)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|c| (c.distance(cam), c))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map_or((0.0, 0.0), |(d, c)| {
+                let fwd = game.camera.look - cam;
+                let right = fwd.cross(Vec3::Y).normalize_or_zero();
+                let pan = right.dot((c - cam).normalize_or_zero());
+                (near(d, 10.0, 200.0), pan)
+            });
         let day = 1.0 - sky.night;
         let land = (ground > world.terrain.def.sea_level + 1.0) as u8 as f32;
 
@@ -141,6 +160,8 @@ impl Listener {
             // Falling away with distance like a real sound, faint from a few hundred
             // meters and gone past 600.
             organ: (40.0 / fair.max(40.0)).powf(1.5) * near(fair, 300.0, 600.0) * outside,
+            chimes,
+            chime_pan,
             // Silent while muted or paused.
             master: if game.muted || game.paused { 0.0 } else { 1.0 },
             events: Vec::new(),
@@ -251,6 +272,11 @@ pub struct Synth {
     voices: Vec<Voice>,
     /// The next chirp: when it starts (s) and its pitch.
     chirp: (f64, f32, u32),
+    /// Wind chimes: their level and side, gliding, when the next one rings, and the
+    /// ones ringing now, each by when it was struck and its pitch.
+    chime: (f32, f32),
+    next_chime: f64,
+    rings: [(f64, f32); 5],
     pub volume: f32,
 }
 
@@ -271,6 +297,9 @@ impl Synth {
             time: 0.0,
             voices: Vec::new(),
             chirp: (0.5, 3000.0, 3),
+            chime: (0.0, 0.0),
+            next_chime: 0.0,
+            rings: [(-10.0, 880.0); 5],
             volume: 0.6,
         }
     }
@@ -304,6 +333,7 @@ impl Synth {
         let goal = [
             m.wind, m.rush, m.surf, m.rain, m.falls, m.bustle, m.birds, m.organ,
         ];
+        let (chimes, chime_pan) = (m.chimes, m.chime_pan);
         let c = |hz: f32| coef(hz, rate);
         for frame in out.chunks_mut(2) {
             for (n, g) in self.now.iter_mut().zip(goal) {
@@ -386,6 +416,35 @@ impl Synth {
                     r += s;
                 }
             }
+            // Wind chimes: bell-like notes from a pentatonic scale, struck now and then,
+            // off to the side they are on.
+            self.chime.0 += (chimes - self.chime.0) * glide;
+            self.chime.1 += (chime_pan - self.chime.1) * glide;
+            if self.chime.0 > 0.005 {
+                if self.time >= self.next_chime {
+                    const SCALE: [f32; 7] = [0.0, 2.0, 4.0, 7.0, 9.0, 12.0, 14.0];
+                    let (a, b) = (self.noise() * 0.5 + 0.5, self.noise() * 0.5 + 0.5);
+                    let semi = SCALE[(a * 6.99) as usize];
+                    let oldest = (0..self.rings.len())
+                        .min_by(|x, y| self.rings[*x].0.total_cmp(&self.rings[*y].0))
+                        .unwrap_or(0);
+                    self.rings[oldest] = (self.time, 1046.5 * 2f32.powf(semi / 12.0));
+                    // Mostly little runs, now and then a pause.
+                    self.next_chime = self.time + 0.15 + (b * b) as f64 * 1.4;
+                }
+                let mut s = 0.0;
+                for (at, f) in self.rings {
+                    let p = (self.time - at) as f32;
+                    if p < 3.0 {
+                        let ph = std::f32::consts::TAU * f * p;
+                        s += (ph.sin() + (ph * 2.76).sin() * 0.3) * (-p * 1.8).exp();
+                    }
+                }
+                let s = s * self.chime.0 * 0.09;
+                let pan = self.chime.1 * 0.5 + 0.5;
+                l += s * (1.2 - pan);
+                r += s * (0.2 + pan);
+            }
             // One-off sounds.
             let mut i = 0;
             while i < self.voices.len() {
@@ -464,6 +523,8 @@ mod tests {
             bustle: 1.0,
             birds: 1.0,
             organ: 1.0,
+            chimes: 1.0,
+            chime_pan: 0.5,
             master: 1.0,
             events: vec![
                 Event::Thunder {
@@ -494,8 +555,8 @@ mod levels {
     #[test]
     #[cfg(feature = "probes")]
     fn each_sound_alone() {
-        for k in 0..8 {
-            let mut v = [0.0f32; 8];
+        for k in 0..9 {
+            let mut v = [0.0f32; 9];
             v[k] = 1.0;
             let mut s = Synth::new();
             s.set(Mix {
@@ -507,6 +568,8 @@ mod levels {
                 bustle: v[5],
                 birds: v[6],
                 organ: v[7],
+                chimes: v[8],
+                chime_pan: 0.0,
                 master: 1.0,
                 events: Vec::new(),
             });
@@ -515,7 +578,7 @@ mod levels {
             let tail = &out[48_000 * 2..];
             let rms = (tail.iter().map(|x| x * x).sum::<f32>() / tail.len() as f32).sqrt();
             let name = [
-                "wind", "rush", "surf", "rain", "falls", "bustle", "birds", "organ",
+                "wind", "rush", "surf", "rain", "falls", "bustle", "birds", "organ", "chimes",
             ][k];
             println!("{name:7} rms {rms:.3}");
         }

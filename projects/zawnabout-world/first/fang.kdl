@@ -108,6 +108,14 @@ forest fang-jungle kind=rain trees=jungle {
     p -1150 300
     p -1000 -500
 }
+meadow hibiscus-shore flowers=hibiscus {
+    note "Hibiscus on the open northwest slopes, where the jungle stops."
+    p -1080 -560
+    p -1010 -860
+    p -760 -880
+    p -700 -740
+    p -880 -600
+}
 
 village canopy style=stilts tech=simple {
     note "Stilt houses over the water, along the creek and on platforms in the trees. Lanterns, few machines."
@@ -183,11 +191,11 @@ route fang-gondola kind=gondola {
     p 985 -200
 }
 
-dugout fang-nook-1 x=-500 y=60 z=-930 facing=north r=22
-dugout fang-nook-2 x=-200 y=140 z=-1090 facing=north r=22
-dugout fang-nook-3 x=250 y=90 z=-1080 facing=north r=22
-dugout fang-nook-4 x=550 y=120 z=-1150 facing=north r=22
-dugout fang-nook-5 x=-850 y=40 z=-760 facing=north r=22
+dugout fang-nook-1 x=-500 y=257 z=-550 facing=north r=22
+dugout fang-nook-2 x=-200 y=178 z=-730 facing=north r=22
+dugout fang-nook-3 x=250 y=269 z=-730 facing=north r=22
+dugout fang-nook-4 x=550 y=31 z=-1185 facing=north r=22
+dugout fang-nook-5 x=-850 y=22 z=0 facing=north r=22
 dugout fang-nook-6 x=1100 y=60 z=-650 facing=east r=22
 
 landmark deep-camp kind=campsite x=300 y=-800 z=300 rot=15 {

@@ -148,12 +148,48 @@ pub enum Trees {
     Jungle,
 }
 
+/// The wildflowers a meadow grows. Each kind is a run of flower prop variants.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flowers {
+    /// Mixed little five petal flowers, pink, yellow, white and lilac.
+    Garden,
+    /// Red and orange cups.
+    Poppy,
+    /// Tall purple and pink spikes.
+    Lupine,
+    /// White and yellow rays round a gold eye.
+    Daisy,
+    /// Big red and pink trumpets, for warm islands.
+    Hibiscus,
+    /// Every kind at once.
+    Mixed,
+}
+
+impl Flowers {
+    /// The first flower prop variant of this kind and how many there are.
+    pub fn variants(self) -> (u8, u8) {
+        match self {
+            Flowers::Garden => (0, 4),
+            Flowers::Poppy => (4, 2),
+            Flowers::Lupine => (6, 2),
+            Flowers::Daisy => (8, 2),
+            Flowers::Hibiscus => (10, 2),
+            Flowers::Mixed => (0, FLOWER_VARIANTS),
+        }
+    }
+}
+
+/// How many flower prop variants there are, over all kinds.
+pub const FLOWER_VARIANTS: u8 = 12;
+
 #[derive(Debug)]
 pub struct Cover {
     pub id: &'static str,
     pub kind: CoverKind,
     pub density: Density,
     pub trees: Trees,
+    /// What a meadow grows. Other covers keep the default and ignore it.
+    pub flowers: Flowers,
     pub pts: &'static [[f32; 2]],
 }
 

@@ -28,6 +28,85 @@ struct DragonIds {
     star: MeshId,
 }
 
+impl DragonIds {
+    fn add(r: &mut Renderer, m: &models::DragonMeshes) -> Self {
+        Self {
+            body: r.add_mesh(&m.body),
+            neck: r.add_mesh(&m.neck),
+            head: r.add_mesh(&m.head),
+            eye: r.add_mesh(&m.eye),
+            tail: r.add_mesh(&m.tail),
+            plume: r.add_mesh(&m.plume),
+            whisker: r.add_mesh(&m.whisker),
+            mane: r.add_mesh(&m.mane),
+            leg: r.add_mesh(&m.leg),
+            arm: [r.add_mesh(&m.arm[0]), r.add_mesh(&m.arm[1])],
+            hand: [r.add_mesh(&m.hand[0]), r.add_mesh(&m.hand[1])],
+            star: r.add_mesh(&m.star),
+        }
+    }
+
+    fn free(self, r: &mut Renderer) {
+        for id in [
+            self.body,
+            self.neck,
+            self.head,
+            self.eye,
+            self.tail,
+            self.plume,
+            self.whisker,
+            self.mane,
+            self.leg,
+            self.arm[0],
+            self.arm[1],
+            self.hand[0],
+            self.hand[1],
+            self.star,
+        ] {
+            r.free_mesh(id);
+        }
+    }
+
+    /// The model drawn for `part`.
+    fn builder(m: &models::DragonMeshes, part: Part) -> &crate::mesh::MeshBuilder {
+        match part {
+            Part::Body => &m.body,
+            Part::Neck(_) => &m.neck,
+            Part::Head => &m.head,
+            Part::Eye => &m.eye,
+            Part::Tail(_) => &m.tail,
+            Part::Plume => &m.plume,
+            Part::Whisker => &m.whisker,
+            Part::Mane => &m.mane,
+            Part::Leg => &m.leg,
+            Part::Arm(i) => &m.arm[i],
+            Part::Hand(i) => &m.hand[i],
+            Part::Star => &m.star,
+        }
+    }
+}
+
+/// Where a worn hoard find sits on the head, in the head's own frame: a crown or hat
+/// between the horns, a rosette by the ear, a medal under the chin, a gem on the brow.
+fn wear_at(kind: &str) -> Mat4 {
+    let (at, scale, turn) = match kind {
+        "crown" => (Vec3::new(0.0, 0.62, 0.3), 0.5, Quat::IDENTITY),
+        "hat" => (
+            Vec3::new(0.0, 0.6, 0.32),
+            0.62,
+            Quat::from_rotation_x(-0.12),
+        ),
+        "ribbon" => (
+            Vec3::new(0.42, 0.42, 0.22),
+            0.42,
+            Quat::from_rotation_z(-1.2),
+        ),
+        "medal" => (Vec3::new(0.0, -0.3, 0.5), 0.55, Quat::IDENTITY),
+        _ => (Vec3::new(0.0, 0.6, 0.66), 0.4, Quat::IDENTITY),
+    };
+    Mat4::from_scale_rotation_translation(Vec3::splat(scale), turn, at)
+}
+
 pub struct Gfx {
     pub renderer: Renderer,
     /// What the last frame drawn while the game was halted showed: nothing moves then,
@@ -39,10 +118,21 @@ pub struct Gfx {
     heap: MeshId,
     /// The postcard pictures in the atlas, as of this version of them.
     pics_version: u32,
+    /// Which version of the player's look the dragon meshes and portrait show, and
+    /// what it wore then.
+    look_version: Option<(u32, Option<String>)>,
     /// Talk bubbles: plain, and for someone with a favor.
     bubbles: [MeshId; 2],
     /// The journal on its stand in the lair.
     lectern: MeshId,
+    /// Postcards pinned up in the lair, three pictures, and the board they go on.
+    postcards: [MeshId; 3],
+    pinboard: MeshId,
+    /// The ghost ship, drawn see-through on its happening's nights.
+    ghost_ship: MeshId,
+    /// Spots on the lair's floor along its walls, found once for the lair at this spot:
+    /// each where it stands and the way it faces.
+    lair_walls: std::cell::RefCell<Option<(Vec3, Walls)>>,
     /// Bunting flags, paper lanterns and their poles, for what finished sets bring.
     flag: MeshId,
     paper_lantern: MeshId,
@@ -89,6 +179,9 @@ pub struct Gfx {
     far_tufts: std::cell::RefCell<Lawn>,
     /// One mesh per vehicle, in the order of the sim's traffic.
     vehicles: Vec<MeshId>,
+    /// Each vehicle's daylight and where it was found, kept until it moves on a little,
+    /// as finding it means the ground height there.
+    vehicle_day: std::cell::RefCell<Vec<(Vec3, f32)>>,
     /// Every lamp's head and foot, and whether it is underground where it always burns.
     lamps: Vec<(Vec3, Vec3, bool)>,
     /// Every landmark's lamps and bulbs: where, how big, whether they burn all day, and
@@ -98,6 +191,14 @@ pub struct Gfx {
     /// Terrain chunk steps per frame at most. Steps stop sooner once
     /// [`CHUNK_SECS`] have gone by.
     pub chunk_budget: usize,
+    /// How long the rest of a frame has been taking besides building terrain (s), as the
+    /// host says with [`Gfx::frame_took`], and how long terrain took in the last one.
+    rest: f64,
+    terrain_took: f64,
+    /// How far grass reaches, as a share of its full reach. So many tufts are a lot for a
+    /// slow device to draw, so they draw in while frames come slow, as the host says with
+    /// [`Gfx::frame_gap`], and back out once they are quick again.
+    grass_reach: f32,
     /// The HUD's world map, drawn on another thread the first time the HUD shows, and
     /// whether it is in the atlas yet.
     hud_map: (Option<std::sync::mpsc::Receiver<Vec<u8>>>, bool),
@@ -188,10 +289,15 @@ fn wall_lamps(world: &zawnabout_sim::World) -> impl Iterator<Item = (Vec3, Vec3,
         })
 }
 
-/// Props are batched per square of this size (m), so far squares can be skipped.
 /// Time a frame spends building terrain before leaving the rest for the next (s). At
 /// least one step always runs, so terrain keeps coming on any device.
 const CHUNK_SECS: f64 = 0.004;
+/// The least of that a slow frame still gives terrain (s).
+const CHUNK_SECS_LEAST: f64 = 0.001;
+/// How long a whole frame should take to work out at most (s), leaving room in a 60 Hz
+/// frame for the browser and the GPU.
+const FRAME_AIM: f64 = 0.012;
+/// Props are batched per square of this size (m), so far squares can be skipped.
 const PROP_TILE: f32 = 1024.0;
 const CLOUD_TILE: f32 = 3000.0;
 /// Tiles per side of a far group, and how far out (times the detail range) the group
@@ -740,6 +846,9 @@ impl Gfx {
             .collect();
         let star = renderer.add_mesh(&crate::treasure::star());
         let lectern = renderer.add_mesh(&crate::treasure::lectern());
+        let postcards = [0, 1, 2].map(|v| renderer.add_mesh(&crate::treasure::postcard(v)));
+        let pinboard = renderer.add_mesh(&crate::treasure::pinboard());
+        let ghost_ship = renderer.add_mesh(&crate::treasure::ghost_ship());
         let flag = renderer.add_mesh(&crate::treasure::flag());
         let paper_lantern = renderer.add_mesh(&crate::treasure::paper_lantern());
         let pole = renderer.add_mesh(&crate::treasure::pole());
@@ -854,21 +963,7 @@ impl Gfx {
                 )
             })
             .collect();
-        let m = models::dragon();
-        let dragon = DragonIds {
-            body: renderer.add_mesh(&m.body),
-            neck: renderer.add_mesh(&m.neck),
-            head: renderer.add_mesh(&m.head),
-            eye: renderer.add_mesh(&m.eye),
-            tail: renderer.add_mesh(&m.tail),
-            plume: renderer.add_mesh(&m.plume),
-            whisker: renderer.add_mesh(&m.whisker),
-            mane: renderer.add_mesh(&m.mane),
-            leg: renderer.add_mesh(&m.leg),
-            arm: [renderer.add_mesh(&m.arm[0]), renderer.add_mesh(&m.arm[1])],
-            hand: [renderer.add_mesh(&m.hand[0]), renderer.add_mesh(&m.hand[1])],
-            star: renderer.add_mesh(&m.star),
-        };
+        let dragon = DragonIds::add(&mut renderer, &models::dragon());
         let mut gfx = Self {
             renderer,
             dragon,
@@ -878,8 +973,13 @@ impl Gfx {
             star,
             heap,
             pics_version: 0,
+            look_version: None,
             bubbles,
             lectern,
+            postcards,
+            pinboard,
+            ghost_ship,
+            lair_walls: Default::default(),
             flag,
             paper_lantern,
             pole,
@@ -908,9 +1008,13 @@ impl Gfx {
             plug,
             tufts: std::cell::RefCell::new(Lawn::default()),
             far_tufts: std::cell::RefCell::new(Lawn::default()),
+            vehicle_day: Default::default(),
             falls: crate::water::falls_feet(&game.sim.world.terrain),
             listener: crate::audio::Listener::new(game),
             chunk_budget: 12,
+            rest: 0.0,
+            terrain_took: 0.0,
+            grass_reach: 1.0,
             still: None,
             hud_map: (None, false),
             book_map: None,
@@ -1060,6 +1164,16 @@ impl Gfx {
                     Instance::tinted(*m, tint.truncate().extend(tint.w * day)),
                 )
             }));
+            // Something from the hoard, worn on the head.
+            if let Some(kind) = &self.look_version.as_ref().and_then(|v| v.1.clone())
+                && let Some((_, head, _)) = parts.iter().find(|(p, _, _)| *p == Part::Head)
+                && let Some((_, mesh)) = self.treasures.iter().find(|(k, _)| k == kind)
+            {
+                draws.push((
+                    *mesh,
+                    Instance::tinted(*head * wear_at(kind), Vec4::new(1.0, 1.0, 1.0, day)),
+                ));
+            }
             let ground = world.support(pos.x, pos.z, pos.y);
             let height = (pos.y - ground).max(0.0);
             let normal = world.ground_normal(pos.x, pos.z);
@@ -1220,6 +1334,7 @@ impl Gfx {
                 self.life.draw(
                     world,
                     game.camera.pos,
+                    game.player_dragon().pos,
                     t,
                     sim_time,
                     night,
@@ -1393,12 +1508,17 @@ impl Gfx {
                     muted: game.muted,
                     pause_away: game.pause_away,
                     hold_hour: game.hold_hour,
+                    sharpness: game.scales.then_some(game.sharpness),
                     touch: game.touch,
                     hud: game.hud.on,
                     map: game.map_view(),
+                    look: &game.dragon_look,
+                    wearables: game.wearables(),
                 };
+                let (w, h) = self.renderer.size();
+                let k = game.ui_scale;
                 game.hud.build(
-                    self.renderer.size(),
+                    ((w as f32 * k).round() as u32, (h as f32 * k).round() as u32),
                     glam::Vec2::new(d.pos.x, d.pos.z),
                     d.heading,
                     game.sim.world.terrain.def.bounds,
@@ -1450,6 +1570,75 @@ impl Gfx {
     /// What finished sets bring: people come out, bunting and lanterns go up.
     /// A fireworks show over `top`: rockets climb, burst into rings of colored stars
     /// that drift down and fade, one after another on their own beats.
+    /// A skein of geese in a V, flying a slow loop `r` round `mid`, the dragon free to
+    /// fly along. Their wings beat together, a little out of step down the line.
+    fn geese(&self, mid: Vec3, r: f32, t: f32, day: f32, draws: &mut Vec<(MeshId, Instance)>) {
+        const SPEED: f32 = 15.0;
+        let a = t * SPEED / r;
+        let lead = mid + Vec3::new(a.cos() * r, (t * 0.2).sin() * 4.0, a.sin() * r);
+        let fwd = Vec3::new(-a.sin(), 0.0, a.cos());
+        let side = Vec3::new(-fwd.z, 0.0, fwd.x);
+        let heading = fwd.x.atan2(fwd.z);
+        let brown = Vec4::new(0.55, 0.5, 0.42, day);
+        for k in 0..11u32 {
+            let row = k.div_ceil(2) as f32;
+            let wing = if k % 2 == 0 { 1.0 } else { -1.0 };
+            let at = lead - fwd * row * 2.6 + side * wing * row * 2.4;
+            let flap = 0.35 + 0.65 * (t * 5.0 - row * 0.5).sin();
+            let m = Mat4::from_scale_rotation_translation(
+                Vec3::new(1.0, flap, 1.0) * 1.8,
+                Quat::from_rotation_y(heading),
+                at,
+            );
+            draws.push((self.life.gull(), Instance::tinted(m, brown)));
+        }
+    }
+
+    /// The ghost ship: pale and see-through, swinging slowly round its anchor at `mid`
+    /// `r` away, rocking on the swell, lanterns glowing green-gold at bow, stern and
+    /// mastheads. It fades in as night comes.
+    fn ghost_ship(
+        &self,
+        mid: Vec3,
+        r: f32,
+        t: f32,
+        night: f32,
+        cam: Vec3,
+        fx: &mut Vec<(MeshId, Instance)>,
+    ) {
+        let a = t * 0.01;
+        let at = mid + Vec3::new(a.cos() * r, 0.6 + (t * 0.5).sin() * 0.5, a.sin() * r);
+        // Bow into the wind, round the anchor.
+        let heading = (mid.x - at.x).atan2(mid.z - at.z);
+        let rock = Quat::from_rotation_z((t * 0.4).sin() * 0.05)
+            * Quat::from_rotation_x((t * 0.31).sin() * 0.03);
+        let turn = Quat::from_rotation_y(heading) * rock;
+        let see = (night * 1.4).min(1.0);
+        let m = Mat4::from_rotation_translation(turn, at);
+        fx.push((
+            self.ghost_ship,
+            Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, 0.28 * see)),
+        ));
+        const LANTERNS: [[f32; 3]; 6] = [
+            [0.0, 8.6, -14.6],
+            [0.0, 7.8, 23.6],
+            [0.0, 23.4, -7.0],
+            [0.0, 28.4, 1.0],
+            [0.0, 22.4, 9.0],
+            [0.0, 4.6, 16.4],
+        ];
+        for (k, l) in LANTERNS.iter().enumerate() {
+            let p = at + turn * Vec3::from(*l);
+            let flicker = 0.8 + 0.2 * (t * 3.0 + k as f32 * 1.7).sin();
+            let face = Quat::from_rotation_arc(Vec3::Y, (cam - p).normalize_or(Vec3::Y));
+            let s = Mat4::from_scale_rotation_translation(Vec3::splat(2.2), face, p);
+            fx.push((
+                self.star,
+                Instance::tinted(s, Vec4::new(1.4, 2.2, 1.0, flicker * see)),
+            ));
+        }
+    }
+
     fn fireworks(
         &self,
         top: Vec3,
@@ -1520,6 +1709,18 @@ impl Gfx {
             if e.kind == "fireworks" {
                 if night > 0.2 && e.a.distance(cam) < 4000.0 {
                     self.fireworks(e.a, e.id, t, night, cam, fx);
+                }
+                continue;
+            }
+            if e.kind == "ghostship" {
+                if night > 0.05 && e.a.distance(cam) < 3000.0 {
+                    self.ghost_ship(e.a, e.b.x - e.a.x, t, night, cam, fx);
+                }
+                continue;
+            }
+            if e.kind == "geese" {
+                if e.a.distance(cam) < 3000.0 {
+                    self.geese(e.a, e.b.x - e.a.x, t, world.terrain.daylight(e.a), draws);
                 }
                 continue;
             }
@@ -1843,8 +2044,42 @@ impl Gfx {
             let (x, z) = (heap.at.x - size - 2.2, heap.at.z);
             let m = Mat4::from_translation(Vec3::new(x, ground(x, z), z));
             draws.push((self.lectern, Instance::tinted(m, tint)));
-            // Treasures in rings round the heap, the newest furthest out.
-            for (k, kind) in heap.kinds.iter().enumerate() {
+            // Postcards go up on boards and paintings on stands, along the walls facing
+            // the heap. The rest stand in rings round it, the newest furthest out.
+            let hung = |k: &str| k == "painting";
+            let mut walls = self.lair_walls.borrow_mut();
+            if walls.as_ref().is_none_or(|(at, _)| *at != heap.at) {
+                *walls = Some((heap.at, lair_walls(&world.terrain, heap.at)));
+            }
+            let slots = &walls.as_ref().expect("walls").1;
+            let paintings = heap.kinds.iter().filter(|k| hung(k)).count();
+            let boards = heap.postcards.div_ceil(crate::treasure::BOARD_SPOTS.len());
+            let n = (paintings + boards).min(slots.len());
+            for i in 0..n {
+                // Spread out evenly, so a few things do not bunch up on one wall.
+                let (at, face) = slots[i * slots.len() / n];
+                let rot = Quat::from_rotation_y(face);
+                let foot = Vec3::new(at.x, ground(at.x, at.z), at.z);
+                if i < paintings {
+                    let m = Mat4::from_scale_rotation_translation(Vec3::splat(2.2), rot, foot);
+                    draws.push((model("painting"), Instance::tinted(m, tint)));
+                    continue;
+                }
+                let board = Mat4::from_scale_rotation_translation(Vec3::splat(1.5), rot, foot);
+                draws.push((self.pinboard, Instance::tinted(board, tint)));
+                let first = (i - paintings) * crate::treasure::BOARD_SPOTS.len();
+                for (k, (x, y)) in crate::treasure::BOARD_SPOTS.iter().enumerate() {
+                    let card = first + k;
+                    if card >= heap.postcards {
+                        break;
+                    }
+                    let tilt = Quat::from_rotation_z(((card * 7 % 5) as f32 - 2.0) * 0.03);
+                    let m = board * Mat4::from_rotation_translation(tilt, Vec3::new(*x, *y, 0.06));
+                    draws.push((self.postcards[card % 3], Instance::tinted(m, tint)));
+                }
+            }
+            let floor: Vec<&&str> = heap.kinds.iter().filter(|k| !hung(k)).collect();
+            for (k, kind) in floor.into_iter().enumerate() {
                 let ring = k / 10;
                 let a = (k % 10) as f32 / 10.0 * std::f32::consts::TAU + ring as f32 * 0.31;
                 let r = size * 1.1 + 1.6 + ring as f32 * 1.7;
@@ -1863,9 +2098,14 @@ impl Gfx {
     fn grass(&self, game: &Game, draws: &mut Vec<(MeshId, Instance)>) {
         let terrain = &game.sim.world.terrain;
         let cam = game.camera.pos;
-        if cam.y - terrain.height(cam.x, cam.z) > 90.0 {
+        // None high up, nor deep in a cave, where the lawns overhead cannot be seen.
+        let above = cam.y - terrain.height(cam.x, cam.z);
+        if !game.look.grass || !(-25.0..=90.0).contains(&above) {
             return;
         }
+        let until = crate::prof::clock() + LAWN_SECS;
+        // In steps, so the tufts are faded again only now and then as it changes.
+        let reach = (self.grass_reach * 20.0).round() / 20.0;
         // Thick close by, and a sparser ring of bigger tufts out to where the eye still
         // reads the ground as grass, so it never seems to start right underfoot.
         let rings = [
@@ -1874,10 +2114,12 @@ impl Gfx {
         ];
         for (cache, cell, step, inner, range, grow) in rings {
             let key = ((cam.x / cell).floor() as i32, (cam.z / cell).floor() as i32);
+            let (inner, range) = (inner * reach, range * reach);
             let mut cache = cache.borrow_mut();
-            if cache.key != key {
+            if cache.key != key || cache.reach != reach {
                 let lawn = &mut *cache;
                 lawn.key = key;
+                lawn.reach = reach;
                 lawn.out.clear();
                 let center = Vec2::new(key.0 as f32 + 0.5, key.1 as f32 + 0.5) * cell;
                 // Where tufts stand only depends on the ground, so each tile of them is
@@ -1890,12 +2132,33 @@ impl Gfx {
                     (tile(lo.x) - 1..=tile(hi.x) + 1).contains(&tx)
                         && (tile(lo.y) - 1..=tile(hi.y) + 1).contains(&tz)
                 });
-                for tz in tile(lo.y)..=tile(hi.y) {
-                    for tx in tile(lo.x)..=tile(hi.x) {
-                        let tufts = lawn
-                            .tiles
-                            .entry((tx, tz))
-                            .or_insert_with(|| lawn_tile(terrain, step, tx, tz));
+                // Nearest tiles first, and new ones only for a short while each frame:
+                // coming down low after flying high, a whole lawn at once would stall a
+                // slow device. The rest come in over the next frames.
+                let mut order: Vec<(i32, i32)> = (tile(lo.y)..=tile(hi.y))
+                    .flat_map(|tz| (tile(lo.x)..=tile(hi.x)).map(move |tx| (tx, tz)))
+                    .collect();
+                let mid =
+                    |(tx, tz): (i32, i32)| (Vec2::new(tx as f32, tz as f32) + 0.5) * side - center;
+                order.sort_by(|a, b| {
+                    mid(*a)
+                        .length_squared()
+                        .total_cmp(&mid(*b).length_squared())
+                });
+                let mut fresh = false;
+                for (tx, tz) in order {
+                    {
+                        if !lawn.tiles.contains_key(&(tx, tz)) {
+                            if fresh && crate::prof::clock() > until {
+                                // Come back next frame for the rest.
+                                lawn.key = (i32::MIN, i32::MIN);
+                                continue;
+                            }
+                            fresh = true;
+                            lawn.tiles
+                                .insert((tx, tz), lawn_tile(terrain, step, tx, tz));
+                        }
+                        let tufts = &lawn.tiles[&(tx, tz)];
                         for t in tufts.iter() {
                             let d = Vec2::new(t.at.x, t.at.z).distance(center);
                             if d > range || d < inner {
@@ -1925,6 +2188,8 @@ impl Gfx {
         let terrain = &game.sim.world.terrain;
         let time = (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT;
         let cam = game.camera.pos;
+        let mut days = self.vehicle_day.borrow_mut();
+        days.resize(traffic.vehicles.len(), (Vec3::splat(f32::MAX), 1.0));
         for (i, (v, mesh)) in traffic.vehicles.iter().zip(&self.vehicles).enumerate() {
             let range = if matches!(
                 v.kind,
@@ -1959,7 +2224,12 @@ impl Gfx {
                 p.pos.extend(1.0),
             );
             let m = basis * Mat4::from_rotation_z(p.pitch) * Mat4::from_rotation_x(p.bank);
-            let day = terrain.daylight(p.pos + Vec3::Y * 2.0);
+            let (at, day) = &mut days[i];
+            if at.distance_squared(p.pos) > 3.0 * 3.0 {
+                *at = p.pos;
+                *day = terrain.daylight(p.pos + Vec3::Y * 2.0);
+            }
+            let day = *day;
             if !open_air && day > 0.5 {
                 continue;
             }
@@ -2249,37 +2519,82 @@ impl Gfx {
                 .map(|k| {
                     let mut m = models::dragon();
                     m.recolor(k.tint);
-                    let r = &mut self.renderer;
-                    DragonIds {
-                        body: r.add_mesh(&m.body),
-                        neck: r.add_mesh(&m.neck),
-                        head: r.add_mesh(&m.head),
-                        eye: r.add_mesh(&m.eye),
-                        tail: r.add_mesh(&m.tail),
-                        plume: r.add_mesh(&m.plume),
-                        whisker: r.add_mesh(&m.whisker),
-                        mane: r.add_mesh(&m.mane),
-                        leg: r.add_mesh(&m.leg),
-                        arm: [r.add_mesh(&m.arm[0]), r.add_mesh(&m.arm[1])],
-                        hand: [r.add_mesh(&m.hand[0]), r.add_mesh(&m.hand[1])],
-                        star: r.add_mesh(&m.star),
-                    }
+                    DragonIds::add(&mut self.renderer, &m)
                 })
                 .collect();
         }
+        self.load_look(game);
         self.load_pics(game);
         // Halted, the view stands still and the chunks around it are long done.
         if !game.halted() {
+            // On a slow device the rest of the frame leaves less time for terrain, which
+            // then comes in more slowly rather than every frame running late.
+            let secs = (FRAME_AIM - self.rest).clamp(CHUNK_SECS_LEAST, CHUNK_SECS);
+            let from = crate::prof::clock();
             time("terrain", || {
-                self.update_terrain(game, self.chunk_budget, CHUNK_SECS)
+                self.update_terrain(game, self.chunk_budget, secs)
             });
+            self.terrain_took = crate::prof::clock() - from;
         }
         time("frame", || self.frame(game))
+    }
+
+    /// Tells how long the host's whole last frame took to work out and send off (s), so
+    /// the next can leave terrain only the time that is left.
+    pub fn frame_took(&mut self, secs: f64) {
+        let rest = (secs - self.terrain_took).max(0.0);
+        // Up at once, down slowly, so one quick frame does not let the next run long.
+        self.rest = rest.max(self.rest * 0.95 + rest * 0.05);
+    }
+
+    /// Tells the time since the host's last frame (s).
+    pub fn frame_gap(&mut self, dt: f32) {
+        // A tenth of the reach a second, so one hitch hardly shows.
+        let step = dt.min(0.1) * 0.1;
+        if dt > 1.0 / 45.0 {
+            self.grass_reach -= step;
+        } else if dt < 1.0 / 55.0 {
+            self.grass_reach += step;
+        }
+        self.grass_reach = self.grass_reach.clamp(GRASS_REACH_LEAST, 1.0);
     }
 
     /// What the world sounds like this frame, for the host's [`crate::audio::Synth`].
     pub fn sound(&mut self, game: &Game) -> crate::audio::Mix {
         self.listener.listen(game, &self.weather, &self.falls)
+    }
+
+    /// Remakes the player's dragon and its journal portrait when its look changes.
+    fn load_look(&mut self, game: &Game) {
+        let worn = game.worn();
+        let now = Some((game.dragon_look_version, worn.clone()));
+        if self.look_version == now {
+            return;
+        }
+        self.look_version = now;
+        let look = &game.dragon_look;
+        let m = models::dragon_look(look);
+        let old = std::mem::replace(&mut self.dragon, DragonIds::add(&mut self.renderer, &m));
+        old.free(&mut self.renderer);
+        // The portrait: standing at rest, turned three quarters toward the viewer.
+        let me = zawnabout_sim::Dragon::new(zawnabout_sim::EntityId(0), Vec3::ZERO, 0.0);
+        let mut parts = Vec::new();
+        crate::pose::DragonVisual::new(&me).parts(0.0, &mut parts);
+        let mut whole = crate::mesh::MeshBuilder::new();
+        for (part, at, _) in &parts {
+            whole.append(DragonIds::builder(&m, *part), *at);
+            if *part == Part::Head
+                && let Some(kind) = &worn
+            {
+                whole.append(&crate::treasure::treasure(kind), *at * wear_at(kind));
+            }
+        }
+        let turn = glam::Mat3::from_rotation_x(0.3) * glam::Mat3::from_rotation_y(0.45);
+        let size = crate::hud::PORTRAIT;
+        let px = crate::thumbs::draw_at(&whole, size, turn);
+        self.renderer
+            .write_hud_rect(0, crate::hud::PORTRAIT_TOP, size, size, &px);
+        self.still = None;
     }
 
     /// Puts postcard pictures in the atlas when they change.
@@ -2414,6 +2729,45 @@ impl Gfx {
             ));
         }
         out
+    }
+
+    /// Draws the current view `frames` times without moving the game and gives the
+    /// milliseconds the GPU took, as the fastest tenth go, which stays steadiest from run
+    /// to run. Native only.
+    pub fn gpu_time(&mut self, game: &Game, frames: u32) -> f64 {
+        let _ = self.capture(game);
+        let (w, h) = self.renderer.size();
+        let tex = self
+            .renderer
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("gpu time"),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.renderer.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+        let view = tex.create_view(&Default::default());
+        let frame = self.prepare(game);
+        let mut each = Vec::new();
+        for _ in 0..frames.max(1) {
+            let start = crate::prof::clock();
+            self.renderer.render(&view, &frame);
+            self.renderer
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll device");
+            each.push((crate::prof::clock() - start) * 1000.0);
+        }
+        each.sort_by(f64::total_cmp);
+        each[each.len() / 10]
     }
 
     /// Renders one frame offscreen and reads it back as tightly packed RGBA8. Blocks,
@@ -2594,6 +2948,7 @@ const LOCAL_SHIRTS: [u32; 9] = [
 #[derive(Default)]
 struct Lawn {
     key: (i32, i32),
+    reach: f32,
     tiles: HashMap<(i32, i32), Vec<Tuft>>,
     out: Vec<Instance>,
 }
@@ -2607,8 +2962,13 @@ struct Tuft {
     tint: Vec3,
 }
 
+/// The least share of its reach grass draws in to on a slow device.
+const GRASS_REACH_LEAST: f32 = 0.6;
+
 /// Grass spots along each side of a lawn tile.
 const LAWN_TILE: i32 = 8;
+/// Time a frame spends finding new tiles of tufts (s). Each ring finds at least one.
+const LAWN_SECS: f64 = 0.002;
 
 /// The tufts in one tile of the grid `step` apart: on lawn, off water, roads, pads and
 /// cliff edges.
@@ -2727,6 +3087,36 @@ pub fn in_dark(dark: &[Vec4], p: Vec3) -> bool {
         .any(|d| Vec2::new(d.x - p.x, d.y - p.z).length() < d.z)
 }
 
+/// Spots along a lair's walls: where each stands and the way it faces.
+type Walls = Vec<(Vec3, f32)>;
+
+/// Spots on a lair's floor along its walls, round its heap: a few meters in from the rock
+/// (the drawn wall can stand a little proud of it), turned to face the heap. The way in
+/// has no wall, so nothing stands there.
+fn lair_walls(terrain: &zawnabout_sim::terrain::Terrain, at: Vec3) -> Walls {
+    let mut out = Vec::new();
+    for k in 0..24 {
+        let a = k as f32 / 24.0 * std::f32::consts::TAU;
+        let dir = Vec3::new(a.cos(), 0.0, a.sin());
+        let base = at + Vec3::Y * 2.2;
+        let Some(r) = (12..80)
+            .map(|s| s as f32 * 0.5)
+            .find(|r| terrain.sdf(base + dir * *r) < 0.0)
+        else {
+            continue;
+        };
+        // A wall, with rock a little higher up too, not a slope or a boulder, and roof
+        // over it, not the open sky at the way in.
+        let wall = base + dir * (r - 0.6);
+        let roofed = (1..150).any(|k| terrain.sdf(wall + Vec3::Y * k as f32 * 2.0) < 0.0);
+        if terrain.sdf(base + dir * r + Vec3::Y * 1.2) > 0.6 || !roofed {
+            continue;
+        }
+        out.push((at + dir * (r - 3.0), (-dir.x).atan2(-dir.z)));
+    }
+    out
+}
+
 #[cfg(test)]
 mod rainbow_tests {
     use super::*;
@@ -2746,6 +3136,21 @@ mod rainbow_tests {
                 let angle = c.dot(to.normalize()).acos();
                 assert!((angle - 0.72).abs() < 0.01, "{angle}");
                 assert!((c.y - anti.y).abs() < 1e-4);
+            }
+        }
+    }
+
+    /// Every lair has wall enough for ten things, all of it close round the heap.
+    #[test]
+    #[cfg(feature = "play")]
+    fn lairs_have_walls() {
+        let world = zawnabout_sim::World::generate(1);
+        let play = zawnabout_play::Play::new(&world);
+        for (l, at) in play.def.lairs.iter().zip(&play.lairs) {
+            let walls = lair_walls(&world.terrain, *at);
+            assert!(walls.len() >= 10, "{}: {}", l.id, walls.len());
+            for (p, _) in &walls {
+                assert!(p.distance(*at) < 45.0, "{}: {p}", l.id);
             }
         }
     }

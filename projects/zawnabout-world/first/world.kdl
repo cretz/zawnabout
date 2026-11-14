@@ -675,3 +675,17 @@ landmark tidewater-effigy kind=statue x=-232 z=-4196 rot=40 text="effigy" {
 landmark kettle-effigy kind=statue x=-1834 z=1599 rot=250 text="effigy" {
     note "The serpent god in Kettle Harbor's market square, a pearl in its jaws for luck."
 }
+route lagoon-supply kind=supply {
+    note "A supply boat from Moonharbor's marina across the crescent lagoon to the South Key yacht club, a while alongside to unload, and back."
+    p 2120 -1170
+    p 2300 -1390
+    p 2700 -1570
+    p 3300 -1540
+    p 3640 -1530
+    p 3760 -1505
+    p 3640 -1470
+    p 3300 -1460
+    p 2700 -1500
+    p 2330 -1330
+    p 2120 -1170
+}

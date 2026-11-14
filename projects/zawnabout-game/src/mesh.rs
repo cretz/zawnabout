@@ -311,6 +311,18 @@ impl MeshBuilder {
     }
 
     /// Recolors every vertex of one color to another.
+    /// Swaps every color in `pairs` for its new one, all at once, so one swap never
+    /// feeds the next.
+    pub fn recolor_all(&mut self, pairs: &[(Rgb, Rgb)]) {
+        let pairs: Vec<([u8; 4], [u8; 4])> =
+            pairs.iter().map(|(f, t)| (f.bytes(), t.bytes())).collect();
+        for v in &mut self.verts {
+            if let Some((_, t)) = pairs.iter().find(|(f, _)| *f == v.color) {
+                v.color = *t;
+            }
+        }
+    }
+
     pub fn recolor(&mut self, from: Rgb, to: Rgb) {
         let (f, t) = (from.bytes(), to.bytes());
         for v in &mut self.verts {

@@ -141,9 +141,12 @@ fn point_lights(n: vec3f, world: vec3f) -> vec3f {
         let l = g.lights[i * 2];
         let to = l.xyz - world;
         let d = length(to);
-        let f = clamp(1.0 - d / l.w, 0.0, 1.0);
-        let wrap = clamp(dot(n, to / max(d, 0.001)) * 0.6 + 0.4, 0.0, 1.0);
-        sum += g.lights[i * 2 + 1].rgb * (f * f * wrap);
+        // Lights that do not reach here add nothing.
+        if d < l.w {
+            let f = clamp(1.0 - d / l.w, 0.0, 1.0);
+            let wrap = clamp(dot(n, to / max(d, 0.001)) * 0.6 + 0.4, 0.0, 1.0);
+            sum += g.lights[i * 2 + 1].rgb * (f * f * wrap);
+        }
     }
     return sum;
 }
@@ -197,7 +200,11 @@ fn haze_lit(col: vec3f, world: vec3f, day: f32) -> vec3f {
     // Underground the far walls keep their rock colors much further, dimming into a
     // dusky brown rather than washing out pale.
     let fog = smoothstep(g.fog.x, g.fog.y, length(to_frag) / (1.0 + gloom * 1.5));
-    let far = mix(sky(normalize(to_frag)), g.cave.rgb * 0.3 + vec3f(0.05, 0.035, 0.025), gloom);
+    // Up close there is no haze, so the sky behind it is only worked out further off.
+    var far = vec3f(0.0);
+    if fog > 0.0 {
+        far = mix(sky(normalize(to_frag)), g.cave.rgb * 0.3 + vec3f(0.05, 0.035, 0.025), gloom);
+    }
     // Morning mist lying low over the water and the low ground, thicker off in the
     // distance, never in caves.
     // Its noise is only worked out where there is mist at all.
@@ -275,6 +282,25 @@ fn vnoise(p: vec2f) -> f32 {
     let a = mix(hash2(c), hash2(c + vec2f(1.0, 0.0)), u.x);
     let b = mix(hash2(c + vec2f(0.0, 1.0)), hash2(c + vec2f(1.0, 1.0)), u.x);
     return mix(a, b, u.y);
+}
+
+// Smooth value noise in [0, 1] through space.
+fn vnoise3(p: vec3f) -> f32 {
+    let c = floor(p);
+    let f = p - c;
+    let u = f * f * (3.0 - 2.0 * f);
+    let h = c.z * 57.3;
+    let a = mix(hash2(c.xy + h), hash2(c.xy + vec2f(1.0, 0.0) + h), u.x);
+    let b = mix(hash2(c.xy + vec2f(0.0, 1.0) + h), hash2(c.xy + vec2f(1.0, 1.0) + h), u.x);
+    let h2 = h + 57.3;
+    let d = mix(hash2(c.xy + h2), hash2(c.xy + vec2f(1.0, 0.0) + h2), u.x);
+    let e = mix(hash2(c.xy + vec2f(0.0, 1.0) + h2), hash2(c.xy + vec2f(1.0, 1.0) + h2), u.x);
+    return mix(mix(a, b, u.y), mix(d, e, u.y), u.z);
+}
+
+// Flowstone streaks running down one flat plane of a cave wall.
+fn streaks(uv: vec2f) -> f32 {
+    return smoothstep(0.65, 0.85, vnoise(vec2f(uv.x * 0.12, uv.y * 0.008 + uv.x * 0.003)));
 }
 
 // Ground detail without textures: grass in drifts of lush and dry with tufts up close,
@@ -375,26 +401,33 @@ fn fs_ground(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec
         let under = clamp(-above / 9.0, 0.0, 1.0);
         base = mix(base, DEEP_WATER, sqrt(under) * 0.85);
         // Sunlight focused by the waves wanders over shallow beds in a bright net, where
-        // two drifting noises cross.
-        let a = vnoise(cp + vec2f(t * 0.31, t * 0.17));
-        let b = vnoise(cp * 1.37 + vec2f(-t * 0.23, t * 0.29) + 7.0);
-        let net = 1.0 - smoothstep(0.0, 0.07 + cpx * 0.5, abs(a - b));
+        // two drifting noises cross. Each of these is only worked out where it shows.
         let shallow = step(above, 0.0) * (1.0 - smoothstep(0.5, 6.0, -above));
         let sharp = 1.0 - smoothstep(0.15, 0.5, cpx);
-        base += vec3f(0.22, 0.3, 0.26) * net * shallow * sharp * day;
-        // A band of foam that laps up and down the shore.
-        let wob = hash2(floor(i.world.xz * 0.15)) * 6.28;
-        let lap = 0.18 * sin(t * 1.1 + wob) + 0.12 * sin(t * 0.37 + i.world.x * 0.03);
-        let foam = 1.0 - smoothstep(0.08, 0.3, abs(above - lap - 0.05));
-        base = mix(base, vec3f(0.95, 0.97, 1.0), foam * 0.85);
+        if shallow * sharp * day > 0.0 {
+            let a = vnoise(cp + vec2f(t * 0.31, t * 0.17));
+            let b = vnoise(cp * 1.37 + vec2f(-t * 0.23, t * 0.29) + 7.0);
+            let net = 1.0 - smoothstep(0.0, 0.07 + cpx * 0.5, abs(a - b));
+            base += vec3f(0.22, 0.3, 0.26) * net * shallow * sharp * day;
+        }
+        // A band of foam that laps up and down the shore. The lap stays within 0.3m, so
+        // the foam within 0.6m of the waterline.
+        if abs(above - 0.05) < 0.6 {
+            let wob = hash2(floor(i.world.xz * 0.15)) * 6.28;
+            let lap = 0.18 * sin(t * 1.1 + wob) + 0.12 * sin(t * 0.37 + i.world.x * 0.03);
+            let foam = 1.0 - smoothstep(0.08, 0.3, abs(above - lap - 0.05));
+            base = mix(base, vec3f(0.95, 0.97, 1.0), foam * 0.85);
+        }
         // Coral in warm sandy shallows: patches of pink, orange and violet under the
         // water, fading out deeper down.
         let sandy = smoothstep(0.1, 0.2, i.color.r - i.color.b) * (1.0 - smoothstep(0.02, 0.1, i.color.g - i.color.r));
-        let reef = smoothstep(0.55, 0.75, vnoise(i.world.xz * 0.06 + 70.0)) * sandy;
         let shelf = smoothstep(-0.8, -1.5, above) * (1.0 - smoothstep(-6.0, -10.0, above));
-        let tint = mix(vec3f(0.85, 0.35, 0.45), vec3f(0.95, 0.55, 0.2), vnoise(i.world.xz * 0.15));
-        let coral = mix(tint, vec3f(0.55, 0.35, 0.8), smoothstep(0.62, 0.7, vnoise(i.world.xz * 0.35 + 30.0)));
-        base = mix(base, coral * 0.75, reef * shelf * 0.7);
+        if sandy * shelf > 0.0 {
+            let reef = smoothstep(0.55, 0.75, vnoise(i.world.xz * 0.06 + 70.0)) * sandy;
+            let tint = mix(vec3f(0.85, 0.35, 0.45), vec3f(0.95, 0.55, 0.2), vnoise(i.world.xz * 0.15));
+            let coral = mix(tint, vec3f(0.55, 0.35, 0.8), smoothstep(0.62, 0.7, vnoise(i.world.xz * 0.35 + 30.0)));
+            base = mix(base, coral * 0.75, reef * shelf * 0.7);
+        }
     }
     // Against sea cliffs the swell surges white up the rock every few seconds, each
     // stretch of cliff in its own time. Measured from the sea itself, as a tall cliff
@@ -416,30 +449,52 @@ fn fs_ground(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec
     let tiled = step(0.6, min(i.color.r, min(i.color.g, i.color.b)));
     let under = (1.0 - smoothstep(0.08, 0.35, day)) * (1.0 - tiled);
     var ore = vec3f(0.0);
-    // Flat coordinates on whichever plane the wall faces most, wrapped so the noise keeps
-    // its precision far from the origin. Screen derivatives must be taken out here, before
-    // any branch, for WebGPU.
+    // Flat coordinates on each plane, wrapped so the noise keeps its precision far from
+    // the origin. A wall blends the planes it faces, so marks run on across the edges of
+    // its faces instead of stopping short where the plane faced most changes. Screen
+    // derivatives must be taken out here, before any branch, for WebGPU.
     let w = i.world;
-    var uv = select(select(w.xz, vec2f(w.x, w.y), abs(n.y) < 0.7), vec2f(w.z, w.y), abs(n.x) > abs(n.z));
-    uv = uv - floor(uv / 1024.0) * 1024.0;
-    let vein_px = max(fwidth(uv.x), fwidth(uv.y)) * 0.03;
+    let wrap = w - floor(w / 1024.0) * 1024.0;
+    let uvx = wrap.zy;
+    let uvy = wrap.xz;
+    let uvz = wrap.xy;
+    let vein_px = length(fwidth(w)) * 0.03;
     let roof_p = w.xz * 0.45 + vec2f(w.y * 0.17, w.y * 0.11);
     let roof_px = max(fwidth(roof_p.x), fwidth(roof_p.y));
-    if under > 0.01 && n.y < 0.6 {
+    if under > 0.01 && n.y < 0.85 {
+        // Walls, fading out onto floors.
+        let wall = 1.0 - smoothstep(0.6, 0.85, n.y);
+        let fw = pow(abs(n), vec3f(4.0));
+        let fw_n = fw / (fw.x + fw.y + fw.z);
+        var streak = 0.0;
+        if fw_n.x > 0.02 {
+            streak += streaks(uvx) * fw_n.x;
+        }
+        if fw_n.y > 0.02 {
+            streak += streaks(uvy) * fw_n.y;
+        }
+        if fw_n.z > 0.02 {
+            streak += streaks(uvz) * fw_n.z;
+        }
         // Flowstone: pale streaks running down the walls.
-        let streak = vnoise(vec2f(uv.x * 0.12, uv.y * 0.008 + uv.x * 0.003));
-        base = mix(base, base * vec3f(1.18, 1.12, 1.02), smoothstep(0.65, 0.85, streak) * under * 0.6);
-        // Veins: thin winding lines where ridged noise crosses its middle, fading out
-        // with distance rather than growing fat.
-        let q = uv * 0.03 + vec2f(vnoise(uv * 0.04) * 1.2, 0.0);
-        let ridge = abs(vnoise(q) * 2.0 - 1.0);
+        base = mix(base, base * vec3f(1.18, 1.12, 1.02), streak * under * wall * 0.6);
+        // Veins of glowing ore: thin sheets through the rock where ridged noise crosses
+        // its middle, so each meets the wall in one unbroken winding line. They fade out
+        // with distance rather than growing fat. The sheets themselves are only worked out
+        // where the patches and nearness leave them showing.
         let near = 1.0 - smoothstep(0.03, 0.12, vein_px);
-        let vein = (1.0 - smoothstep(0.012, 0.03, ridge)) * near;
-        let patchy = smoothstep(0.45, 0.65, vnoise(uv * 0.008 + 31.0));
-        let tint = normalize(g.cave.rgb + vec3f(0.02)) * 0.9 + vec3f(0.08);
-        let pulse = 0.7 + 0.3 * sin(g.misc.x * 0.6 + vnoise(uv * 0.01) * 12.0);
-        ore = tint * vein * patchy * under * pulse * 0.45;
-        base = mix(base, base * 0.75, vein * patchy * under);
+        let patchy = smoothstep(0.45, 0.65, vnoise3(wrap * 0.008 + 31.0));
+        if near * patchy > 0.0 {
+            let q = wrap * 0.03 + vec3f(vnoise3(wrap * 0.04) * 1.2, 0.0, 0.0);
+            let ridge = abs(vnoise3(q) * 2.0 - 1.0);
+            let vein = (1.0 - smoothstep(0.005, 0.014, ridge)) * near * wall;
+            if vein > 0.0 {
+                let tint = normalize(g.cave.rgb + vec3f(0.02)) * 0.9 + vec3f(0.08);
+                let pulse = 0.7 + 0.3 * sin(g.misc.x * 0.6 + vnoise(wrap.xz * 0.01 + wrap.y * 0.01) * 12.0);
+                ore = tint * vein * patchy * under * pulse * 0.45;
+                base = mix(base, base * 0.75, vein * patchy * under);
+            }
+        }
     }
     var col = shade(base, n, i.world, day, 0.0);
     let fog_ore = smoothstep(g.fog.x, g.fog.y, length(i.world - g.cam_pos.xyz));
@@ -451,15 +506,18 @@ fn fs_ground(i: VertOut, @builtin(front_facing) front: bool) -> @location(0) vec
         let px = roof_px;
         let cell = floor(p);
         let h = hash2(cell);
-        let spot = vec2f(hash2(cell + 17.0), hash2(cell + 31.0)) * 0.6 + 0.2;
-        let d = length(fract(p) - spot);
-        // They gather in colonies, with bare rock between.
-        let colony = smoothstep(0.45, 0.7, vnoise(i.world.xz * 0.018 + vec2f(i.world.y * 0.01, 3.0)));
-        let speck = (1.0 - smoothstep(0.04 + px * 0.5, 0.1 + px, d)) * step(0.62, h) * colony;
         let far = 1.0 - smoothstep(0.15, 0.5, px);
-        let twinkle = 0.65 + 0.35 * sin(g.misc.x * (1.1 + h * 1.5) + h * 40.0);
-        let fog = smoothstep(g.fog.x, g.fog.y, length(i.world - g.cam_pos.xyz));
-        col += vec3f(0.35, 0.95, 0.9) * speck * twinkle * roof * far * (1.0 - fog) * 1.4;
+        // Only some cells hold one, so the rest stop here.
+        if h >= 0.62 && far > 0.0 {
+            let spot = vec2f(hash2(cell + 17.0), hash2(cell + 31.0)) * 0.6 + 0.2;
+            let d = length(fract(p) - spot);
+            // They gather in colonies, with bare rock between.
+            let colony = smoothstep(0.45, 0.7, vnoise(i.world.xz * 0.018 + vec2f(i.world.y * 0.01, 3.0)));
+            let speck = (1.0 - smoothstep(0.04 + px * 0.5, 0.1 + px, d)) * step(0.62, h) * colony;
+            let twinkle = 0.65 + 0.35 * sin(g.misc.x * (1.1 + h * 1.5) + h * 40.0);
+            let fog = smoothstep(g.fog.x, g.fog.y, length(i.world - g.cam_pos.xyz));
+            col += vec3f(0.35, 0.95, 0.9) * speck * twinkle * roof * far * (1.0 - fog) * 1.4;
+        }
     }
     return vec4f(col, 1.0);
 }

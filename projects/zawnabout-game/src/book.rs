@@ -1,6 +1,6 @@
 //! The journal, which is also the pause screen: opening it pauses, closing it flies on.
-//! Its pages are the hoard, help with the controls (and changing keys), and settings. It
-//! opens where it was left, on help the first time. Cards for things found show over it
+//! Its pages are the hoard, how your dragon looks, help with the controls (and changing
+//! keys), and settings. It opens where it was left, on your dragon the first time. Cards for things found show over it
 //! and wait to be dismissed. Keys, gamepad, mouse and touch all work it.
 
 use std::cell::{Cell, RefCell};
@@ -19,13 +19,15 @@ pub enum Page {
     Stories,
     Dragons,
     Map,
+    /// How the player's dragon looks.
+    You,
     #[default]
     Help,
     Settings,
 }
 
 impl Page {
-    pub const ALL: [Page; 9] = [
+    pub const ALL: [Page; 10] = [
         Page::Hoard,
         Page::Places,
         Page::People,
@@ -33,6 +35,7 @@ impl Page {
         Page::Stories,
         Page::Dragons,
         Page::Map,
+        Page::You,
         Page::Help,
         Page::Settings,
     ];
@@ -46,6 +49,7 @@ impl Page {
             Page::Stories => "stories",
             Page::Dragons => "dragons",
             Page::Map => "map",
+            Page::You => "you",
             Page::Help => "help",
             Page::Settings => "settings",
         }
@@ -64,6 +68,7 @@ impl Page {
             Page::Stories => "Stories",
             Page::Dragons => "Dragons",
             Page::Map => "Map",
+            Page::You => "You",
             Page::Help => "Help",
             Page::Settings => "Settings",
         }
@@ -257,6 +262,10 @@ pub fn time_name(hold: Option<f32>) -> &'static str {
     }
 }
 
+/// How sharp Settings can make the picture, in the order it steps through them. Auto
+/// starts sharp and draws fewer pixels while frames come slowly.
+pub const SHARPNESS: [&str; 4] = ["Auto", "Sharp", "Balanced", "Fast"];
+
 /// Everything the book shows that lives elsewhere.
 pub struct View<'a> {
     /// The hoard, or none with gameplay off.
@@ -266,10 +275,15 @@ pub struct View<'a> {
     pub pause_away: bool,
     /// The hour the day is held at, none while it passes.
     pub hold_hour: Option<f32>,
+    /// Which of [`SHARPNESS`] the picture is, none where the host always draws every pixel.
+    pub sharpness: Option<usize>,
     pub touch: bool,
     /// The game draws its own map and notes, so their keys get a line.
     pub hud: bool,
     pub map: MapView,
+    pub look: &'a crate::look::Look,
+    /// The kinds of finds held that can be worn.
+    pub wearables: Vec<String>,
 }
 
 /// What the book asks the game to do.
@@ -282,6 +296,11 @@ pub enum Do {
     Kin(usize, KinAsk),
     /// The next time of day: passing, then held at morning, noon, sunset or night.
     TimeOfDay,
+    /// The next of [`SHARPNESS`].
+    Sharpness,
+    /// Change how your dragon looks on a row of [`crate::look::Row`]: to choice `k`, or
+    /// the next one with none.
+    Look(crate::look::Row, Option<usize>),
     Export,
     Import,
     ResetKeys,
@@ -328,6 +347,8 @@ enum Hit {
     ShowMe(usize),
     /// Put the big postcard away.
     Zoom,
+    /// Choice `k` on row `r` of the You page.
+    Choose(usize, usize),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -357,8 +378,9 @@ const TAN: u32 = 0xEAD8BC;
 const COVER: u32 = 0x7A4A2E;
 const RULE: u32 = 0x9CC3E0;
 /// Each page's tab color, in the order of [`Page::ALL`].
-const TABS: [u32; 9] = [
-    0xF2C14E, 0x8FC7E8, 0xF4A3A3, 0xA8D88F, 0xC9A8E8, 0xE89A8A, 0x9FD6CF, 0xF7B983, 0xD9C7AE,
+const TABS: [u32; 10] = [
+    0xF2C14E, 0x8FC7E8, 0xF4A3A3, 0xA8D88F, 0xC9A8E8, 0xE89A8A, 0x9FD6CF, 0xF2A0C8, 0xF7B983,
+    0xD9C7AE,
 ];
 
 impl Book {
@@ -375,13 +397,15 @@ impl Book {
     fn pages(view: &View) -> Vec<Page> {
         Page::ALL
             .into_iter()
-            .filter(|p| matches!(p, Page::Help | Page::Settings) || view.hoard.is_some())
+            .filter(|p| {
+                matches!(p, Page::You | Page::Help | Page::Settings) || view.hoard.is_some()
+            })
             .collect()
     }
 
     /// Settings rows before the keys.
     fn settings_rows(view: &View) -> usize {
-        3 + 2 * view.hoard.is_some() as usize
+        3 + view.sharpness.is_some() as usize + 2 * view.hoard.is_some() as usize
     }
 
     /// Turns to `page`, with a page turning over.
@@ -416,6 +440,7 @@ impl Book {
             Page::Stories => view.hoard.map_or(0, |h| h.stories.len()),
             Page::Dragons => view.hoard.map_or(0, |h| h.kin.len()),
             Page::Map => view.hoard.map_or(0, |h| h.marks.len()),
+            Page::You => crate::look::Row::ALL.len(),
             Page::Help => 0,
             Page::Settings if view.touch => Self::settings_rows(view),
             Page::Settings => Self::settings_rows(view) + Action::ALL.len() + 1,
@@ -455,18 +480,24 @@ impl Book {
                     vec![Do::ResetKeys]
                 }
             }
+            Page::You => crate::look::Row::ALL
+                .get(self.sel)
+                .map(|r| Do::Look(*r, None))
+                .into_iter()
+                .collect(),
             Page::Stories => match view.hoard.and_then(|h| h.stories.get(self.sel)) {
                 Some(s) if s.active => vec![Do::SetAside],
                 Some(_) => vec![Do::Begin(self.sel)],
                 None => vec![],
             },
-            Page::Settings => match self.sel {
-                0 => vec![Do::Sound],
-                1 => vec![Do::PauseAway],
-                2 => vec![Do::TimeOfDay],
-                3 => vec![Do::Export],
-                _ => vec![Do::Import],
-            },
+            Page::Settings => {
+                let mut rows = vec![Do::Sound, Do::PauseAway, Do::TimeOfDay];
+                if view.sharpness.is_some() {
+                    rows.push(Do::Sharpness);
+                }
+                rows.extend([Do::Export, Do::Import]);
+                rows.into_iter().nth(self.sel).into_iter().collect()
+            }
             _ => vec![],
         }
     }
@@ -592,6 +623,10 @@ impl Book {
             Some(Hit::Row(i)) => {
                 self.sel = i;
                 self.activate(view)
+            }
+            Some(Hit::Choose(r, k)) => {
+                self.sel = r;
+                vec![Do::Look(crate::look::Row::ALL[r], Some(k))]
             }
             Some(Hit::Panel) => vec![],
             Some(Hit::Source) => vec![Do::Source],
@@ -817,6 +852,7 @@ impl Book {
             Page::Stories => self.stories_page(d, view, ui, area, hits),
             Page::Dragons => self.dragons_page(d, view, ui, area, hits),
             Page::Map => self.map_page(d, view, ui, area, hits),
+            Page::You => self.you_page(d, view, ui, area, hits),
             Page::Help => self.help_page(d, view, ui, area, hits),
             Page::Settings => self.settings_page(d, view, ui, area, hits),
         }
@@ -1495,6 +1531,137 @@ impl Book {
         let _ = d1;
     }
 
+    /// How your dragon looks: its portrait and name on the left, and on the right a row
+    /// for each thing to change, colors as swatches and the rest as words to pick.
+    fn you_page(
+        &self,
+        d: &mut Draw,
+        view: &View,
+        ui: &Ui,
+        (a, b): (Vec2, Vec2),
+        hits: &mut Vec<(Vec2, Vec2, Hit)>,
+    ) {
+        use crate::look::{Look, Row};
+        let (px, line) = (ui.px, ui.line);
+        let ink = rgba(INK, 1.0);
+        let soft = rgba(0x8A6A50, 1.0);
+        let f = crate::font::get();
+        let look = view.look;
+        let worn = wearables(view);
+        let left = ((b.x - a.x) * 0.36).min(b.y - a.y - line * 4.0);
+        // The portrait, on a soft round of paper.
+        let side = left;
+        let p0 = Vec2::new(a.x, a.y);
+        d.rect(p0, p0 + Vec2::splat(side), rgba(0xF3E6CC, 1.0));
+        let (x, y) = (0.0, crate::hud::PORTRAIT_TOP as f32);
+        let s = crate::hud::PORTRAIT as f32;
+        d.quad(
+            p0,
+            p0 + Vec2::splat(side),
+            Vec2::new(x, y),
+            Vec2::new(x + s, y + s),
+            [1.0; 4],
+        );
+        let mut y = a.y + side + line * 0.3;
+        d.write(Vec2::new(a.x, y), px * 1.3, look.name(), rgba(RED, 1.0));
+        y += line * 1.4;
+        for l in f.wrap(
+            px * 0.8,
+            "This is you! Change anything you like, as often as you like, or just keep flying. Find a crown, hat, ribbon, medal or gem, and you can wear it.",
+            side,
+        ) {
+            d.write(Vec2::new(a.x, y), px * 0.8, &l, soft);
+            y += line * 0.8;
+        }
+
+        // The rows, each a label and its choices.
+        let x0 = a.x + side + px * 1.6;
+        let label_w = Row::ALL
+            .iter()
+            .map(|r| f.measure(px * 0.9, r.label()))
+            .fold(0.0, f32::max)
+            + px;
+        let rows = Row::ALL.len() as f32;
+        let step = ((b.y - a.y) / rows).min(line * 1.5);
+        let chip_h = step * 0.78;
+        for (i, row) in Row::ALL.into_iter().enumerate() {
+            let y = a.y + i as f32 * step;
+            let (r0, r1) = (
+                Vec2::new(x0 - px * 0.4, y - px * 0.2),
+                Vec2::new(b.x, y + step - px * 0.25),
+            );
+            self.row(d, i, r0, r1, hits);
+            let ty = y + (chip_h - px * 0.9) * 0.5;
+            d.write(Vec2::new(x0, ty), px * 0.9, row.label(), ink);
+            let cx = x0 + label_w;
+            match row {
+                Row::Name => {
+                    d.write(Vec2::new(cx, ty), px * 0.9, look.name(), rgba(RED, 1.0));
+                    let w = f.measure(px * 0.9, look.name());
+                    d.write(
+                        Vec2::new(cx + w + px, ty),
+                        px * 0.75,
+                        "pick for another",
+                        soft,
+                    );
+                }
+                Row::Surprise => {
+                    d.write(
+                        Vec2::new(cx, ty),
+                        px * 0.75,
+                        "a whole new look, keeping what you wear",
+                        soft,
+                    );
+                }
+                _ => {
+                    let choices = Look::choices(row, &worn);
+                    let on = look.chosen(row, &worn);
+                    let mut cx = cx;
+                    for (k, name) in choices.iter().enumerate() {
+                        let w = if row.swatches() {
+                            chip_h
+                        } else if row == Row::Wear && k > 0 {
+                            chip_h * 1.2
+                        } else {
+                            f.measure(px * 0.8, name) + px * 0.9
+                        };
+                        if cx + w > b.x {
+                            break;
+                        }
+                        let (c0, c1) = (Vec2::new(cx, y), Vec2::new(cx + w, y + chip_h));
+                        if k == on {
+                            d.rect(c0 - Vec2::splat(2.5), c1 + Vec2::splat(2.5), rgba(RED, 1.0));
+                        }
+                        if row.swatches() {
+                            d.rect(c0, c1, rgba(Look::swatch(row, k), 1.0));
+                        } else if row == Row::Wear && k > 0 {
+                            d.rect(c0, c1, rgba(0xFFFDF6, 1.0));
+                            thumb(d, name, c0, c1, [1.0; 4]);
+                        } else {
+                            d.rect(c0, c1, rgba(if k == on { 0xFFFDF6 } else { 0xF2E2C4 }, 1.0));
+                            d.write(
+                                Vec2::new(cx + px * 0.45, y + (chip_h - px * 0.8) * 0.5),
+                                px * 0.8,
+                                name,
+                                ink,
+                            );
+                        }
+                        hits.push((c0, c1, Hit::Choose(i, k)));
+                        cx += w + px * 0.45;
+                    }
+                    if row == Row::Wear && choices.len() == 1 {
+                        d.write(
+                            Vec2::new(cx + px * 0.2, ty),
+                            px * 0.75,
+                            "none in your hoard yet",
+                            soft,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn settings_page(
         &self,
         d: &mut Draw,
@@ -1519,6 +1686,9 @@ impl Book {
                 time_name(view.hold_hour).to_string(),
             ),
         ];
+        if let Some(s) = view.sharpness {
+            rows.push(("Sharpness".into(), SHARPNESS[s].into()));
+        }
         if view.hoard.is_some() {
             rows.push(("Save my game to a file".into(), String::new()));
             rows.push(("Load a game from a file".into(), String::new()));
@@ -2163,6 +2333,11 @@ fn thumb(d: &mut Draw, kind: &str, a: Vec2, b: Vec2, color: [f32; 4]) {
     d.quad(a, b, uv0, uv0 + Vec2::splat(t), color);
 }
 
+/// The kinds of finds in the hoard that can be worn, one of each.
+fn wearables(view: &View) -> Vec<String> {
+    view.wearables.clone()
+}
+
 /// A little heart, `r` across each lobe, centered at `c`.
 fn heart(d: &mut Draw, c: Vec2, r: f32) {
     let red = rgba(RED, 1.0);
@@ -2270,10 +2445,38 @@ mod tests {
             muted: false,
             pause_away: true,
             hold_hour: None,
+            sharpness: None,
             touch: false,
             hud: true,
             map: MapView::default(),
+            look: Box::leak(Box::default()),
+            wearables: vec!["crown".into()],
         }
+    }
+
+    /// The You page: Enter steps a row on, a swatch picks its color.
+    #[test]
+    fn you_page_changes_the_look() {
+        use crate::look::Row;
+        let b = Bindings::default();
+        let v = view(&b, None);
+        let mut book = Book::default();
+        book.show(&v);
+        book.go(Page::You, 0);
+        assert_eq!(book.key("Enter", &v), Some(vec![Do::Look(Row::Body, None)]));
+        book.key("ArrowDown", &v);
+        assert_eq!(
+            book.key("Enter", &v),
+            Some(vec![Do::Look(Row::Belly, None)])
+        );
+        book.hits
+            .borrow_mut()
+            .push((Vec2::ZERO, Vec2::ONE, Hit::Choose(2, 3)));
+        book.size.set(Vec2::ONE);
+        assert_eq!(
+            book.click(Vec2::splat(0.5), &v),
+            Some(vec![Do::Look(Row::Wings, Some(3))])
+        );
     }
 
     /// Esc opens and closes it, pages turn and wrap, and the hoard page is gone with
@@ -2296,6 +2499,8 @@ mod tests {
         let bare = view(&b, None);
         book.show(&bare);
         assert_eq!(book.page, Page::Help);
+        book.key("ArrowLeft", &bare);
+        assert_eq!(book.page, Page::You);
         book.key("ArrowLeft", &bare);
         assert_eq!(book.page, Page::Settings);
         book.key("ArrowLeft", &bare);
@@ -2328,5 +2533,26 @@ mod tests {
         assert_eq!(book.key("KeyW", &v), Some(vec![]));
         assert_eq!(book.key("Enter", &v), Some(vec![Do::Claim(2)]));
         assert!(book.cards.is_empty());
+    }
+
+    /// Sharpness gets a row in settings only where the host can draw fewer pixels, and the
+    /// rows after it move down for it.
+    #[test]
+    fn sharpness_row() {
+        let b = Bindings::default();
+        let hoard = HoardView::default();
+        let mut v = view(&b, Some(&hoard));
+        let mut book = Book::default();
+        book.show(&v);
+        book.key("ArrowRight", &v);
+        assert_eq!(book.page, Page::Settings);
+        for _ in 0..3 {
+            book.key("ArrowDown", &v);
+        }
+        assert_eq!(book.key("Enter", &v), Some(vec![Do::Export]));
+        v.sharpness = Some(0);
+        assert_eq!(book.key("Enter", &v), Some(vec![Do::Sharpness]));
+        book.key("ArrowDown", &v);
+        assert_eq!(book.key("Enter", &v), Some(vec![Do::Export]));
     }
 }

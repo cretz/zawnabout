@@ -264,6 +264,16 @@ meadow home-meadow {
     p -200 520
     p -450 600
 }
+meadow ring-flowers flowers=mixed {
+    note "Every kind of wildflower round the Old Ring, the prettiest anywhere, as Dot says."
+    p -1580 620
+    p -1380 600
+    p -1180 760
+    p -1080 900
+    p -1120 1080
+    p -1400 1100
+    p -1590 950
+}
 forest tall-woods kind=open trees=round {
     note "Huge trees far apart. Weave between trunks at speed."
     p 300 -150
@@ -733,7 +743,7 @@ caves tarn {
         p -650 445 -1110
         p -650 460 -1190
     }
-    cavern tarn-cave x=-650 y=480 z=-1250 w=120 h=60 d=100 shape=dome glow=0.4
+    cavern tarn-cave x=-650 y=450 z=-1160 w=70 h=40 d=50 shape=dome glow=0.4
 }
 
 // The deep: the big underground system. Joined to the crescent by the deep road (world.kdl).

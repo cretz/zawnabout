@@ -78,3 +78,32 @@ jobs:
           name: playbooks-${{ matrix.os }}
           path: ${{ runner.temp }}/playbooks
           if-no-files-found: ignore
+
+  # The web page: its TypeScript checked and the whole bundle built, as Pages builds it
+  # from `main`, so a broken page shows on the pull request and not after the merge.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: projects
+          cache-on-failure: true
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: projects/zawnabout-web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: projects/zawnabout-web/pnpm-lock.yaml
+      - name: Typecheck and build
+        working-directory: projects/zawnabout-web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm build

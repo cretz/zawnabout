@@ -117,6 +117,30 @@ fn lathe(
     }
 }
 
+/// Scale colors for pattern `p` of [`crate::look::PATTERNS`]: classic has the dark back,
+/// stripes band the sides, spots dot them, plain is one color over the belly plates.
+fn skin_in(p: usize) -> impl Fn(f32, usize) -> Rgb + Copy {
+    move |up, ring| {
+        if up <= -0.5 {
+            return if ring.is_multiple_of(2) {
+                BELLY
+            } else {
+                BELLY2
+            };
+        }
+        match p {
+            1 if ring % 2 == 1 => BACK,
+            1 => BACK.mix(SCALE, 0.55),
+            2 if up > 0.9 => BACK,
+            2 if ((up * 4.0).round() as i32 + ring as i32).rem_euclid(3) == 0 => BACK,
+            2 => SCALE,
+            3 if up > 0.5 => BACK.mix(SCALE, 0.55),
+            3 => SCALE,
+            _ => skin(up, ring),
+        }
+    }
+}
+
 /// Scale colors: a deep coral back, warm sides and cream belly plates in bands.
 fn skin(up: f32, ring: usize) -> Rgb {
     if up > 0.9 {
@@ -188,6 +212,28 @@ fn membrane(m: &mut MeshBuilder, root: Vec3, tips: &[Vec3]) {
 }
 
 pub fn dragon() -> DragonMeshes {
+    dragon_look(&crate::look::Look::default())
+}
+
+/// A crest piece for crest `c` of [`crate::look::CRESTS`]: a gold blade, a little one, a
+/// pair of feathers, or nothing.
+fn crest(m: &mut MeshBuilder, c: usize, at: Vec3, len: f32, h: f32, w: f32) {
+    match c {
+        1 => blade(m, at, len * 0.7, h * 0.5, w * 0.8),
+        2 => {
+            for x in [-1.0f32, 1.0] {
+                let dir = Vec3::new(x * 0.25, 0.8, -0.55).normalize();
+                feather(m, at + Vec3::X * x * w, dir, Vec3::X, h * 1.5, len * 0.3);
+            }
+        }
+        3 => {}
+        _ => blade(m, at, len, h, w),
+    }
+}
+
+/// The player's dragon as `look` has it.
+pub fn dragon_look(look: &crate::look::Look) -> DragonMeshes {
+    let skin = skin_in(look.pattern);
     let mut body = MeshBuilder::new();
     let rings = [
         (-1.35, 0.4, 0.38, 0.1),
@@ -213,7 +259,14 @@ pub fn dragon() -> DragonMeshes {
         (0.35, 0.44),
         (0.85, 0.34),
     ] {
-        blade(&mut body, Vec3::new(0.0, top(z) - 0.04, z), 0.42, h, 0.07);
+        crest(
+            &mut body,
+            look.crest,
+            Vec3::new(0.0, top(z) - 0.04, z),
+            0.42,
+            h,
+            0.07,
+        );
     }
 
     let mut neck = MeshBuilder::new();
@@ -224,8 +277,9 @@ pub fn dragon() -> DragonMeshes {
         skin,
     );
     neck.flag_from(0, SHEEN);
-    blade(
+    crest(
         &mut neck,
+        look.crest,
         Vec3::new(0.0, 0.3, NECK_LEN * 0.5),
         0.34,
         0.3,
@@ -248,13 +302,34 @@ pub fn dragon() -> DragonMeshes {
     );
     head.flag_from(0, SHEEN);
     for x in [-1.0f32, 1.0] {
-        // Horns sweep back in two curves, ivory into gold.
+        // Horns, ivory into gold: swept back in two curves, short nubs, long and
+        // swept, or curled round like a ram's.
         let from = head.verts.len();
         let base = Vec3::new(0.22 * x, 0.58, 0.12);
-        let mid = base + Vec3::new(0.08 * x, 0.3, -0.32);
-        let tip = mid + Vec3::new(0.05 * x, 0.1, -0.46);
-        tube(&mut head, 5, base, 0.1, mid, 0.065, HORN);
-        tube(&mut head, 5, mid, 0.065, tip, 0.0, GOLD);
+        let way: &[(Vec3, f32)] = match look.horns {
+            1 => &[(Vec3::new(0.03, 0.16, -0.1), 0.0)],
+            2 => &[
+                (Vec3::new(0.08, 0.36, -0.36), 0.075),
+                (Vec3::new(0.07, 0.16, -0.62), 0.0),
+            ],
+            3 => &[
+                (Vec3::new(0.1, 0.26, -0.18), 0.075),
+                (Vec3::new(0.08, -0.04, -0.26), 0.06),
+                (Vec3::new(0.02, -0.24, 0.02), 0.04),
+                (Vec3::new(-0.01, -0.02, 0.14), 0.0),
+            ],
+            _ => &[
+                (Vec3::new(0.08, 0.3, -0.32), 0.065),
+                (Vec3::new(0.05, 0.1, -0.46), 0.0),
+            ],
+        };
+        let (mut at, mut r) = (base, 0.1);
+        for (k, (step, r1)) in way.iter().enumerate() {
+            let next = at + Vec3::new(step.x * x, step.y, step.z);
+            let c = if k + 1 == way.len() { GOLD } else { HORN };
+            tube(&mut head, 5, at, r, next, *r1, c);
+            (at, r) = (next, *r1);
+        }
         head.flag_from(from, METAL);
         // Frilled ears fanning back behind the eyes.
         let root = Vec3::new(0.36 * x, 0.42, 0.08);
@@ -288,7 +363,14 @@ pub fn dragon() -> DragonMeshes {
         );
     }
     for (z, h) in [(0.32f32, 0.16), (0.02, 0.2)] {
-        blade(&mut head, Vec3::new(0.0, 0.58, z), 0.22, h, 0.05);
+        crest(
+            &mut head,
+            look.crest,
+            Vec3::new(0.0, 0.58, z),
+            0.22,
+            h,
+            0.05,
+        );
     }
 
     let mut eye = MeshBuilder::new();
@@ -316,32 +398,55 @@ pub fn dragon() -> DragonMeshes {
         skin,
     );
     tail.flag_from(0, SHEEN);
-    blade(
+    crest(
         &mut tail,
+        look.crest,
         Vec3::new(0.0, 0.85, -TAIL_LEN * 0.45),
         0.9,
         0.75,
         0.14,
     );
 
-    // A fan of long feathers at the tail's tip, with a gold blade at its heart.
+    // The tail's tip: a fan of long feathers with a gold blade at its heart, a spade of
+    // wing skin, or a little tuft.
     let mut plume = MeshBuilder::new();
-    for (a, len) in [
-        (0.0f32, 1.5),
-        (0.35, 1.3),
-        (-0.35, 1.3),
-        (0.7, 1.0),
-        (-0.7, 1.0),
-    ] {
-        let dir = Vec3::new(a.sin(), 0.06, -a.cos()).normalize();
-        let side = Vec3::Y.cross(dir).normalize();
-        feather(&mut plume, Vec3::ZERO, dir, side, len, 0.2);
+    if look.tail == 1 {
+        let (l, r) = (Vec3::new(0.45, 0.0, -0.45), Vec3::new(-0.45, 0.0, -0.45));
+        let (tip, mid) = (Vec3::new(0.0, 0.0, -1.3), Vec3::new(0.0, 0.0, -0.5));
+        for (a, b) in [(Vec3::ZERO, l), (l, tip), (tip, r), (r, Vec3::ZERO)] {
+            plume.tri_colors(mid, a, b, [MEMBRANE_DEEP, MEMBRANE, MEMBRANE], 127);
+        }
+        blade(&mut plume, Vec3::new(0.0, -0.02, -0.25), 0.5, 0.16, 0.06);
+    } else if look.tail == 2 {
+        for (a, p, len) in [
+            (0.0f32, 0.3f32, 0.75),
+            (0.4, 0.15, 0.6),
+            (-0.4, 0.15, 0.6),
+            (0.2, 0.55, 0.55),
+            (-0.2, 0.55, 0.55),
+        ] {
+            let dir = Vec3::new(a.sin(), p.sin(), -a.cos()).normalize();
+            let side = Vec3::Y.cross(dir).normalize_or(Vec3::X);
+            feather(&mut plume, Vec3::ZERO, dir, side, len, 0.14);
+        }
+    } else {
+        for (a, len) in [
+            (0.0f32, 1.5),
+            (0.35, 1.3),
+            (-0.35, 1.3),
+            (0.7, 1.0),
+            (-0.7, 1.0),
+        ] {
+            let dir = Vec3::new(a.sin(), 0.06, -a.cos()).normalize();
+            let side = Vec3::Y.cross(dir).normalize();
+            feather(&mut plume, Vec3::ZERO, dir, side, len, 0.2);
+        }
+        for (p, len) in [(0.45f32, 1.0), (-0.3, 0.8)] {
+            let dir = Vec3::new(0.0, p.sin(), -p.cos());
+            feather(&mut plume, Vec3::ZERO, dir, Vec3::X, len, 0.16);
+        }
+        blade(&mut plume, Vec3::new(0.0, -0.02, -0.2), 0.5, 0.18, 0.06);
     }
-    for (p, len) in [(0.45f32, 1.0), (-0.3, 0.8)] {
-        let dir = Vec3::new(0.0, p.sin(), -p.cos());
-        feather(&mut plume, Vec3::ZERO, dir, Vec3::X, len, 0.16);
-    }
-    blade(&mut plume, Vec3::new(0.0, -0.02, -0.2), 0.5, 0.18, 0.06);
 
     let mut whisker = MeshBuilder::new();
     tube(
@@ -461,7 +566,7 @@ pub fn dragon() -> DragonMeshes {
         star.thin_tri(Vec3::ZERO, point(-0.5, 0.45), point(0.0, 1.0), POLLEN);
     }
 
-    DragonMeshes {
+    let mut out = DragonMeshes {
         body,
         neck,
         head,
@@ -474,7 +579,12 @@ pub fn dragon() -> DragonMeshes {
         arm: [arm.clone(), arm.mirrored_x()],
         hand: [hand.clone(), hand.mirrored_x()],
         star,
+    };
+    let colors = look.colors();
+    for m in out.all_mut() {
+        m.recolor_all(&colors);
     }
+    out
 }
 
 /// Mesh variants per prop kind. Each prop instance picks `variant % variants.len()`.
@@ -543,7 +653,9 @@ pub fn prop_variants(kind: PropKind) -> Vec<MeshBuilder> {
             })
             .collect(),
         PropKind::Spire => (0..3).map(spire).collect(),
-        PropKind::Flower => (0..4).map(flower).collect(),
+        PropKind::Flower => (0..zawnabout_sim::terrain::FLOWER_VARIANTS as u32)
+            .map(flower)
+            .collect(),
         PropKind::Cloud => (0..3).map(cloud).collect(),
         PropKind::Crystal => (0..CRYSTAL.len() as u32).map(crystal).collect(),
         PropKind::Shroom => (0..SHROOM.len() as u32).map(shroom).collect(),
@@ -1690,6 +1802,31 @@ pub fn townsfolk_body() -> MeshBuilder {
     m
 }
 
+/// A townsperson's body with only the left arm, for waving with the right, which is
+/// [`townsfolk_arm`].
+pub fn townsfolk_body_waving() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.frustum(5, 0.0, 0.2, 0.8, 0.22, Rgb(0x9A9AA0), Rgb(0x9A9AA0));
+    m.frustum(5, 0.8, 0.24, 1.42, 0.18, Rgb(0xFFFFFF), Rgb(0xFFFFFF));
+    m.cube(
+        Vec3::new(0.27, 1.12, 0.0),
+        Vec3::new(0.06, 0.28, 0.07),
+        Rgb(0xF4F4F4),
+    );
+    m
+}
+
+/// A townsperson's arm hanging from the shoulder at the origin.
+pub fn townsfolk_arm() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(
+        Vec3::new(0.0, -0.28, 0.0),
+        Vec3::new(0.06, 0.28, 0.07),
+        Rgb(0xF4F4F4),
+    );
+    m
+}
+
 /// A head for a person: 0 human, 1 rabbit folk, 2 bear folk.
 pub fn townsfolk_head(variant: u32) -> MeshBuilder {
     let mut m = MeshBuilder::new();
@@ -2236,7 +2373,99 @@ fn spire(v: u32) -> MeshBuilder {
     m
 }
 
+/// A wildflower, about 25 triangles at most, since meadows hold thousands. Variants in
+/// runs per kind, as `Flowers::variants` numbers them: garden (0 to 3), poppy (4, 5),
+/// lupine (6, 7), daisy (8, 9), hibiscus (10, 11).
 fn flower(v: u32) -> MeshBuilder {
+    match v {
+        4 | 5 => poppy(v - 4),
+        6 | 7 => lupine(v - 6),
+        8 | 9 => daisy(v - 8),
+        10 | 11 => hibiscus(v - 10),
+        _ => garden_flower(v % 4),
+    }
+}
+
+/// A red or orange cup of four petals on a thin stem, with a dark eye.
+fn poppy(v: u32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let petal = [Rgb(0xE8452C), Rgb(0xF28C28)][v as usize];
+    m.frustum(3, 0.0, 0.05, 0.8, 0.03, STEM, STEM);
+    let c = Vec3::new(0.0, 0.8, 0.0);
+    for i in 0..4 {
+        let a = (i as f32 + 0.5) / 4.0 * TAU;
+        let dir = Vec3::new(a.cos(), 0.0, a.sin());
+        let side = Vec3::new(-a.sin(), 0.0, a.cos());
+        let (b0, b1) = (c + side * 0.1, c - side * 0.1);
+        let up = Vec3::Y * 0.26;
+        let (t0, t1) = (
+            b0 + dir * 0.26 + up + side * 0.1,
+            b1 + dir * 0.26 + up - side * 0.1,
+        );
+        m.thin_tri(b0, b1, t1, petal);
+        m.thin_tri(b0, t1, t0, petal);
+    }
+    m.frustum(3, 0.78, 0.07, 0.9, 0.04, Rgb(0x2E2A30), Rgb(0x2E2A30));
+    m
+}
+
+/// A tall purple or pink spike of bloom over a fan of leaves.
+fn lupine(v: u32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let petal = [Rgb(0x8A6FD8), Rgb(0xE58FC0)][v as usize];
+    m.frustum(3, 0.0, 0.05, 0.6, 0.04, STEM, STEM);
+    m.frustum(4, 0.55, 0.15, 1.4, 0.02, petal, petal);
+    for i in 0..3 {
+        let a = i as f32 / 3.0 * TAU;
+        let dir = Vec3::new(a.cos(), 0.2, a.sin());
+        let side = Vec3::new(-a.sin(), 0.0, a.cos()) * 0.1;
+        let c = Vec3::new(0.0, 0.15, 0.0);
+        m.thin_tri(c, c + dir * 0.45 + side, c + dir * 0.45 - side, STEM);
+    }
+    m
+}
+
+/// White or yellow rays round a gold eye.
+fn daisy(v: u32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let petal = [Rgb(0xFFFFFF), Rgb(0xFFD84A)][v as usize];
+    m.frustum(3, 0.0, 0.04, 0.9, 0.03, STEM, STEM);
+    let c = Vec3::new(0.0, 0.92, 0.0);
+    for i in 0..8 {
+        let a = i as f32 / 8.0 * TAU;
+        let dir = Vec3::new(a.cos(), 0.05, a.sin());
+        let side = Vec3::new(-a.sin(), 0.0, a.cos()) * 0.06;
+        m.thin_tri(c + side, c + dir * 0.36, c - side, petal);
+    }
+    m.frustum(3, 0.9, 0.09, 0.98, 0.07, Rgb(0xE8A92A), Rgb(0xE8A92A));
+    m
+}
+
+/// A big red or pink trumpet flower with a long stamen, on a leafy stem.
+fn hibiscus(v: u32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let petal = [Rgb(0xE8304A), Rgb(0xF57FB0)][v as usize];
+    let leaf = Rgb(0x3E8E3E);
+    m.frustum(3, 0.0, 0.07, 0.85, 0.05, STEM, STEM);
+    for (a, y) in [(0.4f32, 0.35f32), (3.4, 0.55)] {
+        let dir = Vec3::new(a.cos(), 0.3, a.sin());
+        let side = Vec3::new(-a.sin(), 0.0, a.cos()) * 0.16;
+        let c = Vec3::new(0.0, y, 0.0);
+        m.thin_tri(c, c + dir * 0.5 + side, c + dir * 0.5 - side, leaf);
+    }
+    let c = Vec3::new(0.0, 0.85, 0.0);
+    for i in 0..5 {
+        let a = i as f32 / 5.0 * TAU;
+        let dir = Vec3::new(a.cos(), 0.35, a.sin());
+        let side = Vec3::new(-a.sin(), 0.0, a.cos()) * 0.3;
+        m.thin_tri(c, c + dir * 0.55 + side, c + dir * 0.55 - side, petal);
+    }
+    m.frustum(3, 0.85, 0.025, 1.3, 0.02, POLLEN, POLLEN);
+    m
+}
+
+/// The first meadow flower: five petals round a pollen cube.
+fn garden_flower(v: u32) -> MeshBuilder {
     let mut m = MeshBuilder::new();
     m.frustum(3, 0.0, 0.06, 0.9, 0.04, STEM, STEM);
     let petal = PETAL[v as usize];
@@ -3115,6 +3344,59 @@ pub fn tractor() -> MeshBuilder {
                 Quat::from_rotation_z(PI * 0.5),
                 Vec3::new(x * 0.62, 0.42, 1.3),
             ),
+        );
+    }
+    m
+}
+
+/// A shipyard crane's turning top, from the tower head at the origin: a jib `len` long
+/// out along +z, a counterweight behind, the driver's cab and a trolley `reach` out.
+pub fn yard_jib(len: f32, reach: f32) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (paint, steel) = (Rgb(0xF2B134), Rgb(0x8E9AA6));
+    m.frustum(8, -0.6, 1.4, 0.0, 1.4, steel, steel);
+    m.cube(
+        Vec3::new(0.0, 1.0, len * 0.35),
+        Vec3::new(0.8, 0.8, len * 0.6),
+        paint,
+    );
+    m.cube(
+        Vec3::new(0.0, 0.5, -len * 0.2),
+        Vec3::new(1.6, 1.6, 2.0),
+        steel,
+    );
+    m.cube(
+        Vec3::new(0.0, -1.0, 1.6),
+        Vec3::new(1.0, 1.0, 1.1),
+        Rgb(0xF2F2EE),
+    );
+    m.cube(
+        Vec3::new(0.0, -0.8, 2.72),
+        Vec3::new(0.8, 0.5, 0.04),
+        Rgb(0x3D5873),
+    );
+    m.cube(Vec3::new(0.0, -0.1, reach), Vec3::new(0.9, 0.3, 1.0), steel);
+    m
+}
+
+/// A strapped bundle of planks for the shipyard, 5 m long along z, its base at the origin.
+pub fn plank_bundle() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let wood = [Rgb(0xC8955A), Rgb(0xB07D45)];
+    for (j, y) in [0.12f32, 0.37].into_iter().enumerate() {
+        for (i, x) in [-0.6f32, -0.2, 0.2, 0.6].into_iter().enumerate() {
+            m.cube(
+                Vec3::new(x, y, 0.0),
+                Vec3::new(0.19, 0.12, 2.5),
+                wood[(i + j) % 2],
+            );
+        }
+    }
+    for z in [-1.6f32, 1.6] {
+        m.cube(
+            Vec3::new(0.0, 0.25, z),
+            Vec3::new(0.82, 0.27, 0.06),
+            Rgb(0x3A3A40),
         );
     }
     m

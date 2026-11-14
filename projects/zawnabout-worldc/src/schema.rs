@@ -245,7 +245,8 @@ pub fn spec(name: &str) -> Option<Spec> {
             &[],
             Pts::D2(&["sharp"]),
         ),
-        "meadow" | "snowfield" => s(&[], &[], Pts::D2(&["sharp"])),
+        "meadow" => s(&[("flowers", 's', false)], &[], Pts::D2(&["sharp"])),
+        "snowfield" => s(&[], &[], Pts::D2(&["sharp"])),
         "city" | "village" => s(TOWN, TOWN_KIDS, Pts::D2(&["sharp"])),
         "tier" => bare(0, &[("y", 'n', true)]),
         "site" => s(

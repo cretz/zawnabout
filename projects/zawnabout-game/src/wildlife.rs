@@ -3,6 +3,8 @@
 //! meadows by day and fireflies by night, and rowboats and kayaks out on the water. All
 //! for looks, and a pure function of the clock.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::f32::consts::{PI, TAU};
 
 use glam::{Mat4, Quat, Vec2, Vec3, Vec4};
@@ -36,7 +38,16 @@ pub struct Wildlife {
     butterfly: MeshId,
     rowboat: MeshId,
     kayak: MeshId,
+    /// What each grid cell of songbirds or butterflies found out about its ground, kept
+    /// while the camera stays about. Cells stay put, so each only has to be found once.
+    spots: RefCell<HashMap<(u8, i32, i32), Spot>>,
 }
+
+/// The ground height and slope where small life lives, or none for no life there.
+type Spot = Option<(f32, Vec3)>;
+
+/// Cells of small life kept in [`Wildlife::spots`] before they are all found afresh.
+const SPOTS_KEPT: usize = 4096;
 
 /// Butterfly wing colors.
 const WINGS: [Vec3; 5] = [
@@ -133,6 +144,7 @@ impl Wildlife {
             butterfly: renderer.add_mesh(&models::butterfly()),
             rowboat: renderer.add_mesh(&models::rowboat()),
             kayak: renderer.add_mesh(&models::kayak()),
+            spots: RefCell::default(),
         }
     }
 
@@ -213,6 +225,17 @@ impl Wildlife {
             }
         };
         let day = 1.0 - night;
+        let mut spots = self.spots.borrow_mut();
+        if spots.len() > SPOTS_KEPT {
+            spots.clear();
+        }
+        let key = |tag: u8, at: Vec2, size: f32| {
+            (
+                tag,
+                (at.x / size).round() as i32,
+                (at.y / size).round() as i32,
+            )
+        };
 
         // Songbirds flit about in little flocks wherever trees grow.
         if day > 0.3 {
@@ -221,17 +244,25 @@ impl Wildlife {
                     return;
                 }
                 let c = at + Vec2::new(hash(seed + 1), hash(seed + 2)) * 70.0;
-                if !near(c, 280.0)
-                    || terrain
+                if !near(c, 280.0) {
+                    return;
+                }
+                let spot = *spots.entry(key(0, at, 70.0)).or_insert_with(|| {
+                    if terrain
                         .cover(c.x, c.y)
                         .is_none_or(|cv| cv.kind != CoverKind::Forest)
-                {
+                    {
+                        return None;
+                    }
+                    let ground = terrain.height(c.x, c.y);
+                    terrain
+                        .water(c.x, c.y, ground)
+                        .is_none()
+                        .then_some((ground, Vec3::Y))
+                });
+                let Some((ground, _)) = spot else {
                     return;
-                }
-                let ground = terrain.height(c.x, c.y);
-                if terrain.water(c.x, c.y, ground).is_some() {
-                    return;
-                }
+                };
                 // The flock hops from tree to tree: it rests, then darts on together.
                 let hop = (time * 0.15 + hash(seed + 3) * 9.0).floor();
                 let t = (time * 0.15 + hash(seed + 3) * 9.0).fract();
@@ -271,19 +302,23 @@ impl Wildlife {
             if !near(c, 80.0) {
                 return;
             }
-            let ground = terrain.height(c.x, c.y);
-            let open = terrain
-                .cover(c.x, c.y)
-                .is_none_or(|cv| matches!(cv.kind, CoverKind::Meadow | CoverKind::Forest));
-            if !open
-                || ground < 3.0
-                || terrain.road_spot(c.x, c.y, 8.0).is_some()
-                || terrain.normal(c.x, c.y).y < 0.8
-                || terrain.water(c.x, c.y, ground).is_some()
-                || terrain.daylight(Vec3::new(c.x, ground + 2.0, c.y)) < 0.5
-            {
+            let spot = *spots.entry(key(1, at, 22.0)).or_insert_with(|| {
+                let ground = terrain.height(c.x, c.y);
+                let open = terrain
+                    .cover(c.x, c.y)
+                    .is_none_or(|cv| matches!(cv.kind, CoverKind::Meadow | CoverKind::Forest));
+                let normal = terrain.normal(c.x, c.y);
+                let lives = open
+                    && ground >= 3.0
+                    && terrain.road_spot(c.x, c.y, 8.0).is_none()
+                    && normal.y >= 0.8
+                    && terrain.water(c.x, c.y, ground).is_none()
+                    && terrain.daylight(Vec3::new(c.x, ground + 2.0, c.y)) >= 0.5;
+                lives.then_some((ground, normal))
+            });
+            let Some((ground, normal)) = spot else {
                 return;
-            }
+            };
             for b in 0..2u32 {
                 let s = seed + b * 17;
                 let wander = Vec2::new(
@@ -291,7 +326,8 @@ impl Wildlife {
                     (time * 0.27 + hash(s + 1) * 9.0).cos() + (time * 0.71 + s as f32).cos() * 0.3,
                 ) * 5.0;
                 let p = c + wander;
-                let y = terrain.height(p.x, p.y);
+                // Along the slope at the middle, near enough a few meters out.
+                let y = ground - (normal.x * wander.x + normal.z * wander.y) / normal.y;
                 if day > 0.5 {
                     let lift = 0.6 + (time * 1.7 + s as f32).sin().abs() * 1.2;
                     let flap = 0.15 + 0.85 * (time * 14.0 + s as f32).sin().abs();

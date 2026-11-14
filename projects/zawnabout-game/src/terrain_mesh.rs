@@ -84,6 +84,23 @@ const CAVE_RANGE: f32 = 1800.0;
 /// How far away deep cave walls draw from outside, when only peeking in a mouth.
 const PEEK_RANGE: f32 = 400.0;
 
+/// Sends up to `bytes` more of a chunk's meshes, outside first. Says whether both are all
+/// there.
+fn send_some(renderer: &mut Renderer, send: &mut Send, bytes: usize) -> bool {
+    let mut left = bytes;
+    for s in [&mut send.outer, &mut send.inner].into_iter().flatten() {
+        if left == 0 {
+            return false;
+        }
+        let before = s.left();
+        if !renderer.send_mesh(s, left) {
+            return false;
+        }
+        left = left.saturating_sub(before);
+    }
+    true
+}
+
 fn upload(renderer: &mut Renderer, mesh: &MeshBuilder) -> Option<(MeshId, Vec3, f32)> {
     if mesh.verts.is_empty() {
         return None;
@@ -107,6 +124,20 @@ struct Group {
     mesh: Option<(MeshId, Vec3, f32)>,
 }
 
+/// A built chunk on its way to the GPU: its outside and deep cave meshes, and the rest of
+/// what it keeps once they are there.
+struct Send {
+    key: Key,
+    outer: Option<crate::render::Sending>,
+    inner: Option<crate::render::Sending>,
+    far: Option<MeshBuilder>,
+    skipped: Vec<u16>,
+}
+
+/// How much of a chunk's meshes goes up to the GPU in one frame (bytes). A whole chunk at
+/// once stalls a slow GPU for a frame or more.
+const SEND_BYTES: usize = 96 * 1024;
+
 /// How long a square's far chunks must stay the same before they merge into one mesh
 /// (s). A merged square is a big upload, which stalls a slow GPU, so not while the
 /// chunks are still changing, as they do all through a turn.
@@ -121,6 +152,8 @@ pub struct TerrainMeshes {
     unsettled: HashMap<(i32, i32), (Vec<Key>, f64)>,
     /// The chunk being built, when the last frame ran out of time for it.
     job: Option<Job>,
+    /// A built chunk whose meshes are still going up to the GPU, a slice a frame.
+    sending: Option<Send>,
 }
 
 impl Key {
@@ -231,7 +264,21 @@ impl TerrainMeshes {
         let near_now = near_voids(terrain, cam);
         let near = |v: u16| near_now[v as usize];
         let ready = |b: Option<&Built>| b.is_some_and(|b| !b.skipped.iter().any(|v| near(*v)));
-        let mut left = budget;
+        // Carry on sending the chunk on its way up, and only build more once it is there.
+        // Until then the chunk drawn there before keeps drawing.
+        let bytes = if secs.is_finite() {
+            SEND_BYTES
+        } else {
+            usize::MAX
+        };
+        if let Some(mut send) = self.sending.take() {
+            if send_some(renderer, &mut send, bytes) {
+                self.install(renderer, send);
+            } else {
+                self.sending = Some(send);
+            }
+        }
+        let mut left = if self.sending.is_some() { 0 } else { budget };
         for k in &wanted {
             if left == 0 {
                 break;
@@ -254,24 +301,20 @@ impl TerrainMeshes {
                     self.job = Some(job);
                     break;
                 }
-                let (outer, inner, skipped) = (job.m, job.inner, job.skipped);
-                let merge = k.lod >= MERGE_LOD && !outer.verts.is_empty();
-                let built = Built {
-                    outer: upload(renderer, &outer),
-                    far: merge.then_some(outer),
-                    inner: upload(renderer, &inner),
-                    skipped,
+                let merge = k.lod >= MERGE_LOD && !job.m.verts.is_empty();
+                let mut send = Send {
+                    key: *k,
+                    outer: renderer.start_mesh(&job.m),
+                    inner: renderer.start_mesh(&job.inner),
+                    far: merge.then_some(job.m),
+                    skipped: job.skipped,
                 };
-                if let Some(old) = self.built.insert(*k, built) {
-                    for (mesh, _, _) in [old.outer, old.inner].into_iter().flatten() {
-                        renderer.free_mesh(mesh);
-                    }
-                }
-                // A far chunk built afresh changes its square's merged mesh.
-                if let Some(g) = self.groups.remove(&k.group())
-                    && let Some((mesh, _, _)) = g.mesh
-                {
-                    renderer.free_mesh(mesh);
+                // The first slice goes this frame, all of it when time does not matter.
+                if send_some(renderer, &mut send, bytes) {
+                    self.install(renderer, send);
+                } else {
+                    self.sending = Some(send);
+                    break;
                 }
             }
         }
@@ -302,6 +345,33 @@ impl TerrainMeshes {
         });
         self.drawn = drawn;
         self.merge(renderer);
+    }
+
+    /// Puts a chunk whose meshes are all on the GPU in place of whatever drew there.
+    fn install(&mut self, renderer: &mut Renderer, send: Send) {
+        let mut done = |s: Option<crate::render::Sending>| {
+            s.map(|s| {
+                let (c, r) = s.sphere();
+                (renderer.finish_mesh(s), c, r)
+            })
+        };
+        let built = Built {
+            outer: done(send.outer),
+            inner: done(send.inner),
+            far: send.far,
+            skipped: send.skipped,
+        };
+        if let Some(old) = self.built.insert(send.key, built) {
+            for (mesh, _, _) in [old.outer, old.inner].into_iter().flatten() {
+                renderer.free_mesh(mesh);
+            }
+        }
+        // A far chunk built afresh changes its square's merged mesh.
+        if let Some(g) = self.groups.remove(&send.key.group())
+            && let Some((mesh, _, _)) = g.mesh
+        {
+            renderer.free_mesh(mesh);
+        }
     }
 
     /// Rebuilds the merged mesh of every square whose far chunks changed.
@@ -566,6 +636,8 @@ const DEEP_SEEN: f32 = 1200.0;
 /// distances, then that band's faces.
 struct Job {
     key: Key,
+    /// Rows of ground heights found so far, before `prep`.
+    heights: Vec<f32>,
     prep: Option<Prep>,
     /// Bands of height still to mesh, the next one last.
     bands: Vec<Band>,
@@ -603,14 +675,21 @@ struct Field {
     field: Vec<f32>,
     /// The same on a grid four times coarser, found first.
     rough: Vec<f32>,
-    /// Rows of `field` found so far.
+    /// Rows of `rough` found so far.
+    rough_row: usize,
+    /// Pieces of `field` found so far, [`SLABS`] to a row.
     row: usize,
 }
+
+/// Each row of a band's field, and of its faces, is done in this many pieces up its
+/// height, so a tall band round a cave never stalls one frame.
+const SLABS: usize = 4;
 
 impl Job {
     fn new(key: Key) -> Self {
         Self {
             key,
+            heights: Vec::new(),
             prep: None,
             bands: Vec::new(),
             field: None,
@@ -636,8 +715,19 @@ impl Job {
             }
         };
         let Some(p) = &self.prep else {
+            // The ground heights a row of corners at a time, then the rest at once.
+            let nc = N + 3;
+            let heights = &mut self.heights;
+            let row = heights.len() / nc;
+            if row < nc {
+                crate::prof::time("chunk heights", || {
+                    rows_from(row, nc, &mut |r| ground_row(terrain, self.key, r, heights))
+                });
+                return false;
+            }
+            let heights = std::mem::take(&mut self.heights);
             let Some((prep, mut bands)) =
-                crate::prof::time("chunk prep", || prepare(terrain, self.key))
+                crate::prof::time("chunk prep", || prepare(terrain, self.key, heights))
             else {
                 return true;
             };
@@ -649,14 +739,26 @@ impl Job {
         match self.field.take() {
             None => {
                 let (lo, hi, _) = self.bands.pop().expect("a band waits");
-                let f = crate::prof::time("chunk rough", || field(terrain, p, lo, hi));
+                self.field = Some((field(p, lo, hi), None, 0));
+                false
+            }
+            Some((mut f, None, _)) if f.rough_row < coarse(p.nc) => {
+                let end = crate::prof::time("chunk rough", || {
+                    rows_from(f.rough_row, coarse(p.nc), &mut |r| {
+                        rough_row(terrain, p, &mut f, r)
+                    })
+                });
+                f.rough_row = end;
                 self.field = Some((f, None, 0));
                 false
             }
-            Some((mut f, None, _)) if f.row < p.nc => {
+            Some((mut f, None, _)) if f.row < p.nc * SLABS => {
+                let slab = f.ncy.div_ceil(SLABS);
+                let ncy = f.ncy;
                 let end = crate::prof::time("chunk field", || {
-                    rows_from(f.row, p.nc, &mut |r| {
-                        field_rows(terrain, p, &mut f, r..r + 1)
+                    rows_from(f.row, p.nc * SLABS, &mut |r| {
+                        let k = r % SLABS * slab;
+                        field_rows(terrain, p, &mut f, r / SLABS, k..(k + slab).min(ncy))
                     })
                 });
                 f.row = end;
@@ -668,14 +770,34 @@ impl Job {
                 self.field = Some((f, Some(n), 0));
                 false
             }
+            Some((f, Some(mut n), _)) if n.row < p.nc - 1 => {
+                let end = crate::prof::time("chunk nets", || {
+                    rows_from(n.row, p.nc - 1, &mut |j| nets_row(p, &f, &mut n, j))
+                });
+                n.row = end;
+                self.field = Some((f, Some(n), 0));
+                false
+            }
             Some((f, Some(n), row)) => {
                 let (m, inner) = (&mut self.m, &mut self.inner);
+                let slab = f.ny.div_ceil(SLABS);
                 let end = crate::prof::time("chunk faces", || {
-                    rows_from(row, p.nc, &mut |r| {
-                        faces(terrain, self.key, p, &f, &n, r..r + 1, m, inner)
+                    rows_from(row, p.nc * SLABS, &mut |r| {
+                        let k = r % SLABS * slab;
+                        faces(
+                            terrain,
+                            self.key,
+                            p,
+                            &f,
+                            &n,
+                            r / SLABS,
+                            k..k + slab,
+                            m,
+                            inner,
+                        )
                     })
                 });
-                if end < p.nc {
+                if end < p.nc * SLABS {
                     self.field = Some((f, Some(n), end));
                     return false;
                 }
@@ -714,24 +836,26 @@ fn build(
     (job.m, job.inner, job.skipped)
 }
 
-/// A chunk's ground heights, which caves reach each column of it, and the bands of
-/// height to mesh. None when it is all under the sea.
-fn prepare(terrain: &Terrain, key: Key) -> Option<(Prep, Vec<Band>)> {
+/// Adds the ground heights along row `j` of a chunk's corners to `heights`.
+fn ground_row(terrain: &Terrain, key: Key, j: usize, heights: &mut Vec<f32>) {
+    let cell = CELL0 * (1u32 << key.lod) as f32;
+    let origin = key.min();
+    let corner_xz = |i: usize| -> f32 { (i as f32 - 1.0) * cell };
+    for i in 0..N + 3 {
+        heights.push(terrain.height(origin.x + corner_xz(i), origin.y + corner_xz(j)));
+    }
+}
+
+/// From a chunk's ground heights (see [`ground_row`]), which caves reach each column of
+/// it, and the bands of height to mesh. None when it is all under the sea.
+fn prepare(terrain: &Terrain, key: Key, heights: Vec<f32>) -> Option<(Prep, Vec<Band>)> {
     let cell = CELL0 * (1u32 << key.lod) as f32;
     let origin = key.min();
     // Corners run one cell past each side, so neighbors overlap.
     let nc = N + 3;
     let corner_xz = |i: usize| -> f32 { (i as f32 - 1.0) * cell };
-    let mut heights = vec![0.0f32; nc * nc];
-    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
-    for j in 0..nc {
-        for i in 0..nc {
-            let h = terrain.height(origin.x + corner_xz(i), origin.y + corner_xz(j));
-            heights[j * nc + i] = h;
-            lo = lo.min(h);
-            hi = hi.max(h);
-        }
-    }
+    let lo = heights.iter().copied().fold(f32::MAX, f32::min);
+    let hi = heights.iter().copied().fold(f32::MIN, f32::max);
     let pad = cell * 2.0;
     let size = key.size();
     let list = terrain.voids_in(
@@ -807,10 +931,41 @@ fn prepare(terrain: &Terrain, key: Key) -> Option<(Prep, Vec<Band>)> {
     ))
 }
 
-/// Rock distance at every corner of the band from `lo` to `hi`.
-/// The band from `lo` to `hi`, its rock distance found roughly on a coarse grid. The
-/// rest comes a few rows at a time from [`field_rows`].
-fn field(terrain: &Terrain, p: &Prep, lo: f32, hi: f32) -> Field {
+/// The band from `lo` to `hi`, ready for its rock distance: first on a coarse grid a row
+/// at a time from [`rough_row`], then the rest a piece of a row at a time from
+/// [`field_rows`].
+fn field(p: &Prep, lo: f32, hi: f32) -> Field {
+    let Prep { cell, nc, .. } = *p;
+    let y0 = (lo / cell).floor() * cell - cell;
+    let ny = ((hi - y0) / cell).ceil() as usize + 2;
+    // Rock distance at every corner. Only corners near caves need the full 3D test, and
+    // of those only the ones near a surface: a coarse pass first finds where that is, a
+    // row at a time in [`rough_row`].
+    let ncy = ny + 1;
+    let field = vec![0.0f32; nc * ncy * nc];
+    let cx = coarse(nc);
+    let rough = vec![0.0f32; cx * coarse(ncy) * cx];
+    Field {
+        y0,
+        ny,
+        ncy,
+        field,
+        rough,
+        rough_row: 0,
+        row: 0,
+    }
+}
+
+/// Corners of the coarse grid in `n` corners of the fine one.
+fn coarse(n: usize) -> usize {
+    (n - 1).div_ceil(ROUGH) + 1
+}
+
+/// How many fine cells to a coarse one, each way.
+const ROUGH: usize = 4;
+
+/// Rock distance at row `cj` of a band's coarse grid.
+fn rough_row(terrain: &Terrain, p: &Prep, f: &mut Field, cj: usize) {
     let Prep {
         cell,
         origin,
@@ -821,56 +976,37 @@ fn field(terrain: &Terrain, p: &Prep, lo: f32, hi: f32) -> Field {
         ref col_spans,
         ..
     } = *p;
+    let Field {
+        y0,
+        ncy,
+        ref mut rough,
+        ..
+    } = *f;
     let corner_xz = |i: usize| -> f32 { (i as f32 - 1.0) * cell };
-    let y0 = (lo / cell).floor() * cell - cell;
-    let ny = ((hi - y0) / cell).ceil() as usize + 2;
-    let at = |i: usize, k: usize, j: usize| -> Vec3 {
-        Vec3::new(
-            origin.x + corner_xz(i),
-            y0 + k as f32 * cell,
-            origin.y + corner_xz(j),
-        )
-    };
-    // Rock distance at every corner. Only corners near caves need the full 3D test, and
-    // of those only the ones near a surface: a coarse pass first finds where that is.
-    let ncy = ny + 1;
-    let field = vec![0.0f32; nc * ncy * nc];
     let cave_zone = |col: usize, y: f32, h: f32| {
         y < h + pad && col_spans[col].iter().any(|&(lo, hi)| y > lo && y < hi)
     };
-    const C: usize = 4;
-    let coarse = |n: usize| (n - 1).div_ceil(C) + 1;
-    let fine = |c: usize, n: usize| (c * C).min(n - 1);
+    let fine = |c: usize, n: usize| (c * ROUGH).min(n - 1);
     let (cx, cy) = (coarse(nc), coarse(ncy));
-    let mut rough = vec![0.0f32; cx * cy * cx];
-    for cj in 0..cx {
-        for ck in 0..cy {
-            for ci in 0..cx {
-                let (i, k, j) = (fine(ci, nc), fine(ck, ncy), fine(cj, nc));
-                let h = heights[j * nc + i];
-                let y = y0 + k as f32 * cell;
-                let col = j * nc + i;
-                rough[(cj * cy + ck) * cx + ci] = if cave_zone(col, y, h) {
-                    terrain.sdf_with(at(i, k, j), h, &col_voids[col])
-                } else {
-                    y - h
-                };
-            }
+    for ck in 0..cy {
+        for ci in 0..cx {
+            let (i, k, j) = (fine(ci, nc), fine(ck, ncy), fine(cj, nc));
+            let h = heights[j * nc + i];
+            let y = y0 + k as f32 * cell;
+            let col = j * nc + i;
+            rough[(cj * cy + ck) * cx + ci] = if cave_zone(col, y, h) {
+                let at = Vec3::new(origin.x + corner_xz(i), y, origin.y + corner_xz(j));
+                terrain.sdf_with(at, h, &col_voids[col])
+            } else {
+                y - h
+            };
         }
-    }
-    Field {
-        y0,
-        ny,
-        ncy,
-        field,
-        rough,
-        row: 0,
     }
 }
 
-/// Rock distance at every corner of rows `rows` of a band's grid, from its coarse grid
-/// where that is far from any surface.
-fn field_rows(terrain: &Terrain, p: &Prep, f: &mut Field, rows: std::ops::Range<usize>) {
+/// Rock distance at the corners of row `j` of a band's grid, from height `ks.start` up to
+/// before `ks.end`, from its coarse grid where that is far from any surface.
+fn field_rows(terrain: &Terrain, p: &Prep, f: &mut Field, j: usize, ks: std::ops::Range<usize>) {
     let Prep {
         cell,
         origin,
@@ -899,66 +1035,60 @@ fn field_rows(terrain: &Terrain, p: &Prep, f: &mut Field, rows: std::ops::Range<
     let cave_zone = |col: usize, y: f32, h: f32| {
         y < h + pad && col_spans[col].iter().any(|&(lo, hi)| y > lo && y < hi)
     };
-    const C: usize = 4;
-    let coarse = |n: usize| (n - 1).div_ceil(C) + 1;
-    let fine = |c: usize, n: usize| (c * C).min(n - 1);
+    let fine = |c: usize, n: usize| (c * ROUGH).min(n - 1);
     let (cx, cy) = (coarse(nc), coarse(ncy));
     // Coarse values are only trusted this far from a surface.
-    let band = C as f32 * cell * 1.5;
+    let band = ROUGH as f32 * cell * 1.5;
     let lerp_axis = |f: usize, n: usize| {
-        let c = (f / C).min(coarse(n) - 2);
+        let c = (f / ROUGH).min(coarse(n) - 2);
         let (a, b) = (fine(c, n), fine(c + 1, n));
         (c, (f - a) as f32 / (b - a).max(1) as f32)
     };
-    for j in rows.start..rows.end.min(nc) {
-        let (cj, tj) = lerp_axis(j, nc);
-        for k in 0..ncy {
-            let (ck, tk) = lerp_axis(k, ncy);
-            for i in 0..nc {
-                let h = heights[j * nc + i];
-                let y = y0 + k as f32 * cell;
-                let col = j * nc + i;
-                let mut d = y - h;
-                if cave_zone(col, y, h) {
-                    let (ci, ti) = lerp_axis(i, nc);
-                    let r = |a: usize, b: usize, c: usize| {
-                        rough[((cj + c) * cy + ck + b) * cx + ci + a]
-                    };
-                    let mixf = |a: f32, b: f32, t: f32| a + (b - a) * t;
-                    let guess = mixf(
-                        mixf(
-                            mixf(r(0, 0, 0), r(1, 0, 0), ti),
-                            mixf(r(0, 1, 0), r(1, 1, 0), ti),
-                            tk,
-                        ),
-                        mixf(
-                            mixf(r(0, 0, 1), r(1, 0, 1), ti),
-                            mixf(r(0, 1, 1), r(1, 1, 1), ti),
-                            tk,
-                        ),
-                        tj,
-                    );
-                    // Trust the guess only when the whole coarse cell is far on one side.
-                    let corners = [
-                        r(0, 0, 0),
-                        r(1, 0, 0),
-                        r(0, 1, 0),
-                        r(1, 1, 0),
-                        r(0, 0, 1),
-                        r(1, 0, 1),
-                        r(0, 1, 1),
-                        r(1, 1, 1),
-                    ];
-                    let clear =
-                        corners.iter().all(|c| *c > band) || corners.iter().all(|c| *c < -band);
-                    d = if clear {
-                        guess
-                    } else {
-                        terrain.sdf_with(at(i, k, j), h, &col_voids[col])
-                    };
-                }
-                field[(j * ncy + k) * nc + i] = d;
+    let (cj, tj) = lerp_axis(j, nc);
+    for k in ks {
+        let (ck, tk) = lerp_axis(k, ncy);
+        for i in 0..nc {
+            let h = heights[j * nc + i];
+            let y = y0 + k as f32 * cell;
+            let col = j * nc + i;
+            let mut d = y - h;
+            if cave_zone(col, y, h) {
+                let (ci, ti) = lerp_axis(i, nc);
+                let r =
+                    |a: usize, b: usize, c: usize| rough[((cj + c) * cy + ck + b) * cx + ci + a];
+                let mixf = |a: f32, b: f32, t: f32| a + (b - a) * t;
+                let guess = mixf(
+                    mixf(
+                        mixf(r(0, 0, 0), r(1, 0, 0), ti),
+                        mixf(r(0, 1, 0), r(1, 1, 0), ti),
+                        tk,
+                    ),
+                    mixf(
+                        mixf(r(0, 0, 1), r(1, 0, 1), ti),
+                        mixf(r(0, 1, 1), r(1, 1, 1), ti),
+                        tk,
+                    ),
+                    tj,
+                );
+                // Trust the guess only when the whole coarse cell is far on one side.
+                let corners = [
+                    r(0, 0, 0),
+                    r(1, 0, 0),
+                    r(0, 1, 0),
+                    r(1, 1, 0),
+                    r(0, 0, 1),
+                    r(1, 0, 1),
+                    r(0, 1, 1),
+                    r(1, 1, 1),
+                ];
+                let clear = corners.iter().all(|c| *c > band) || corners.iter().all(|c| *c < -band);
+                d = if clear {
+                    guess
+                } else {
+                    terrain.sdf_with(at(i, k, j), h, &col_voids[col])
+                };
             }
+            field[(j * ncy + k) * nc + i] = d;
         }
     }
 }
@@ -970,13 +1100,15 @@ struct Nets {
     skylight: bool,
     verts: Vec<u32>,
     points: Vec<Vec3>,
+    /// Rows of cells whose points are found so far.
+    row: usize,
 }
 
-/// The surface's points in one band, from its field.
+/// Where one band is open to the sky, from its field. Its points come after, a row of
+/// cells at a time.
 fn nets(p: &Prep, f: &Field) -> Nets {
     let Prep {
         cell,
-        origin,
         nc,
         ref heights,
         ..
@@ -988,14 +1120,6 @@ fn nets(p: &Prep, f: &Field) -> Nets {
         ref field,
         ..
     } = *f;
-    let corner_xz = |i: usize| -> f32 { (i as f32 - 1.0) * cell };
-    let at = |i: usize, k: usize, j: usize| -> Vec3 {
-        Vec3::new(
-            origin.x + corner_xz(i),
-            y0 + k as f32 * cell,
-            origin.y + corner_xz(j),
-        )
-    };
     let sdf = |i: usize, k: usize, j: usize| -> f32 { field[(j * ncy + k) * nc + i] };
     // For each column, the lowest corner with open air all the way up to the sky. Below
     // the ground it means a sinkhole, shaft or skylight opens there.
@@ -1016,10 +1140,39 @@ fn nets(p: &Prep, f: &Field) -> Nets {
             skylight |= y0 + k as f32 * cell < heights[j * nc + i] - cell * 2.0;
         }
     }
-    // One vertex per cell that the surface passes through, at the mean edge crossing.
     let nx = nc - 1;
-    let mut verts = vec![u32::MAX; nx * ny * nx];
-    let mut points: Vec<Vec3> = Vec::new();
+    Nets {
+        open_from,
+        skylight,
+        verts: vec![u32::MAX; nx * ny * nx],
+        points: Vec::new(),
+        row: 0,
+    }
+}
+
+/// One vertex for each cell in row `j` that the surface passes through, at the mean edge
+/// crossing.
+fn nets_row(p: &Prep, f: &Field, n: &mut Nets, j: usize) {
+    let Prep {
+        cell, origin, nc, ..
+    } = *p;
+    let Field {
+        y0,
+        ny,
+        ncy,
+        ref field,
+        ..
+    } = *f;
+    let corner_xz = |i: usize| -> f32 { (i as f32 - 1.0) * cell };
+    let at = |i: usize, k: usize, j: usize| -> Vec3 {
+        Vec3::new(
+            origin.x + corner_xz(i),
+            y0 + k as f32 * cell,
+            origin.y + corner_xz(j),
+        )
+    };
+    let sdf = |i: usize, k: usize, j: usize| -> f32 { field[(j * ncy + k) * nc + i] };
+    let nx = nc - 1;
     let edges = [
         ((0, 0, 0), (1, 0, 0)),
         ((0, 1, 0), (1, 1, 0)),
@@ -1034,52 +1187,44 @@ fn nets(p: &Prep, f: &Field) -> Nets {
         ((0, 1, 0), (0, 1, 1)),
         ((1, 1, 0), (1, 1, 1)),
     ];
-    for j in 0..nx {
-        for k in 0..ny {
-            for i in 0..nx {
-                // Most cells are all rock or all air: no surface, nothing to do.
-                let first = sdf(i, k, j) < 0.0;
-                let mixed = [
-                    (1, 0, 0),
-                    (0, 1, 0),
-                    (1, 1, 0),
-                    (0, 0, 1),
-                    (1, 0, 1),
-                    (0, 1, 1),
-                    (1, 1, 1),
-                ]
-                .iter()
-                .any(|&(a, b, c)| (sdf(i + a, k + b, j + c) < 0.0) != first);
-                if !mixed {
-                    continue;
+    for k in 0..ny {
+        for i in 0..nx {
+            // Most cells are all rock or all air: no surface, nothing to do.
+            let first = sdf(i, k, j) < 0.0;
+            let mixed = [
+                (1, 0, 0),
+                (0, 1, 0),
+                (1, 1, 0),
+                (0, 0, 1),
+                (1, 0, 1),
+                (0, 1, 1),
+                (1, 1, 1),
+            ]
+            .iter()
+            .any(|&(a, b, c)| (sdf(i + a, k + b, j + c) < 0.0) != first);
+            if !mixed {
+                continue;
+            }
+            let mut sum = Vec3::ZERO;
+            let mut count = 0;
+            for ((ai, ak, aj), (bi, bk, bj)) in edges {
+                let (da, db) = (sdf(i + ai, k + ak, j + aj), sdf(i + bi, k + bk, j + bj));
+                if (da < 0.0) != (db < 0.0) {
+                    let t = da / (da - db);
+                    sum += at(i + ai, k + ak, j + aj).lerp(at(i + bi, k + bk, j + bj), t);
+                    count += 1;
                 }
-                let mut sum = Vec3::ZERO;
-                let mut count = 0;
-                for ((ai, ak, aj), (bi, bk, bj)) in edges {
-                    let (da, db) = (sdf(i + ai, k + ak, j + aj), sdf(i + bi, k + bk, j + bj));
-                    if (da < 0.0) != (db < 0.0) {
-                        let t = da / (da - db);
-                        sum += at(i + ai, k + ak, j + aj).lerp(at(i + bi, k + bk, j + bj), t);
-                        count += 1;
-                    }
-                }
-                if count > 0 {
-                    verts[(j * ny + k) * nx + i] = points.len() as u32;
-                    points.push(sum / count as f32);
-                }
+            }
+            if count > 0 {
+                n.verts[(j * ny + k) * nx + i] = n.points.len() as u32;
+                n.points.push(sum / count as f32);
             }
         }
     }
-    Nets {
-        open_from,
-        skylight,
-        verts,
-        points,
-    }
 }
 
-/// The faces of one band along rows `rows` of its grid, onto the outside mesh `m` and the
-/// deep cave mesh `inner`.
+/// The faces of one band along row `j` of its grid, from height `ks.start` up to before
+/// `ks.end`, onto the outside mesh `m` and the deep cave mesh `inner`.
 #[allow(clippy::too_many_arguments)]
 fn faces(
     terrain: &Terrain,
@@ -1087,7 +1232,8 @@ fn faces(
     p: &Prep,
     f: &Field,
     n: &Nets,
-    rows: std::ops::Range<usize>,
+    j: usize,
+    ks: std::ops::Range<usize>,
     m: &mut MeshBuilder,
     inner: &mut MeshBuilder,
 ) {
@@ -1116,6 +1262,7 @@ fn faces(
         skylight,
         ref verts,
         ref points,
+        ..
     } = *n;
     let nx = nc - 1;
     // Whether open sky lies straight above `p`.
@@ -1230,62 +1377,63 @@ fn faces(
         }
     };
     // A quad for each grid edge the surface crosses, joining the four cells around it.
-    for j in rows.start.max(1)..rows.end.min(nx) {
-        for k in 1..ny {
-            for i in 1..nx {
-                let s = sdf(i, k, j);
-                let solid = s < 0.0;
-                // Which way is out: up the field from rock to air. A quad on a grid edge
-                // across the slope can lie nearly flat, so its edge's own axis cannot say.
-                let grad = Vec3::new(
-                    sdf(i + 1, k, j) - s,
-                    sdf(i, k + 1, j) - s,
-                    sdf(i, k, j + 1) - s,
+    if !(1..nx).contains(&j) {
+        return;
+    }
+    for k in ks.start.max(1)..ks.end.min(ny) {
+        for i in 1..nx {
+            let s = sdf(i, k, j);
+            let solid = s < 0.0;
+            // Which way is out: up the field from rock to air. A quad on a grid edge
+            // across the slope can lie nearly flat, so its edge's own axis cannot say.
+            let grad = Vec3::new(
+                sdf(i + 1, k, j) - s,
+                sdf(i, k + 1, j) - s,
+                sdf(i, k, j + 1) - s,
+            );
+            let facing = |axis: Vec3| {
+                let away = if solid { axis } else { -axis };
+                if grad.length_squared() > 1e-6 && grad.dot(away) > 0.0 {
+                    grad
+                } else {
+                    away
+                }
+            };
+            if (sdf(i + 1, k, j) < 0.0) != solid {
+                let out = facing(Vec3::X);
+                quad(
+                    [
+                        vert(i, k - 1, j - 1),
+                        vert(i, k, j - 1),
+                        vert(i, k, j),
+                        vert(i, k - 1, j),
+                    ],
+                    out,
                 );
-                let facing = |axis: Vec3| {
-                    let away = if solid { axis } else { -axis };
-                    if grad.length_squared() > 1e-6 && grad.dot(away) > 0.0 {
-                        grad
-                    } else {
-                        away
-                    }
-                };
-                if (sdf(i + 1, k, j) < 0.0) != solid {
-                    let out = facing(Vec3::X);
-                    quad(
-                        [
-                            vert(i, k - 1, j - 1),
-                            vert(i, k, j - 1),
-                            vert(i, k, j),
-                            vert(i, k - 1, j),
-                        ],
-                        out,
-                    );
-                }
-                if (sdf(i, k + 1, j) < 0.0) != solid {
-                    let out = facing(Vec3::Y);
-                    quad(
-                        [
-                            vert(i - 1, k, j - 1),
-                            vert(i, k, j - 1),
-                            vert(i, k, j),
-                            vert(i - 1, k, j),
-                        ],
-                        out,
-                    );
-                }
-                if (sdf(i, k, j + 1) < 0.0) != solid {
-                    let out = facing(Vec3::Z);
-                    quad(
-                        [
-                            vert(i - 1, k - 1, j),
-                            vert(i, k - 1, j),
-                            vert(i, k, j),
-                            vert(i - 1, k, j),
-                        ],
-                        out,
-                    );
-                }
+            }
+            if (sdf(i, k + 1, j) < 0.0) != solid {
+                let out = facing(Vec3::Y);
+                quad(
+                    [
+                        vert(i - 1, k, j - 1),
+                        vert(i, k, j - 1),
+                        vert(i, k, j),
+                        vert(i - 1, k, j),
+                    ],
+                    out,
+                );
+            }
+            if (sdf(i, k, j + 1) < 0.0) != solid {
+                let out = facing(Vec3::Z);
+                quad(
+                    [
+                        vert(i - 1, k - 1, j),
+                        vert(i, k - 1, j),
+                        vert(i, k, j),
+                        vert(i - 1, k, j),
+                    ],
+                    out,
+                );
             }
         }
     }

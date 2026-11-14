@@ -416,6 +416,17 @@ fn rigs(terrain: &Terrain) -> Vec<Vec2> {
         .collect()
 }
 
+/// Every marina and yacht club, where supply boats call too.
+fn marinas(terrain: &Terrain) -> Vec<Vec2> {
+    terrain
+        .def
+        .marks
+        .iter()
+        .filter(|m| m.kind == "site:marina")
+        .map(|m| Vec2::new(m.pos[0], m.pos[2]))
+        .collect()
+}
+
 /// Landing spots on every balloon field, on the ground.
 fn balloon_spots(terrain: &Terrain) -> Vec<Vec3> {
     terrain
@@ -550,23 +561,32 @@ impl Traffic {
                     p.accel = 0.4;
                     p.dwell = 45.0;
                 }
-                // Supply ships tie up where they start, in the harbor, and alongside every
-                // oil rig they pass, and take their time loading.
+                // Supply ships tie up where they start, in the harbor, alongside every oil
+                // rig they pass and off every marina they come close to, and take their
+                // time loading.
                 if r.kind == "supply" {
                     let p = &mut t.paths[path];
                     let mut stops = vec![0.0];
-                    for rig in rigs(terrain) {
+                    let calls = rigs(terrain)
+                        .into_iter()
+                        .map(|c| (c, 60.0))
+                        .chain(marinas(terrain).into_iter().map(|c| (c, 150.0)));
+                    for (at, reach) in calls {
                         let (i, d) = p
                             .pts
                             .iter()
                             .enumerate()
-                            .map(|(i, q)| (i, Vec2::new(q.x - rig.x, q.z - rig.y).length()))
+                            .map(|(i, q)| (i, Vec2::new(q.x - at.x, q.z - at.y).length()))
                             .min_by(|a, b| a.1.total_cmp(&b.1))
                             .expect("a route has points");
-                        if d < 60.0 {
-                            stops.push(p.along[i]);
+                        let d_along = p.along[i];
+                        let last = p.len() - 1.0;
+                        if d < reach && d_along > 10.0 && (d_along < last || !p.looped) {
+                            stops.push(d_along);
                         }
                     }
+                    stops.sort_by(f32::total_cmp);
+                    stops.dedup_by(|a, b| (*a - *b).abs() < 10.0);
                     p.stops = stops;
                     p.accel = 0.5;
                     p.dwell = 50.0;

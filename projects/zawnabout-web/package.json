@@ -14,7 +14,8 @@
     "build": "pnpm wasm && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "shot": "node scripts/shot.mjs"
+    "shot": "node scripts/shot.mjs",
+    "perf": "pnpm wasm && node scripts/shot.mjs scripts/perf-route.txt perf-out --size 810x543 --dpr 2 --cpu 4"
   },
   "license": "MIT",
   "devDependencies": {

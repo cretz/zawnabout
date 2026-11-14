@@ -90,6 +90,7 @@ const NODES: &[(&str, &[Prop])] = &[
             ("hint", 's', false),
             ("gold", 'n', false),
             ("when", 's', false),
+            ("sound", 's', false),
         ],
     ),
     (
@@ -335,7 +336,7 @@ fn gate(node: &KdlNode) -> Result<String, String> {
 
 /// What an effect child of a set takes.
 const EFFECT: &[&str] = &[
-    "x", "z", "h", "x1", "z1", "h1", "x2", "z2", "h2", "name", "line", "facing", "look",
+    "x", "z", "h", "r", "x1", "z1", "h1", "x2", "z2", "h2", "name", "line", "facing", "look",
 ];
 
 /// A set's effect child (`folk`, `bunting`, `lanterns`) as Rust source.
@@ -377,6 +378,35 @@ fn effect(kid: &KdlNode) -> Result<String, String> {
                 n("x"),
                 n("z"),
                 n("x"),
+                n("z"),
+            ))
+        }
+        // A skein of geese flying a loop `r` round `x`, `z` at `h` up from the sea, the
+        // far end of the loop kept in `b`.
+        "geese" => {
+            if num(kid, "x").is_none() || num(kid, "z").is_none() {
+                return Err("geese needs x and z".into());
+            }
+            let h = num(kid, "h").unwrap_or(70.0);
+            Ok(format!(
+                "EffectDef {{ kind: \"geese\", a: [{:.2}, {h:.2}, {:.2}], b: [{:.2}, {h:.2}, {:.2}], name: \"\", line: \"\", facing: 0.0, look: 0 }}",
+                n("x"),
+                n("z"),
+                n("x") + num(kid, "r").unwrap_or(250.0),
+                n("z"),
+            ))
+        }
+        // A ghost ship at anchor on the sea at `x`, `z`, only out at night, swinging round
+        // its anchor `r` away, kept in `b`.
+        "ghostship" => {
+            if num(kid, "x").is_none() || num(kid, "z").is_none() {
+                return Err("ghostship needs x and z".into());
+            }
+            Ok(format!(
+                "EffectDef {{ kind: \"ghostship\", a: [{:.2}, 0.0, {:.2}], b: [{:.2}, 0.0, {:.2}], name: \"\", line: \"\", facing: 0.0, look: 0 }}",
+                n("x"),
+                n("z"),
+                n("x") + num(kid, "r").unwrap_or(40.0),
                 n("z"),
             ))
         }
@@ -994,6 +1024,10 @@ pub fn compile(path: &Path) -> Result<String, String> {
                 if when.as_deref().is_some_and(|w| w != "night") {
                     err("when can only be night".into());
                 }
+                let sound = text(node, "sound");
+                if sound.as_deref().is_some_and(|s| s != "chimes") {
+                    err("sound can only be chimes".into());
+                }
                 let gold = if coins {
                     num(node, "n")
                 } else {
@@ -1002,7 +1036,7 @@ pub fn compile(path: &Path) -> Result<String, String> {
                 .unwrap_or(5.0);
                 let _ = writeln!(
                     finds,
-                    "    FindDef {{ id: {id:?}, kind: {kind:?}, name: {:?}, story: {:?}, x: {:.2}, y: {}, z: {:.2}, set: {:?}, hint: {:?}, gold: {}, night: {} }},",
+                    "    FindDef {{ id: {id:?}, kind: {kind:?}, name: {:?}, story: {:?}, x: {:.2}, y: {}, z: {:.2}, set: {:?}, hint: {:?}, gold: {}, night: {}, chimes: {} }},",
                     text(node, "name").unwrap_or_default(),
                     text(node, "story").unwrap_or_default(),
                     x.unwrap_or(0.0),
@@ -1012,6 +1046,7 @@ pub fn compile(path: &Path) -> Result<String, String> {
                     text(node, "hint").unwrap_or_default(),
                     gold as u32,
                     when.is_some(),
+                    sound.is_some(),
                 );
             }
             _ => {}

@@ -99,6 +99,77 @@ fn column() {
     }
 }
 
+/// Prints a map of the rock over the caves round a spot, `ROOF="x z r"`, 2m a cell with
+/// north up: `.` no cave under the ground, `#` 12m or more of rock over one, else the
+/// meters of rock, and `o` a cave open to the sky.
+#[test]
+#[cfg(feature = "probes")]
+fn roof() {
+    let t = Terrain::new(&WORLD);
+    let v: Vec<f32> = std::env::var("ROOF")
+        .unwrap_or_default()
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let [x0, z0, r] = v[..] else { return };
+    let n = (r / 2.0) as i32;
+    for j in -n..=n {
+        let mut row = String::new();
+        for i in -n..=n {
+            let (x, z) = (x0 + i as f32 * 2.0, z0 + j as f32 * 2.0);
+            let g = t.height(x, z);
+            // The first air under the ground, looking down from it.
+            let air = (1..600)
+                .map(|k| g - k as f32 * 0.5)
+                .find(|&y| t.sdf(zawnabout_sim::glam::Vec3::new(x, y, z)) > 0.0);
+            row.push(match air {
+                None => '.',
+                Some(y) if g - y <= 0.5 => 'o',
+                Some(y) if g - y >= 12.0 => '#',
+                Some(y) => char::from_digit(((g - y) as u32).min(9), 10).unwrap_or('9'),
+            });
+        }
+        println!("{row}");
+    }
+}
+
+/// Rock over each dugout thinner than 12m away from its mouth, where the mesh could show
+/// sky through the roof: cells whose neighbors all have rock over the cave too.
+#[test]
+#[cfg(feature = "probes")]
+fn thin_roofs() {
+    let t = Terrain::new(&WORLD);
+    let roof = |x: f32, z: f32| {
+        let g = t.height(x, z);
+        (1..600)
+            .map(|k| g - k as f32 * 0.5)
+            .find(|&y| t.sdf(Vec3::new(x, y, z)) > 0.0)
+            .map(|y| g - y)
+    };
+    for m in t.def.marks.iter().filter(|m| m.kind == "dugout") {
+        let [x0, _, z0] = m.pos;
+        let mut thin = Vec::new();
+        for j in -20..=20 {
+            for i in -20..=20 {
+                let (x, z) = (x0 + i as f32 * 2.0, z0 + j as f32 * 2.0);
+                let Some(r) = roof(x, z) else { continue };
+                if r <= 0.5 || r >= 12.0 {
+                    continue;
+                }
+                let covered = (-1..=1).all(|b| {
+                    (-1..=1).all(|a| {
+                        roof(x + a as f32 * 2.0, z + b as f32 * 2.0).is_some_and(|r| r > 0.5)
+                    })
+                });
+                if covered {
+                    thin.push(format!("{x:.0} {z:.0} {r:.1}"));
+                }
+            }
+        }
+        println!("{} thin {}: {}", m.id, thin.len(), thin.join(", "));
+    }
+}
+
 /// Run with `--features probes` and `--nocapture` to see how long the world takes to build.
 #[test]
 #[cfg(feature = "probes")]

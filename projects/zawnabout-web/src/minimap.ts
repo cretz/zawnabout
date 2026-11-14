@@ -13,6 +13,15 @@ interface Group {
 
 const GROUPS: Group[] = [
   {
+    key: "lairs",
+    name: "Dragon lairs",
+    on: true,
+    kinds: {
+      home: ["🐉", "Your lair"],
+      lair: ["🕳️", "A cave for a lair"],
+    },
+  },
+  {
     key: "fun",
     name: "Fun and games",
     on: true,
@@ -209,6 +218,28 @@ function readPlaces(app: App): Place[] {
   return places;
 }
 
+/** The lairs, from `App::map_lairs`: the home one and the caves that could be. */
+function readLairs(text: string): Place[] {
+  const out: Place[] = [];
+  for (const line of text.trim().split("\n")) {
+    const [kind, id, xs, zs, ...name] = line.split(" ");
+    if (!id) continue;
+    const group = KIND_GROUP.get(kind) ?? null;
+    const label = name.join(" ");
+    out.push({
+      kind,
+      id,
+      x: Number(xs),
+      z: Number(zs),
+      under: false,
+      icon: group?.kinds[kind][0] ?? "",
+      label: kind === "home" ? `Your lair, ${label}` : `${label}, a cave for a lair`,
+      group,
+    });
+  }
+  return out;
+}
+
 /** A corner map of the whole world: you as an arrow, the soft edge as a dashed square and
  *  note pins in notes mode. Click it to make it bigger, and bigger again for the atlas: the
  *  whole map over most of the screen with a legend of things to find, each shown by its
@@ -231,6 +262,20 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
   const base = paint(MAP_PIXELS);
   let atlasBase: HTMLCanvasElement | null = null;
   const places = readPlaces(app);
+  // Lairs change as one is picked, so they are read again now and then.
+  let lairsText = "";
+  let lairsAt = 0;
+  let home: Place | null = null;
+  const refreshLairs = () => {
+    const text = app.map_lairs();
+    if (text === lairsText) return;
+    lairsText = text;
+    const fresh = readLairs(text);
+    for (let i = places.length - 1; i >= 0; i--) if (places[i].group?.key === "lairs") places.splice(i, 1);
+    places.push(...fresh);
+    home = fresh.find((p) => p.kind === "home") ?? null;
+  };
+  refreshLairs();
   const LEGEND_KEY = "zawnabout.legend";
   let showCaves = true;
   let showTowns = true;
@@ -510,6 +555,11 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
     /** Whether the atlas is open, so the game stays paused under it. */
     atlas: () => size === "atlas",
     update(pins: number[]) {
+      const now = performance.now();
+      if (now - lairsAt > 2000) {
+        lairsAt = now;
+        refreshLairs();
+      }
       const px = Math.round(canvas.clientWidth * Math.min(devicePixelRatio || 1, 2));
       if (canvas.width !== px) {
         canvas.width = canvas.height = px;
@@ -526,6 +576,7 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
           Math.round(heading * 60),
           pick ? `${pick.x},${pick.z}` : "",
           pins.join(","),
+          home ? `${home.x},${home.z}` : "",
         ].join(" ");
         if (shows === drawn) return;
         drawn = shows;
@@ -576,6 +627,19 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
           ctx.fill();
           ctx.fillText(p.icon, mx(p.x), mz(p.z) + dpr);
         }
+      }
+
+      // Home shows on the small maps too, so the way back is never lost.
+      if (home && size !== "atlas") {
+        const r = px / 22;
+        ctx.beginPath();
+        ctx.arc(mx(home.x), mz(home.z), r, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255, 248, 236, 0.9)";
+        ctx.fill();
+        ctx.font = `${Math.round(r * 1.3)}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(home.icon, mx(home.x), mz(home.z) + r * 0.08);
       }
 
       ctx.fillStyle = "#f2845c";

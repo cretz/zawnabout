@@ -1098,6 +1098,80 @@ pub fn lectern() -> MeshBuilder {
     m
 }
 
+/// A cork board on two legs for postcards in the lair, facing +z, its feet at the origin.
+/// Cards go on it at [`BOARD_SPOTS`].
+pub fn pinboard() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    for x in [-1.1f32, 1.1] {
+        tube(
+            &mut m,
+            5,
+            Vec3::new(x, 0.0, -0.05),
+            0.07,
+            Vec3::new(x, 2.3, -0.05),
+            0.06,
+            WOOD_DARK,
+        );
+    }
+    m.cube(
+        Vec3::new(0.0, 1.55, 0.0),
+        Vec3::new(1.2, 0.7, 0.04),
+        Rgb(0xC9A06A),
+    );
+    m.cube(
+        Vec3::new(0.0, 2.28, 0.0),
+        Vec3::new(1.3, 0.06, 0.08),
+        WOOD_DARK,
+    );
+    m
+}
+
+/// Where cards go on a [`pinboard`], three across and two down.
+pub const BOARD_SPOTS: [(f32, f32); 6] = [
+    (-0.78, 1.92),
+    (0.0, 1.95),
+    (0.78, 1.9),
+    (-0.78, 1.2),
+    (0.0, 1.17),
+    (0.78, 1.21),
+];
+
+/// A postcard pinned up in the lair, facing +z and centered on the origin: a white card
+/// round a little picture, `v` picking which of three (sea, hills or sunset).
+pub fn postcard(v: usize) -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(Vec3::ZERO, Vec3::new(0.32, 0.22, 0.015), IVORY);
+    let (sky, land, sun) = match v % 3 {
+        0 => (Rgb(0x8FC8F0), Rgb(0x3E8FC9), Rgb(0xFFF1A8)),
+        1 => (Rgb(0xBFE3F7), Rgb(0x6DBB5A), Rgb(0xFFE38A)),
+        _ => (Rgb(0xF6B08A), Rgb(0x7A5A8C), Rgb(0xFFD36E)),
+    };
+    m.cube(Vec3::new(0.0, 0.06, 0.02), Vec3::new(0.27, 0.11, 0.01), sky);
+    m.cube(
+        Vec3::new(0.0, -0.1, 0.02),
+        Vec3::new(0.27, 0.06, 0.01),
+        land,
+    );
+    m.blob(
+        Vec3::new(0.14, 0.09, 0.03),
+        Vec3::splat(0.05),
+        false,
+        0.0,
+        1,
+        sun,
+    );
+    // The pin.
+    m.blob(
+        Vec3::new(0.0, 0.19, 0.03),
+        Vec3::splat(0.03),
+        false,
+        0.0,
+        1,
+        Rgb(0xE0564A),
+    );
+    m
+}
+
 /// A speech bubble over someone who can be talked to, a meter wide, facing +z, glowing
 /// so it reads by night too. `ask` marks someone with a favor to ask or be thanked for.
 /// A passenger's seat for the dragon's back: a woven basket on a striped blanket, with
@@ -1237,6 +1311,101 @@ pub fn coins(m: &mut MeshBuilder, size: f32) {
             );
         }
     });
+}
+
+/// An old three-masted ship for the ghost ship, about 34 m long, waterline at the origin,
+/// bow +z. Drawn see-through and glowing, so its colors are its glow.
+pub fn ghost_ship() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (hull, rail, sail) = (Rgb(0x6FD8C8), Rgb(0xA8F0E0), Rgb(0xD8FFF4));
+    // The hull, section by section from stern to bow: z, half width, deck height, keel.
+    const SECTIONS: [(f32, f32, f32, f32); 6] = [
+        (-15.0, 3.2, 5.0, -1.0),
+        (-10.0, 4.2, 3.4, -2.2),
+        (-2.0, 4.6, 3.0, -2.6),
+        (6.0, 4.2, 3.2, -2.4),
+        (12.0, 2.6, 3.8, -1.6),
+        (17.0, 0.2, 4.4, 0.0),
+    ];
+    for w in SECTIONS.windows(2) {
+        let ((z0, w0, d0, k0), (z1, w1, d1, k1)) = (w[0], w[1]);
+        for s in [-1.0f32, 1.0] {
+            let (a, b) = (Vec3::new(s * w0, d0, z0), Vec3::new(s * w1, d1, z1));
+            let (c, d) = (Vec3::new(0.0, k1, z1), Vec3::new(0.0, k0, z0));
+            m.quad(d, c, b, a, hull);
+            // The rail along the deck edge.
+            m.quad(a, b, b + Vec3::Y * 0.8, a + Vec3::Y * 0.8, rail);
+        }
+        m.quad(
+            Vec3::new(-w0, d0, z0),
+            Vec3::new(w0, d0, z0),
+            Vec3::new(w1, d1, z1),
+            Vec3::new(-w1, d1, z1),
+            hull,
+        );
+    }
+    // The square stern with its castle, and the bowsprit.
+    m.quad(
+        Vec3::new(-3.2, 5.0, -15.0),
+        Vec3::new(3.2, 5.0, -15.0),
+        Vec3::new(0.0, -1.0, -15.0),
+        Vec3::new(0.0, -1.0, -15.0),
+        hull,
+    );
+    m.cube(Vec3::new(0.0, 6.4, -12.5), Vec3::new(3.0, 1.4, 2.5), hull);
+    tube(
+        &mut m,
+        4,
+        Vec3::new(0.0, 4.4, 16.5),
+        0.25,
+        Vec3::new(0.0, 7.5, 24.0),
+        0.1,
+        rail,
+    );
+    // Masts with square sails bellied out ahead, the middle one tallest.
+    for (z, tall, wide) in [
+        (-7.0f32, 20.0f32, 5.0f32),
+        (1.0, 25.0, 6.0),
+        (9.0, 19.0, 4.6),
+    ] {
+        tube(
+            &mut m,
+            5,
+            Vec3::new(0.0, 3.0, z),
+            0.35,
+            Vec3::new(0.0, 3.0 + tall, z),
+            0.15,
+            rail,
+        );
+        for (lo, hi, scale) in [(0.3f32, 0.62f32, 1.0f32), (0.66, 0.92, 0.75)] {
+            let (y0, y1) = (3.0 + tall * lo, 3.0 + tall * hi);
+            let (w0, w1) = (wide * scale, wide * scale * 0.85);
+            let belly = Vec3::new(0.0, 0.0, 1.4 * scale);
+            let mid = (y0 + y1) * 0.5;
+            let at = |x: f32, y: f32| Vec3::new(x, y, z + 0.4);
+            let (a, b) = (at(-w0, y0), at(w0, y0));
+            let (c, d) = (at(w1, y1), at(-w1, y1));
+            let (l, r) = (at(-w0, mid) + belly, at(w0, mid) + belly);
+            let center = at(0.0, mid) + belly * 1.5;
+            m.tri(a, b, center, sail);
+            m.tri(b, r, center, sail);
+            m.tri(r, c, center, sail);
+            m.tri(c, d, center, sail);
+            m.tri(d, l, center, sail);
+            m.tri(l, a, center, sail);
+            // The yard the sail hangs from.
+            tube(
+                &mut m,
+                4,
+                at(-w1 - 0.6, y1),
+                0.12,
+                at(w1 + 0.6, y1),
+                0.12,
+                rail,
+            );
+        }
+    }
+    m
 }
 
 /// The glint over a find: a four point star, unit size, drawn glowing.

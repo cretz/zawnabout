@@ -68,6 +68,8 @@ pub struct FindDef {
     pub gold: u32,
     /// Only out in the dark: it glows at night and is nowhere to be seen by day.
     pub night: bool,
+    /// Wind chimes ring where it rests until it is found, for finding it by ear.
+    pub chimes: bool,
 }
 
 /// A beautiful spot. Landing there takes a postcard: a painted picture of the view.
@@ -176,6 +178,8 @@ pub enum Event {
     Found(usize),
     /// The dragon landed in a lair that is not theirs yet.
     Lair(usize),
+    /// The dragon landed by lair `i`'s way in, out on the open ground short of it.
+    LairNear(usize),
     /// A postcard was taken: its index in [`PLAY`]'s postcards. Its picture comes after.
     Postcard(usize),
     /// The last piece of set `i` was found.
@@ -323,14 +327,14 @@ pub struct Play {
     ride_left: bool,
     /// A townsperson's small ask, if one is going.
     pub chore: Option<Chore>,
-    /// Lairs the player said not now to, not asked about again this visit to the islands.
-    declined: Vec<bool>,
     /// Which line each local says next.
     said: Vec<usize>,
     /// The lair the hoard is in, once one is picked.
     pub lair: Option<usize>,
     /// The lair just offered, not offered again until the dragon has left it.
     offered: Option<usize>,
+    /// The lair whose way in was just pointed out, not again until the dragon has left.
+    hinted: Option<usize>,
     /// Stunts, courses and races.
     pub flying: Flying,
     /// Stories, and where each one's lamps stand: story, region, lamp.
@@ -431,10 +435,19 @@ impl Play {
             .iter()
             .map(|s| s.effects.iter().map(|e| (lift(e.a), lift(e.b))).collect())
             .collect();
+        // Geese fly their height up from the sea, wherever the ground below.
         let happen_at = def
             .happenings
             .iter()
-            .map(|h| h.effects.iter().map(|e| (lift(e.a), lift(e.b))).collect())
+            .map(|h| {
+                h.effects
+                    .iter()
+                    .map(|e| match e.kind {
+                        "geese" => (Vec3::from(e.a), Vec3::from(e.b)),
+                        _ => (lift(e.a), lift(e.b)),
+                    })
+                    .collect()
+            })
             .collect();
         let favor_at = def
             .favors
@@ -488,7 +501,6 @@ impl Play {
             riding: None,
             ride_left: false,
             chore: None,
-            declined: vec![false; def.lairs.len()],
             said: vec![0; n],
             cards,
             taken: vec![false; def.postcards.len()],
@@ -497,6 +509,7 @@ impl Play {
             found: vec![false; def.finds.len()],
             lair: None,
             offered: None,
+            hinted: None,
             flying: Flying::new(
                 def.stunts.len(),
                 def.courses.iter().map(|c| c.gates.len()).collect(),
@@ -644,15 +657,18 @@ impl Play {
             if self.offered == Some(i) && d > l.r * 1.5 {
                 self.offered = None;
             }
-            if grounded
-                && d < l.r
-                && self.in_lair(i, me.pos)
-                && self.lair != Some(i)
-                && self.offered != Some(i)
-                && !self.declined[i]
-            {
+            if self.hinted == Some(i) && d > l.r * 3.0 {
+                self.hinted = None;
+            }
+            if !grounded || self.lair == Some(i) || self.offered == Some(i) {
+                continue;
+            }
+            if d < l.r && self.in_lair(i, me.pos) {
                 self.offered = Some(i);
                 out.push(Event::Lair(i));
+            } else if d < l.r * 2.5 && self.hinted != Some(i) {
+                self.hinted = Some(i);
+                out.push(Event::LairNear(i));
             }
         }
         out.extend(self.happen_tick(me));
@@ -681,9 +697,10 @@ impl Play {
             && (at.y - me.pos.y).abs() < card.r.max(40.0)
     }
 
-    /// Lair `i` is not wanted now: it is not offered again this visit to the islands.
+    /// Lair `i` is not wanted now: it is offered again once the dragon has left and come
+    /// back.
     pub fn decline(&mut self, i: usize) {
-        self.declined[i] = true;
+        self.offered = Some(i);
     }
 
     /// Whether the dragon's back is free for a passenger.
@@ -930,6 +947,16 @@ impl Play {
     }
 
     /// What finished sets bring to the islands, with where each one's ends are.
+    /// Where wind chimes ring: finds with chimes not found yet.
+    pub fn chimes(&self) -> impl Iterator<Item = Vec3> + '_ {
+        self.spots
+            .iter()
+            .zip(self.def.finds)
+            .zip(&self.found)
+            .filter(|((_, f), found)| f.chimes && !**found)
+            .map(|((s, _), _)| s.pos)
+    }
+
     pub fn effects(&self) -> impl Iterator<Item = (&'static EffectDef, Vec3, Vec3)> + '_ {
         let def = self.def;
         def.sets
@@ -984,6 +1011,7 @@ impl Play {
         self.chore = None;
         self.lair = None;
         self.offered = None;
+        self.hinted = None;
         self.flying.reset();
         self.stories.reset();
         self.kin.reset();
@@ -1028,6 +1056,7 @@ mod tests {
                 hint: "Somewhere.",
                 gold: 5,
                 night: false,
+                chimes: false,
             },
             FindDef {
                 id: "pile",
@@ -1041,6 +1070,7 @@ mod tests {
                 hint: "",
                 gold: 20,
                 night: false,
+                chimes: false,
             },
         ],
         postcards: &[],
@@ -1217,6 +1247,11 @@ mod tests {
         let mut play = Play::new(&sim.world);
         me.pos = Vec3::new(-2294.0, 45.0, 1395.2);
         assert!(!play.tick(&me).contains(&Event::Lair(fern)));
+        // Landing out on the grass by its mouth points the way in, once a visit.
+        let mut play = Play::new(&sim.world);
+        me.pos = play.lairs[fern] + Vec3::new(30.0, 0.0, 10.0);
+        assert_eq!(play.tick(&me), vec![Event::LairNear(fern)]);
+        assert!(play.tick(&me).is_empty());
     }
 
     /// Every light request names a beacon the world has.
@@ -1296,10 +1331,11 @@ mod tests {
         me.pos = play.lairs[0];
         assert_eq!(play.tick(&me), vec![Event::Lair(0)]);
         play.decline(0);
+        assert!(!play.tick(&me).contains(&Event::Lair(0)));
         me.pos.x += 500.0;
         play.tick(&me);
         me.pos = play.lairs[0];
-        assert!(!play.tick(&me).contains(&Event::Lair(0)));
+        assert!(play.tick(&me).contains(&Event::Lair(0)));
     }
 
     /// About one townsperson in two asks something small, always the same thing, and a

@@ -208,18 +208,29 @@ fn still(
     }
     let y = level - 0.05;
     let deep = OPAQUE_DEPTH;
+    let mut xs = Vec::new();
+    let mut x = lo[0] - 20.0;
+    while x < hi[0] + 20.0 {
+        xs.push(x);
+        x += cell;
+    }
+    let end = x;
+    xs.push(end);
+    // Each corner is shared by four cells, so floors are found once per row of corners.
+    let row = |z: f32| xs.iter().map(|&x| floor(x, z)).collect::<Vec<_>>();
     let mut z = lo[1] - 20.0;
+    let mut near = row(z);
     while z < hi[1] + 20.0 {
-        let mut x = lo[0] - 20.0;
+        let far = row(z + cell);
         let mut run: Option<f32> = None;
         let flush = |m: &mut MeshBuilder, run: &mut Option<f32>, end: f32| {
             if let Some(start) = run.take() {
                 flat_quad(m, start, z, end, z + cell, y, [deep; 4], color, day);
             }
         };
-        while x < hi[0] + 20.0 {
-            let corners = [(x, z), (x, z + cell), (x + cell, z + cell), (x + cell, z)];
-            let floors = corners.map(|(cx, cz)| floor(cx, cz));
+        for i in 0..xs.len() - 1 {
+            let x = xs[i];
+            let floors = [near[i], far[i], far[i + 1], near[i + 1]];
             let d = floors.map(|f| f.map_or(0.0, |g| level - g));
             if floors.iter().all(|f| f.is_some()) && d.iter().all(|v| *v >= deep) {
                 run.get_or_insert(x);
@@ -229,9 +240,9 @@ fn still(
                     flat_quad(m, x, z, x + cell, z + cell, y, d, color, day);
                 }
             }
-            x += cell;
         }
-        flush(m, &mut run, x);
+        flush(m, &mut run, end);
+        near = far;
         z += cell;
     }
 }

@@ -12,7 +12,7 @@ use crate::notes::Note;
 /// The atlas the HUD draws from: the world map in the top `MAP` square, a white cell
 /// under it for plain colored shapes, the font from `FONT_TOP`, then postcard pictures
 /// from `CARDS_TOP`, `CARDS_ROW` to a row, then treasure pictures from `THUMBS_TOP`.
-pub const ATLAS: (u32, u32) = (1024, THUMBS_TOP + 3 * crate::thumbs::THUMB);
+pub const ATLAS: (u32, u32) = (1024, PORTRAIT_TOP + PORTRAIT);
 pub const MAP: u32 = 1024;
 const CELL: u32 = 8;
 pub const FONT_TOP: u32 = MAP + CELL;
@@ -23,6 +23,10 @@ pub const CARD_CELL: (u32, u32) = (164, 94);
 /// Rows of postcard pictures.
 pub const CARD_ROWS: u32 = 16;
 pub const THUMBS_TOP: u32 = CARDS_TOP + CARD_ROWS * CARD_CELL.1;
+/// The player's dragon's portrait for the journal, square, at the left under the
+/// treasure pictures.
+pub const PORTRAIT: u32 = 256;
+pub const PORTRAIT_TOP: u32 = THUMBS_TOP + 3 * crate::thumbs::THUMB;
 
 /// Where treasure kind `i`'s picture sits in the atlas: its top left corner.
 pub fn thumb_slot(i: usize) -> (u32, u32) {

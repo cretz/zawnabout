@@ -65,6 +65,19 @@ fn record(name: &'static str, secs: f64) {
     });
 }
 
+/// Adds `secs` to part `name`, for a time measured some other way, such as the GPU
+/// finishing a frame.
+pub fn add(name: &'static str, secs: f64) {
+    if on() {
+        record(name, secs);
+    }
+}
+
+/// Whether timing is on.
+pub fn enabled() -> bool {
+    on()
+}
+
 /// Runs `f`, adding the time it took to part `name`.
 pub fn time<T>(name: &'static str, f: impl FnOnce() -> T) -> T {
     if !on() {

@@ -1,0 +1,99 @@
+# Build the desktop game for each platform on a `v*` tag and attach the archives to that
+# release, making the release if the tag has none. The web page does not wait for this:
+# pages.yml publishes every push to `main`.
+#
+# The usual way: draft a release in GitHub with a new `v*` tag and publish it. The tag
+# runs this, and the downloads appear on the release when the builds finish.
+#
+# Linux builds on Ubuntu 22.04, not the newest: a binary runs on the glibc it was built
+# against or newer, so an older one runs on more systems.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bin: zawnabout
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: zawnabout.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: zawnabout
+    steps:
+      - uses: actions/checkout@v4
+      # The same pin as `projects/rust-toolchain.toml` and ci.yml.
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: projects
+          key: release-${{ matrix.target }}
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev
+      - name: Build
+        working-directory: projects
+        run: cargo build --release --locked -p zawnabout-native --target ${{ matrix.target }}
+      - name: Name the archive
+        id: meta
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then tag="${GITHUB_REF#refs/tags/}"; else tag="manual-${GITHUB_SHA::8}"; fi
+          echo "name=zawnabout-$tag-${{ matrix.target }}" >> "$GITHUB_OUTPUT"
+      - name: Archive (tar.gz)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          tar -C projects/target/${{ matrix.target }}/release -czf dist/${{ steps.meta.outputs.name }}.tar.gz ${{ matrix.bin }}
+      - name: Archive (zip)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path projects/target/${{ matrix.target }}/release/${{ matrix.bin }} -DestinationPath dist/${{ steps.meta.outputs.name }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.meta.outputs.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    # A run by hand builds and keeps the archives on the run. Only a tag publishes.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Make the release if the tag has none, then attach the archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag" --generate-notes
+          gh release upload "$tag" dist/* --clobber

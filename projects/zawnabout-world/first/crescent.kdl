@@ -94,6 +94,15 @@ forest key-palms kind=open trees=palm {
     p 1300 850
     p 1100 0
 }
+meadow poppy-field flowers=poppy {
+    note "Red and orange poppies on the dry northwest arm."
+    p -1500 -980
+    p -1150 -1000
+    p -950 -930
+    p -980 -720
+    p -1200 -640
+    p -1480 -680
+}
 
 // Places
 

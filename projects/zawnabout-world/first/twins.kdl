@@ -80,6 +80,15 @@ forest old-oaks kind=open trees=round {
     p -950 300
     p -1150 400
 }
+meadow lupine-slope flowers=lupine {
+    note "Purple and pink lupines on the east isle's north slope, as in cold hills."
+    p 800 -800
+    p 1060 -830
+    p 1170 -720
+    p 1130 -600
+    p 950 -580
+    p 790 -660
+}
 
 // Places
 

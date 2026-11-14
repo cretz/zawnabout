@@ -240,7 +240,8 @@ fn device(
 ) -> (wgpu::Adapter, wgpu::Device, wgpu::Queue) {
     let ask = |fallback: bool| {
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+            power_preference:
+                wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::HighPerformance),
             compatible_surface: surface,
             force_fallback_adapter: fallback,
             ..Default::default()
@@ -367,7 +368,7 @@ fn host_command(
         "sound" => {
             let m = gfx.sound(game);
             println!(
-                "sound master={:.0} wind={:.2} rush={:.2} surf={:.2} rain={:.2} falls={:.2} bustle={:.2} birds={:.2} organ={:.2} events={:?}",
+                "sound master={:.0} wind={:.2} rush={:.2} surf={:.2} rain={:.2} falls={:.2} bustle={:.2} birds={:.2} organ={:.2} chimes={:.2} chime_pan={:.2} events={:?}",
                 m.master,
                 m.wind,
                 m.rush,
@@ -377,8 +378,36 @@ fn host_command(
                 m.bustle,
                 m.birds,
                 m.organ,
+                m.chimes,
+                m.chime_pan,
                 m.events
             );
+        }
+        // gpu N [total]: GPU time for this view, and what leaving out each part saves.
+        "gpu" => {
+            use zawnabout_game::render::*;
+            let frames = words.get(1).and_then(|n| n.parse().ok()).unwrap_or(30);
+            let parts = [
+                ("sky", PART_SKY),
+                ("statics", PART_STATICS),
+                ("terrain", 4_000_000),
+                ("dynamic", PART_DYNAMIC),
+                ("water", 3_000_000),
+                ("fx", PART_FX),
+                ("shadows", PART_SHADOWS),
+                ("hud", PART_HUD),
+            ];
+            let kept = std::mem::take(&mut gfx.renderer.hide);
+            let all = gfx.gpu_time(game, frames);
+            let mut line = format!("gpu {all:.2}ms");
+            let total = words.get(2).is_some_and(|w| w == "total");
+            for (name, code) in parts.into_iter().filter(|_| !total) {
+                gfx.renderer.hide = vec![code];
+                let without = gfx.gpu_time(game, frames);
+                line.push_str(&format!(" {name} {:.2}", all - without));
+            }
+            gfx.renderer.hide = kept;
+            println!("{line}");
         }
         "profile" => {
             let frames = words.get(1).and_then(|n| n.parse().ok()).unwrap_or(300);
@@ -723,9 +752,9 @@ impl ApplicationHandler for App {
         if let Some(text) = keys_file().and_then(|f| std::fs::read_to_string(f).ok()) {
             self.game.bindings.set_text(&text);
         }
-        if let Some(text) = data_file("prefs.txt").and_then(|f| std::fs::read_to_string(f).ok()) {
-            self.game.set_prefs_text(&text);
-        }
+        // Read even when there are none yet, so a first game starts with a dragon of its own.
+        let prefs = data_file("prefs.txt").and_then(|f| std::fs::read_to_string(f).ok());
+        self.game.set_prefs_text(&prefs.unwrap_or_default());
         if let Some(text) = data_file(SLOT).and_then(|f| std::fs::read_to_string(f).ok())
             && let Err(e) = self.game.load_save(&text)
         {

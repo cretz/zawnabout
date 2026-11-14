@@ -13,8 +13,8 @@ use std::sync::Arc;
 use glam::{Vec2, Vec3};
 
 pub use def::{
-    CarveKind, Cover, CoverKind, Decor, Density, Mark, MountShape, NO_Y, Road, Route, Style, Tech,
-    Town, Trees, Void, VoidShape, WORLD, WorldDef,
+    CarveKind, Cover, CoverKind, Decor, Density, FLOWER_VARIANTS, Flowers, Mark, MountShape, NO_Y,
+    Road, Route, Style, Tech, Town, Trees, Void, VoidShape, WORLD, WorldDef,
 };
 pub use water::{RoadPoint, RoadSpot};
 

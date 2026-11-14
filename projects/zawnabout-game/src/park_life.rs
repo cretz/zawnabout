@@ -1,7 +1,8 @@
 //! Life in the big places, only for looks: animals roaming their zoo pens, a roller
 //! coaster train racing round its track, a carousel turning, a drop tower lifting and
 //! dropping its riders, swimmers, tubers and sliders at the water park, children playing
-//! at school, a tractor working the farm's field and cranes moving containers at the port.
+//! at school, a tractor working the farm's field, cranes moving containers at the port and
+//! shipyard cranes swinging planks into the hull on the slip.
 //! Everything is a pure function of the clock.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
@@ -32,6 +33,78 @@ fn frame(b: &Building) -> Mat4 {
         Vec4::new(f.x, 0.0, f.y, 0.0),
         b.pos.extend(1.0),
     )
+}
+
+/// A shipyard crane's jib length and how far out its hook hangs (m), and how near it
+/// works. Past that only the tower is drawn.
+const YARD_JIB: f32 = 24.0;
+const YARD_REACH: f32 = 17.0;
+const YARD_NEAR: f32 = 3000.0;
+
+/// A shipyard crane: its frame at the tower foot, the tower's height, and where it picks
+/// up (a turn of the jib from +z, and the pile's foot) and drops (over the hull's deck).
+/// Heights are above the tower foot.
+struct YardCrane {
+    frame: Mat4,
+    height: f32,
+    pick: f32,
+    pick_y: f32,
+    drop: f32,
+    drop_y: f32,
+}
+
+/// Every shipyard crane, turning from a dry clear pile beside it to the hull's deck.
+fn yard_cranes(world: &World) -> Vec<YardCrane> {
+    let t = &world.terrain;
+    let flat = |v: Vec3| Vec2::new(v.x, v.z);
+    world
+        .buildings
+        .iter()
+        .filter(|b| b.kind == Kind::Crane)
+        .filter_map(|b| {
+            let hull = world
+                .buildings
+                .iter()
+                .filter(|h| h.kind == Kind::Hull)
+                .min_by(|a, c| {
+                    flat(a.pos - b.pos)
+                        .length()
+                        .total_cmp(&flat(c.pos - b.pos).length())
+                })?;
+            let frame = frame(b);
+            let spot = |turn: f32| {
+                frame.transform_point3(Quat::from_rotation_y(turn) * Vec3::Z * YARD_REACH)
+            };
+            // Over the hull: the turn whose hook hangs nearest the hull's middle line.
+            let drop = [FRAC_PI_2, -FRAC_PI_2]
+                .into_iter()
+                .min_by(|a, c| {
+                    flat(spot(*a) - hull.pos)
+                        .length()
+                        .total_cmp(&flat(spot(*c) - hull.pos).length())
+                })
+                .expect("two turns");
+            // The pile goes on dry ground clear of other buildings.
+            let clear = |p: Vec3| {
+                let h = t.height(p.x, p.z);
+                t.water(p.x, p.z, h).is_none()
+                    && world.buildings.iter().all(|o| {
+                        std::ptr::eq(o, b)
+                            || flat(o.pos - p).length() > o.size.x.max(o.size.z) * 0.5 + 3.0
+                    })
+            };
+            let pick = [0.0, PI, drop + PI].into_iter().find(|&a| clear(spot(a)))?;
+            let ground = spot(pick);
+            Some(YardCrane {
+                frame,
+                height: b.size.y,
+                pick,
+                pick_y: t.height(ground.x, ground.z) - b.pos.y,
+                drop,
+                drop_y: hull.pos.y + hull.size.y - b.pos.y,
+            })
+        })
+        .collect()
 }
 
 /// A yaw turning +z toward `d` on the ground.
@@ -89,6 +162,7 @@ pub struct ParkLife {
     carnivals: Vec<Mat4>,
     seal_colonies: Vec<Mat4>,
     ports: Vec<Mat4>,
+    yard_cranes: Vec<YardCrane>,
     /// Underground: mushroom farms, crystal mines and cafes.
     shroom_farms: Vec<Mat4>,
     mines: Vec<Mat4>,
@@ -141,6 +215,8 @@ pub struct ParkLife {
     tractor: MeshId,
     trolley: MeshId,
     cables: MeshId,
+    yard_jib: MeshId,
+    planks: MeshId,
     container: MeshId,
     elephant: MeshId,
     giraffe: MeshId,
@@ -218,6 +294,7 @@ impl ParkLife {
             carnivals: of(Kind::Carnival),
             seal_colonies: of(Kind::Seals),
             ports: of(Kind::Port),
+            yard_cranes: yard_cranes(world),
             shroom_farms: of(Kind::ShroomFarm),
             mines: of(Kind::Mine),
             cafes: of(Kind::Cafe),
@@ -324,6 +401,8 @@ impl ParkLife {
             tractor: add(&models::tractor()),
             trolley: add(&models::trolley()),
             cables: add(&models::cables()),
+            yard_jib: add(&models::yard_jib(YARD_JIB, YARD_REACH)),
+            planks: add(&models::plank_bundle()),
             container: add(&models::container()),
             elephant: add(&models::elephant()),
             giraffe: add(&models::giraffe()),
@@ -798,6 +877,11 @@ impl ParkLife {
         for (k, f) in self.ports.iter().enumerate() {
             if near(f, PARK_NEAR) {
                 self.port(f, k as u32, time, draws);
+            }
+        }
+        for (k, c) in self.yard_cranes.iter().enumerate() {
+            if near(&c.frame, YARD_NEAR) {
+                self.yard_crane(c, k as u32, time, draws);
             }
         }
         for (k, f) in self.pools.iter().enumerate() {
@@ -1747,6 +1831,74 @@ impl ParkLife {
             let m = *f * Mat4::from_translation(Vec3::new(x, hook, z));
             draws.push((self.container, Instance::tinted(m, paint.extend(1.0))));
         }
+    }
+
+    /// A shipyard crane hoists a bundle of planks off its pile, swings round over the hull,
+    /// lowers it onto the deck, and swings back empty for the next.
+    fn yard_crane(&self, c: &YardCrane, k: u32, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
+        let cycle = 52.0;
+        let t = (time + k as f32 * 23.0).rem_euclid(cycle);
+        let ease = |u: f32| {
+            let u = u.clamp(0.0, 1.0);
+            u * u * (3.0 - 2.0 * u)
+        };
+        let top = c.height - 3.0;
+        // The bundle on the hook sits on the pile at the pick, on the deck at the drop.
+        let (pick, drop) = (c.pick_y + 1.0, c.drop_y + 0.5);
+        let (turn, low, carrying) = match t {
+            t if t < 4.0 => (c.pick, pick + (top - pick) * ease(t / 4.0), true),
+            t if t < 18.0 => (
+                c.pick + (c.drop - c.pick) * ease((t - 4.0) / 14.0),
+                top,
+                true,
+            ),
+            t if t < 23.0 => (c.drop, top - (top - drop) * ease((t - 18.0) / 5.0), true),
+            t if t < 26.0 => (c.drop, drop, true),
+            t if t < 30.0 => (c.drop, drop + (top - drop) * ease((t - 26.0) / 4.0), false),
+            t if t < 44.0 => (
+                c.drop + (c.pick - c.drop) * ease((t - 30.0) / 14.0),
+                top,
+                false,
+            ),
+            t if t < 49.0 => (c.pick, top - (top - pick) * ease((t - 44.0) / 5.0), false),
+            _ => (c.pick, pick, true),
+        };
+        let spin = Quat::from_rotation_y(turn);
+        let head = c.frame * Mat4::from_translation(Vec3::Y * c.height);
+        draws.push((self.yard_jib, Instance::new(head * Mat4::from_quat(spin))));
+        let out = spin * Vec3::Z * YARD_REACH;
+        let hang = c.height - 0.4 - (low + 1.2);
+        draws.push((
+            self.cables,
+            Instance::new(
+                c.frame
+                    * Mat4::from_scale_rotation_translation(
+                        Vec3::new(0.4, hang.max(0.1), 1.0),
+                        spin,
+                        out + Vec3::Y * (c.height - 0.4),
+                    ),
+            ),
+        ));
+        let hook = Vec3::new(out.x, low + 1.2, out.z);
+        draws.push((
+            self.trolley,
+            Instance::new(
+                c.frame * Mat4::from_scale_rotation_translation(Vec3::splat(0.3), spin, hook),
+            ),
+        ));
+        if carrying {
+            let m = Mat4::from_rotation_translation(spin, Vec3::new(out.x, low, out.z));
+            draws.push((self.planks, Instance::new(c.frame * m)));
+        }
+        // The pile it takes from, and the bundles already on the deck.
+        let at = |turn: f32, y: f32| {
+            let q = Quat::from_rotation_y(turn);
+            c.frame * Mat4::from_rotation_translation(q, q * Vec3::Z * YARD_REACH + Vec3::Y * y)
+        };
+        for y in [c.pick_y, c.pick_y + 0.5] {
+            draws.push((self.planks, Instance::new(at(c.pick, y))));
+        }
+        draws.push((self.planks, Instance::new(at(c.drop, c.drop_y))));
     }
 
     /// The splash playground: the big bucket fills and tips over the deck, a rush of

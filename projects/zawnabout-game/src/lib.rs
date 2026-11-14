@@ -14,6 +14,7 @@ pub mod hud;
 pub mod input;
 pub mod kin;
 pub mod life;
+pub mod look;
 pub mod map;
 pub mod mesh;
 pub mod models;

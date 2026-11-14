@@ -11,9 +11,18 @@ pub const THUMB: u32 = 64;
 /// Draws `mesh` turned a little toward the viewer and lit from the upper left, filling
 /// a `THUMB` square, as RGBA with a clear background.
 pub fn draw(mesh: &MeshBuilder) -> Vec<u8> {
+    draw_at(
+        mesh,
+        THUMB,
+        Mat3::from_rotation_x(0.42) * Mat3::from_rotation_y(-0.6),
+    )
+}
+
+/// Draws `mesh` turned by `turn`, filling a `size` square, as RGBA with a clear
+/// background.
+pub fn draw_at(mesh: &MeshBuilder, size: u32, turn: Mat3) -> Vec<u8> {
     const SS: usize = 3;
-    let n = THUMB as usize * SS;
-    let turn = Mat3::from_rotation_x(0.42) * Mat3::from_rotation_y(-0.6);
+    let n = size as usize * SS;
     let pts: Vec<Vec3> = mesh
         .verts
         .iter()
@@ -77,7 +86,7 @@ pub fn draw(mesh: &MeshBuilder) -> Vec<u8> {
         }
     }
     // Average each block of samples into a pixel, back to sRGB.
-    let t = THUMB as usize;
+    let t = size as usize;
     let mut out = vec![0u8; t * t * 4];
     for y in 0..t {
         for x in 0..t {

@@ -36,6 +36,8 @@ zawnabout_sim::params! {
         shadow: f32 = 0.5, [0, 1],
         /// Show rings on nearby landing spots.
         landing_rings: bool = true, [0, 1],
+        /// Draw tufts of grass on the ground nearby.
+        grass: bool = true, [0, 1],
         /// How far away landing rings show (m).
         ring_range: f32 = 450.0, [50, 2000],
         /// Day (0) to night (1) when the day stands still. At night a bright moon lights
@@ -75,7 +77,7 @@ pub struct Marker {
 pub enum Ask {
     /// Gameplay changed: write [`Game::save_text`] to the save slot.
     Save,
-    /// Sound, pausing or the journal's page changed: keep [`Game::prefs_text`].
+    /// Sound, pausing, sharpness or the journal's page changed: keep [`Game::prefs_text`].
     Prefs,
     /// The keys changed: keep [`Bindings::to_text`].
     Keys,
@@ -168,6 +170,16 @@ pub struct Game {
     pub pause_away: bool,
     /// The day held at one hour, set in the journal. None lets it pass.
     pub hold_hour: Option<f32>,
+    /// How sharp the picture is, as an index into [`crate::book::SHARPNESS`].
+    pub sharpness: usize,
+    /// How the player's dragon looks, and a count that goes up each time it changes.
+    pub dragon_look: crate::look::Look,
+    pub dragon_look_version: u32,
+    /// The host can draw fewer pixels than the screen has, so Settings offers sharpness.
+    pub scales: bool,
+    /// How many times more pixels across the screen would have at full sharpness than are
+    /// drawn, so the journal and the rest of the HUD keep their size as sharpness changes.
+    pub ui_scale: f32,
     /// Things for the host to do, taken each frame.
     pub asks: Vec<Ask>,
     /// Gamepad buttons held as of the last poll, to spot presses.
@@ -287,6 +299,11 @@ impl Game {
             touch: false,
             pause_away: true,
             hold_hour: None,
+            sharpness: 0,
+            dragon_look: crate::look::Look::default(),
+            dragon_look_version: 0,
+            scales: false,
+            ui_scale: 1.0,
             asks: Vec::new(),
             pad_was: Vec::new(),
             snaps: Vec::new(),
@@ -416,9 +433,12 @@ impl Game {
             muted: self.muted,
             pause_away: self.pause_away,
             hold_hour: self.hold_hour,
+            sharpness: self.scales.then_some(self.sharpness),
             touch: self.touch,
             hud: self.hud.on,
             map: self.map_view(),
+            look: &self.dragon_look,
+            wearables: self.wearables(),
         };
         let was = self.hud.book.showing();
         if let Some(dos) = self.hud.book.key(code, &view) {
@@ -1248,9 +1268,12 @@ impl Game {
             muted: self.muted,
             pause_away: self.pause_away,
             hold_hour: self.hold_hour,
+            sharpness: self.scales.then_some(self.sharpness),
             touch: self.touch,
             hud: self.hud.on,
             map: self.map_view(),
+            look: &self.dragon_look,
+            wearables: self.wearables(),
         };
         self.hud.book.show(&view);
         self.release_keys();
@@ -1285,9 +1308,12 @@ impl Game {
                         muted: self.muted,
                         pause_away: self.pause_away,
                         hold_hour: self.hold_hour,
+                        sharpness: self.scales.then_some(self.sharpness),
                         touch: self.touch,
                         hud: self.hud.on,
                         map: self.map_view(),
+                        look: &self.dragon_look,
+                        wearables: self.wearables(),
                     };
                     self.hud.book.show_me("favors", &view);
                 }
@@ -1365,6 +1391,26 @@ impl Game {
                     self.hold(next);
                     self.asks.push(Ask::Prefs);
                 }
+                Do::Look(row, k) => {
+                    let worn = self.wearables();
+                    match (row, k) {
+                        (crate::look::Row::Surprise, _) => {
+                            let keep = self.dragon_look.wear.take();
+                            let seed = (crate::prof::clock() * 1e9) as u64
+                                ^ self.dragon_look_version as u64;
+                            self.dragon_look = crate::look::Look::random(seed);
+                            self.dragon_look.wear = keep;
+                        }
+                        (row, Some(k)) => self.dragon_look.choose(row, k, &worn),
+                        (row, None) => self.dragon_look.next(row, &worn),
+                    }
+                    self.dragon_look_version += 1;
+                    self.asks.push(Ask::Prefs);
+                }
+                Do::Sharpness => {
+                    self.sharpness = (self.sharpness + 1) % crate::book::SHARPNESS.len();
+                    self.asks.push(Ask::Prefs);
+                }
                 Do::Export => self.asks.push(Ask::Export),
                 Do::Import => self.asks.push(Ask::Import),
                 Do::ResetKeys => {
@@ -1405,9 +1451,12 @@ impl Game {
             muted: self.muted,
             pause_away: self.pause_away,
             hold_hour: self.hold_hour,
+            sharpness: self.scales.then_some(self.sharpness),
             touch: self.touch,
             hud: self.hud.on,
             map: self.map_view(),
+            look: &self.dragon_look,
+            wearables: self.wearables(),
         };
         let was = self.hud.book.showing();
         match self.hud.book.click(Vec2::new(nx, ny), &view) {
@@ -1462,15 +1511,18 @@ impl Game {
         }
     }
 
-    /// Sound, pausing, the time of day and the journal's page, one setting a line.
+    /// Sound, pausing, the time of day, sharpness and the journal's page, one setting a
+    /// line.
     pub fn prefs_text(&self) -> String {
         format!(
-            "sound {}\npauseaway {}\ntime {}\npage {}\n",
+            "sound {}\npauseaway {}\ntime {}\nsharpness {}\npage {}\n{}\n",
             if self.muted { "off" } else { "on" },
             if self.pause_away { "on" } else { "off" },
             self.hold_hour
                 .map_or("passing".to_string(), |h| format!("{h}")),
-            self.hud.book.page.name()
+            crate::book::SHARPNESS[self.sharpness].to_lowercase(),
+            self.hud.book.page.name(),
+            self.dragon_look.text()
         )
     }
 
@@ -1487,11 +1539,28 @@ impl Game {
     }
 
     pub fn set_prefs_text(&mut self, text: &str) {
+        let mut looked = false;
         for line in text.lines() {
+            if let Some(words) = line.strip_prefix("look ")
+                && let Some(look) = crate::look::Look::parse(words)
+            {
+                self.dragon_look = look;
+                self.dragon_look_version += 1;
+                looked = true;
+                continue;
+            }
             match line.split_whitespace().collect::<Vec<_>>()[..] {
                 ["sound", v] => self.muted = v == "off",
                 ["pauseaway", v] => self.pause_away = v != "off",
                 ["time", v] => self.hold(v.parse().ok()),
+                ["sharpness", v] => {
+                    if let Some(i) = crate::book::SHARPNESS
+                        .iter()
+                        .position(|s| s.eq_ignore_ascii_case(v))
+                    {
+                        self.sharpness = i;
+                    }
+                }
                 ["page", v] => {
                     if let Some(p) = crate::book::Page::from_name(v) {
                         self.hud.book.page = p;
@@ -1500,6 +1569,28 @@ impl Game {
                 _ => {}
             }
         }
+        // The first time, a dragon of its own to start with, and the journal opens on
+        // the page to change it.
+        if !looked {
+            self.dragon_look = crate::look::Look::random((crate::prof::clock() * 1e9) as u64);
+            self.dragon_look_version += 1;
+            self.hud.book.page = crate::book::Page::You;
+            self.asks.push(Ask::Prefs);
+        }
+    }
+
+    /// The kinds of hoard finds that can be worn, one of each, in hoard order.
+    pub fn wearables(&self) -> Vec<String> {
+        self.play
+            .as_ref()
+            .map(crate::play::wearables)
+            .unwrap_or_default()
+    }
+
+    /// What the dragon wears now: the find picked, while the hoard holds one.
+    pub fn worn(&self) -> Option<String> {
+        let kind = self.dragon_look.wear.as_ref()?;
+        self.wearables().contains(kind).then(|| kind.clone())
     }
 
     /// The game as a save file, none with gameplay off.
@@ -2795,6 +2886,21 @@ impl Game {
             ["play-save"] => self
                 .save_text()
                 .ok_or_else(|| "gameplay is off".to_string()),
+            // dragon-look WORDS: sets how the dragon looks, as the prefs `look` line has it.
+            // With no words, says it.
+            ["dragon-look"] => Ok(self.dragon_look.text()),
+            ["dragon-look", ..] => {
+                let words = line.trim().strip_prefix("dragon-look").unwrap_or("").trim();
+                self.dragon_look = crate::look::Look::parse(words).ok_or("bad look")?;
+                self.dragon_look_version += 1;
+                Ok(self.dragon_look.text())
+            }
+            // play-load FILE: loads a save file, to set up a test. Native only.
+            ["play-load", path] => {
+                let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+                self.load_save(&text)?;
+                Ok(format!("loaded {path}"))
+            }
             // goto-find ID [AWAY]: stands the dragon AWAY meters (8 unless given) back
             // from a find or a lair, facing it. 0 stands right on it.
             ["goto-find", id, ..] => {
@@ -2982,6 +3088,15 @@ impl Game {
             ["sdf", _, _, _] => {
                 let p = Vec3::new(num(1)?, num(2)?, num(3)?);
                 Ok(format!("sdf {p} {:.1}", self.sim.world.terrain.sdf(p)))
+            }
+            // pick nx ny aspect: the first surface under that spot on screen (0..1 from the
+            // top left), for finding what something seen is.
+            ["pick", _, _, _] => {
+                let (near, dir) = self.ray(num(1)?, num(2)?, num(3)?);
+                Ok(match self.surface_hit(near, dir) {
+                    Some(p) => format!("pick {p} from {near} along {dir}"),
+                    None => format!("pick nothing from {near} along {dir}"),
+                })
             }
             // props-near x y z r: every prop within r of the point, nearest first.
             ["props-near", _, _, _, _] => {

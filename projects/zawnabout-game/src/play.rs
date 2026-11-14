@@ -103,6 +103,8 @@ pub struct Heap {
     pub gold: u32,
     /// Models of the treasures set round it.
     pub kinds: Vec<&'static str>,
+    /// Postcards taken, pinned up on the walls.
+    pub postcards: usize,
 }
 
 #[cfg(feature = "play")]
@@ -278,6 +280,15 @@ mod on {
                         kind: CardKind::News,
                     }
                 }
+                Event::LairNear(i) => {
+                    let line = if play.lair.is_some() {
+                        "Snug in there! Walk in under the rock to look around."
+                    } else {
+                        "A cave just right for a dragon! Walk in under the rock, and it could be your lair."
+                    };
+                    news.toasts.push((def.lairs[i].name.into(), line.into()));
+                    continue;
+                }
                 Event::Happening(h) => {
                     let h = &def.happenings[h];
                     news.cheer = true;
@@ -365,7 +376,14 @@ mod on {
                         .set
                         .and_then(|s| play.sets().into_iter().find(|v| v.def.id == s))
                         .map(|v| format!("{}: {} of {}", v.def.name, v.have(), v.pieces.len()))
-                        .unwrap_or_default();
+                        .unwrap_or_else(|| {
+                            // Until there is a lair, finds say where they will go.
+                            if play.lair.is_none() {
+                                "Find a lair to keep it in. Townsfolk know of a few.".into()
+                            } else {
+                                String::new()
+                            }
+                        });
                     if f.kind == "coins" {
                         Card {
                             title: format!("{} gold coins!", f.gold),
@@ -942,8 +960,11 @@ mod on {
 
     /// While there is no lair yet, a townsperson's tip about one, picked by `seed`.
     pub fn lair_tip(play: &Play, seed: u32) -> Option<String> {
+        // Until there is a lair, every other word is about one.
+        let lairs = play.lair.is_none() && seed.is_multiple_of(2);
         // Now and then, word of what is going on somewhere.
-        if let Some(i) = play.happening()
+        if !lairs
+            && let Some(i) = play.happening()
             && !play.happen.seen_now
             && seed.is_multiple_of(3)
         {
@@ -958,7 +979,7 @@ mod on {
             .filter(|(_, m)| !**m)
             .map(|(k, _)| k.rumor)
             .collect();
-        if !unmet.is_empty() && (seed / 3).is_multiple_of(2) || play.lair.is_some() {
+        if !lairs && !unmet.is_empty() && (seed / 3).is_multiple_of(2) || play.lair.is_some() {
             return unmet
                 .get(seed as usize % unmet.len().max(1))
                 .map(|r| r.to_string());
@@ -969,7 +990,7 @@ mod on {
             "Up on the volcano there's a warm cave called Ember Hall. Just right for a dragon's hoard, I'd think.",
             "Every dragon in the stories had a cave for its treasure. The journal's map would show you where, I bet.",
         ];
-        Some(TIPS[seed as usize % TIPS.len()].to_string())
+        Some(TIPS[(seed / 2) as usize % TIPS.len()].to_string())
     }
 
     /// Something townsfolk say about a course not flown or a race not won, picked by
@@ -1094,6 +1115,11 @@ mod on {
     }
 
     /// What finished sets bring to the islands, to draw.
+    /// Where wind chimes ring, by finds still to be found.
+    pub fn chimes(play: &Play) -> Vec<Vec3> {
+        play.chimes().collect()
+    }
+
     pub fn effects(play: &Play) -> Vec<Effect> {
         play.effects()
             .enumerate()
@@ -1399,6 +1425,21 @@ mod on {
                 .map(|(i, k)| mark(play.kin_at[i][0], false, k.name))
                 .collect(),
         });
+        out
+    }
+
+    /// The kinds of finds held, set pieces and gifts too, that can be worn, one of each.
+    pub fn wearables(play: &Play) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for kind in play
+            .treasures()
+            .map(|f| f.kind)
+            .chain(play.gifts().map(|g| g.kind))
+        {
+            if crate::look::WEARABLE.contains(&kind) && !out.iter().any(|k| k == kind) {
+                out.push(kind.to_string());
+            }
+        }
         out
     }
 
@@ -1879,6 +1920,7 @@ mod on {
                 .chain(play.gifts().map(|g| g.kind))
                 .chain((play.kin.egg == zawnabout_play::Egg::Given).then_some("egg"))
                 .collect(),
+            postcards: play.taken.iter().filter(|t| **t).count(),
         })
     }
 
@@ -1967,6 +2009,17 @@ mod on {
         Some(play.def.lairs[play.lair?].id)
     }
 
+    /// Every lair for the map: its id, name, where its heap goes, and whether it is home.
+    pub fn lairs(play: &Play) -> Vec<(&'static str, &'static str, Vec3, bool)> {
+        play.def
+            .lairs
+            .iter()
+            .zip(&play.lairs)
+            .enumerate()
+            .map(|(i, (l, at))| (l.id, l.name, *at, play.lair == Some(i)))
+            .collect()
+    }
+
     /// Where find `id` lies, for scripts.
     pub fn find(play: &Play, id: &str) -> Option<Vec3> {
         let i = play.def.finds.iter().position(|f| f.id == id)?;
@@ -2031,6 +2084,12 @@ mod on {
         match *play {}
     }
     pub fn lair_tip(play: &Play, _: u32) -> Option<String> {
+        match *play {}
+    }
+    pub fn chimes(play: &Play) -> Vec<Vec3> {
+        match *play {}
+    }
+    pub fn wearables(play: &Play) -> Vec<String> {
         match *play {}
     }
     pub fn effects(play: &Play) -> Vec<Effect> {
@@ -2219,6 +2278,9 @@ mod on {
         match *play {}
     }
     pub fn lair_id(play: &Play) -> Option<&'static str> {
+        match *play {}
+    }
+    pub fn lairs(play: &Play) -> Vec<(&'static str, &'static str, Vec3, bool)> {
         match *play {}
     }
     pub fn find(play: &Play, _: &str) -> Option<Vec3> {

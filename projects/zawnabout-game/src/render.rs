@@ -8,6 +8,14 @@ use wgpu::util::DeviceExt;
 use crate::mesh::{MeshBuilder, Vertex};
 
 pub const SAMPLES: u32 = 4;
+
+/// Codes in `Renderer::hide` that leave out a whole part of the picture.
+pub const PART_SKY: u32 = 9_000_001;
+pub const PART_STATICS: u32 = 9_000_002;
+pub const PART_DYNAMIC: u32 = 9_000_003;
+pub const PART_FX: u32 = 9_000_004;
+pub const PART_SHADOWS: u32 = 9_000_005;
+pub const PART_HUD: u32 = 9_000_006;
 /// Point lights per frame.
 pub const MAX_LIGHTS: usize = 8;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -133,6 +141,31 @@ struct Globals {
 /// Most dark regions a frame passes to the shaders.
 pub const DARK: usize = 8;
 
+/// A mesh on its way to the GPU a slice at a time.
+pub struct Sending {
+    buf: wgpu::Buffer,
+    bytes: Vec<u8>,
+    sent: usize,
+    count: u32,
+    lo: Vec3,
+    hi: Vec3,
+}
+
+impl Sending {
+    /// Bytes still to send.
+    pub fn left(&self) -> usize {
+        self.bytes.len() - self.sent
+    }
+
+    /// Its middle and how far it reaches from there.
+    pub fn sphere(&self) -> (Vec3, f32) {
+        (
+            (self.lo + self.hi) * 0.5,
+            (self.hi - self.lo).length() * 0.5,
+        )
+    }
+}
+
 struct GpuMesh {
     buf: wgpu::Buffer,
     count: u32,
@@ -226,7 +259,8 @@ pub struct Stats {
 
 pub struct Renderer {
     pub stats: Stats,
-    /// Meshes left out of the lit draws, for finding what something on screen is.
+    /// Meshes left out of the lit draws, for finding what something on screen is. The
+    /// `PART_*` codes leave out a whole part, for timing it.
     pub hide: Vec<u32>,
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -394,7 +428,8 @@ impl Renderer {
             })
         };
         let mesh_buffers = [Some(vertex_layout), Some(instance_layout)];
-        let sky = pipeline("sky", "vs_sky", "fs_sky", &[], false, false, None);
+        // Drawn last of the solid things, only where nothing else is.
+        let sky = pipeline("sky", "vs_sky", "fs_sky", &[], false, true, None);
         let lit = pipeline("lit", "vs_lit", "fs_lit", &mesh_buffers, true, true, None);
         let letters = pipeline(
             "letters",
@@ -762,6 +797,67 @@ impl Renderer {
         }
     }
 
+    /// Starts a mesh on its way to the GPU without sending any of it yet, so a big one can
+    /// go up a slice a frame (see [`Renderer::send_mesh`]) instead of stalling a slow GPU
+    /// in one go. None for an empty mesh.
+    pub fn start_mesh(&mut self, mesh: &MeshBuilder) -> Option<Sending> {
+        if mesh.verts.is_empty() {
+            return None;
+        }
+        let bytes: Vec<u8> = bytemuck::cast_slice(&mesh.verts).to_vec();
+        let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("mesh"),
+            size: bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let (lo, hi) = mesh.verts.iter().fold(
+            (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)),
+            |(lo, hi), v| (lo.min(Vec3::from(v.pos)), hi.max(Vec3::from(v.pos))),
+        );
+        Some(Sending {
+            buf,
+            bytes,
+            sent: 0,
+            count: mesh.verts.len() as u32,
+            lo,
+            hi,
+        })
+    }
+
+    /// Sends up to `max` more bytes of a mesh. Says whether all of it is there now.
+    pub fn send_mesh(&mut self, s: &mut Sending, max: usize) -> bool {
+        // Whole vertices, which keeps every copy a multiple of four bytes.
+        let vertex = std::mem::size_of::<crate::mesh::Vertex>();
+        let n = (max.max(vertex) / vertex * vertex).min(s.bytes.len() - s.sent);
+        self.queue
+            .write_buffer(&s.buf, s.sent as u64, &s.bytes[s.sent..s.sent + n]);
+        s.sent += n;
+        self.uploaded += n as u64;
+        self.largest = self.largest.max(n as u64);
+        s.sent == s.bytes.len()
+    }
+
+    /// A mesh that is all there, ready to draw.
+    pub fn finish_mesh(&mut self, s: Sending) -> MeshId {
+        let gpu = Some(GpuMesh {
+            buf: s.buf,
+            count: s.count,
+            lo: s.lo,
+            hi: s.hi,
+        });
+        match self.free.pop() {
+            Some(i) => {
+                self.meshes[i as usize] = gpu;
+                MeshId(i)
+            }
+            None => {
+                self.meshes.push(gpu);
+                MeshId(self.meshes.len() as u32 - 1)
+            }
+        }
+    }
+
     /// Releases a mesh. Its id may be handed out again.
     pub fn free_mesh(&mut self, id: MeshId) {
         if self.meshes[id.0 as usize].take().is_some() {
@@ -831,6 +927,50 @@ impl Renderer {
 
     /// Renders `frame` into `target`, which must be viewed with [`Renderer::format`] at
     /// [`Renderer::size`].
+    /// Draws the static batches in `list` that are in view and in reach.
+    fn draw_statics(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        list: &[StaticBatch],
+        frame: &Frame,
+        planes: &[Vec4; 6],
+        shown: impl Fn(&Cull) -> bool,
+        stats: &mut Stats,
+    ) {
+        for s in list.iter().filter(|s| shown(&s.cull)) {
+            let c = &s.cull;
+            let dist = frame.cam_pos.clamp(s.lo, s.hi).distance(frame.cam_pos);
+            if dist > frame.prop_range * c.reach || !in_view(planes, c.center, c.radius) {
+                continue;
+            }
+            if let Some(g) = c.group {
+                let away = (g.center - frame.cam_pos).length() - g.radius;
+                if (away >= g.range * frame.detail_range) != g.merged {
+                    continue;
+                }
+            }
+            let id = match c.far {
+                Some(far) if dist > frame.detail_range * c.detail => far,
+                _ => s.mesh,
+            };
+            let Some(mesh) = &self.meshes[id.0 as usize] else {
+                continue;
+            };
+            if self.hide.contains(&(id.0 + 1_000_000)) {
+                continue;
+            }
+            pass.set_vertex_buffer(0, mesh.buf.slice(..));
+            pass.set_vertex_buffer(1, s.buf.slice(..));
+            pass.draw(0..mesh.count, 0..s.count);
+            stats.draws += 1;
+            stats.draws_static += 1;
+            let tris = (mesh.count / 3) as u64 * s.count as u64;
+            stats.props += tris;
+            // Static batches show as their mesh number plus a million.
+            stats.heaviest.push((id.0 + 1_000_000, s.count, tris));
+        }
+    }
+
     pub fn render(&mut self, target: &wgpu::TextureView, frame: &Frame) {
         let l = &frame.lighting;
         let globals = Globals {
@@ -936,9 +1076,6 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_bind_group(0, &self.bind, &[]);
-            pass.set_pipeline(&self.sky);
-            pass.draw(0..3, 0..1);
-
             let planes = frustum(frame.view_proj);
             // Peeking in from outside shows cave walls but not everything inside.
             let inside = frame.lighting.underground > 0.1;
@@ -949,48 +1086,17 @@ impl Renderer {
                     !frame.deep
                 }
             };
-            let lists = [
-                (&self.lit, &self.statics),
-                (&self.letters, &self.letter_statics),
-            ];
-            for (pipe, list) in lists {
-                pass.set_pipeline(pipe);
-                for s in list.iter().filter(|s| shown(&s.cull)) {
-                    let c = &s.cull;
-                    let dist = frame.cam_pos.clamp(s.lo, s.hi).distance(frame.cam_pos);
-                    if dist > frame.prop_range * c.reach || !in_view(&planes, c.center, c.radius) {
-                        continue;
-                    }
-                    if let Some(g) = c.group {
-                        let away = (g.center - frame.cam_pos).length() - g.radius;
-                        if (away >= g.range * frame.detail_range) != g.merged {
-                            continue;
-                        }
-                    }
-                    let id = match c.far {
-                        Some(far) if dist > frame.detail_range * c.detail => far,
-                        _ => s.mesh,
-                    };
-                    let Some(mesh) = &self.meshes[id.0 as usize] else {
-                        continue;
-                    };
-                    if self.hide.contains(&(id.0 + 1_000_000)) {
-                        continue;
-                    }
-                    pass.set_vertex_buffer(0, mesh.buf.slice(..));
-                    pass.set_vertex_buffer(1, s.buf.slice(..));
-                    pass.draw(0..mesh.count, 0..s.count);
-                    stats.draws += 1;
-                    stats.draws_static += 1;
-                    let tris = (mesh.count / 3) as u64 * s.count as u64;
-                    stats.props += tris;
-                    // Static batches show as their mesh number plus a million.
-                    stats.heaviest.push((id.0 + 1_000_000, s.count, tris));
-                }
+            let statics = !self.hide.contains(&PART_STATICS);
+            if statics {
+                pass.set_pipeline(&self.lit);
+                self.draw_statics(&mut pass, &self.statics, frame, &planes, shown, &mut stats);
             }
             pass.set_pipeline(&self.ground);
             for (id, center, radius) in &frame.terrain {
-                if !in_view(&planes, *center, *radius) || self.hide.contains(&4_000_000) {
+                if !in_view(&planes, *center, *radius)
+                    || self.hide.contains(&4_000_000)
+                    || self.hide.contains(&(id.0 + 4_000_000))
+                {
                     continue;
                 }
                 let Some(mesh) = &self.meshes[id.0 as usize] else {
@@ -1002,9 +1108,17 @@ impl Renderer {
                 stats.draws += 1;
                 stats.draws_terrain += 1;
                 stats.terrain += (mesh.count / 3) as u64;
+                // Terrain chunks show as their mesh number plus four million.
+                stats
+                    .heaviest
+                    .push((id.0 + 4_000_000, 1, (mesh.count / 3) as u64));
             }
             pass.set_pipeline(&self.lit);
-            let mut i = 0;
+            let mut i = if self.hide.contains(&PART_DYNAMIC) {
+                draws.len()
+            } else {
+                0
+            };
             while i < draws.len() {
                 let id = draws[i].0;
                 let end = i + draws[i..].iter().take_while(|(m, _)| *m == id).count();
@@ -1020,6 +1134,25 @@ impl Renderer {
                     stats.heaviest.push((id.0, (end - i) as u32, tris));
                 }
                 i = end;
+            }
+
+            // Letters cut themselves out of their quads, and the sky fills whatever is
+            // left, so both come after everything solid. Tiled GPUs (iPads) skip the hidden
+            // parts of solid things best that way.
+            if statics {
+                pass.set_pipeline(&self.letters);
+                self.draw_statics(
+                    &mut pass,
+                    &self.letter_statics,
+                    frame,
+                    &planes,
+                    shown,
+                    &mut stats,
+                );
+            }
+            if !self.hide.contains(&PART_SKY) {
+                pass.set_pipeline(&self.sky);
+                pass.draw(0..3, 0..1);
             }
 
             pass.set_pipeline(&self.water);
@@ -1039,11 +1172,17 @@ impl Renderer {
             }
 
             pass.set_pipeline(&self.fx);
-            let mut i = 0;
+            let mut i = if self.hide.contains(&PART_FX) {
+                fx.len()
+            } else {
+                0
+            };
             while i < fx.len() {
                 let id = fx[i].0;
                 let end = i + fx[i..].iter().take_while(|(m, _)| *m == id).count();
-                if let Some(mesh) = &self.meshes[id.0 as usize] {
+                if let Some(mesh) = &self.meshes[id.0 as usize]
+                    && !self.hide.contains(&(id.0 + 2_000_000))
+                {
                     pass.set_vertex_buffer(0, mesh.buf.slice(..));
                     pass.set_vertex_buffer(1, self.dynamic.slice(..));
                     pass.draw(
@@ -1061,7 +1200,8 @@ impl Renderer {
                 i = end;
             }
 
-            if let (Some(disc), false) = (self.shadow_mesh, frame.shadows.is_empty())
+            let shadows = !self.hide.contains(&PART_SHADOWS);
+            if let (Some(disc), false, true) = (self.shadow_mesh, frame.shadows.is_empty(), shadows)
                 && let Some(mesh) = &self.meshes[disc.0 as usize]
             {
                 pass.set_pipeline(&self.shadow);
@@ -1072,7 +1212,7 @@ impl Renderer {
                     shadow_start..shadow_start + frame.shadows.len() as u32,
                 );
             }
-            if let (Some(ring), false) = (self.ring_mesh, frame.rings.is_empty())
+            if let (Some(ring), false, true) = (self.ring_mesh, frame.rings.is_empty(), shadows)
                 && let Some(mesh) = &self.meshes[ring.0 as usize]
             {
                 pass.set_pipeline(&self.glow);
@@ -1083,7 +1223,7 @@ impl Renderer {
                     ring_start..ring_start + frame.rings.len() as u32,
                 );
             }
-            if !frame.hud.is_empty() {
+            if !frame.hud.is_empty() && !self.hide.contains(&PART_HUD) {
                 pass.set_pipeline(&self.hud);
                 pass.set_bind_group(0, &self.hud_bind, &[]);
                 pass.set_vertex_buffer(0, self.hud_buf.slice(..));

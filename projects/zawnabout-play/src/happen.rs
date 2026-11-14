@@ -60,7 +60,22 @@ impl Play {
         if let Some(i) = self.happening() {
             let h = &self.def.happenings[i];
             let far = (me.pos.x - h.x).hypot(me.pos.z - h.z);
-            let down = me.mode == Mode::Ground || me.vel.length() < 10.0;
+            // Most are seen by stopping there, geese by flying up among them.
+            let geese = self.happen_at[i]
+                .iter()
+                .zip(h.effects)
+                .any(|((a, _), e)| e.kind == "geese" && (me.pos.y - a.y).abs() < 50.0);
+            // The ghost ship is only out at night, and seen by flying in low beside it.
+            let ghost = h.effects.iter().any(|e| e.kind == "ghostship");
+            let low = self.happen_at[i]
+                .iter()
+                .zip(h.effects)
+                .any(|((a, _), e)| e.kind == "ghostship" && me.pos.y - a.y < 60.0);
+            let down = if ghost {
+                self.night && low
+            } else {
+                me.mode == Mode::Ground || me.vel.length() < 10.0 || geese
+            };
             if !self.happen.seen_now && far < h.r && down {
                 self.happen.seen_now = true;
                 self.happen.seen[i] = true;
@@ -136,6 +151,45 @@ mod tests {
         play.happen_tick(&me);
         assert_eq!(play.happening(), Some(1));
         assert!(play.happen.seen[0]);
+    }
+
+    /// The geese are seen by flying up among them, not by passing far below.
+    #[test]
+    fn geese_seen_in_flight() {
+        let Some(i) = PLAY.happenings.iter().position(|h| h.id == "geese-south") else {
+            return;
+        };
+        let sim = Sim::new(1);
+        let mut play = Play::new(&sim.world);
+        play.happen.current = i;
+        let h = &PLAY.happenings[i];
+        let mut me = Dragon::new(zawnabout_sim::EntityId(9), Vec3::new(h.x, 5.0, h.z), 0.0);
+        me.mode = Mode::Air;
+        me.vel = Vec3::new(0.0, 0.0, 20.0);
+        assert!(play.happen_tick(&me).is_empty());
+        me.pos.y = 75.0;
+        assert_eq!(play.happen_tick(&me), vec![Event::Happening(i)]);
+    }
+
+    /// The ghost ship is only seen at night, flying in low beside it.
+    #[test]
+    fn ghost_ship_seen_at_night() {
+        let Some(i) = PLAY.happenings.iter().position(|h| h.id == "ghost-ship") else {
+            return;
+        };
+        let sim = Sim::new(1);
+        let mut play = Play::new(&sim.world);
+        play.happen.current = i;
+        let h = &PLAY.happenings[i];
+        let mut me = Dragon::new(zawnabout_sim::EntityId(9), Vec3::new(h.x, 20.0, h.z), 0.0);
+        me.mode = Mode::Air;
+        me.vel = Vec3::new(0.0, 0.0, 20.0);
+        assert!(play.happen_tick(&me).is_empty());
+        play.night = true;
+        me.pos.y = 200.0;
+        assert!(play.happen_tick(&me).is_empty());
+        me.pos.y = 20.0;
+        assert_eq!(play.happen_tick(&me), vec![Event::Happening(i)]);
     }
 
     /// Every favor names a town that has locals to help, at a step they can reach.

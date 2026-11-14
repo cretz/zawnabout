@@ -54,6 +54,8 @@ interface Reading {
   at: string;
   fps: number;
   worst: number;
+  /** Gaps between frames over 25 ms, each a stutter. */
+  long: number;
   parts: string;
   slowest: string;
   view: unknown;
@@ -71,7 +73,9 @@ function setupPerf(app: App, canvas: HTMLCanvasElement) {
   const box = document.createElement("pre");
   const send = document.createElement("button");
   send.textContent = "Send perf";
-  panel.append(box, send);
+  // Only the dev server takes reports. The published page has nowhere to send them.
+  panel.append(box);
+  if (import.meta.env.DEV) panel.append(send);
   document.body.append(panel);
   const readings: Reading[] = [];
   for (const ev of ["pointerdown", "pointerup", "touchstart", "touchend", "mousedown", "mouseup"]) {
@@ -111,7 +115,7 @@ function setupPerf(app: App, canvas: HTMLCanvasElement) {
     c.getContext("2d")?.drawImage(canvas, 0, 0, c.width, c.height);
     return c.toDataURL("image/jpeg", 0.8);
   };
-  let [from, last, frames, worst] = [performance.now(), performance.now(), 0, 0];
+  let [from, last, frames, worst, long] = [performance.now(), performance.now(), 0, 0, 0];
   return (now: number) => {
     if (wanted) {
       wanted = false;
@@ -119,6 +123,7 @@ function setupPerf(app: App, canvas: HTMLCanvasElement) {
     }
     frames++;
     worst = Math.max(worst, now - last);
+    if (now - last > 25) long++;
     last = now;
     if (now - from < 2000) return;
     const [parts, slowest] = app.perf_report().split("\n");
@@ -127,6 +132,7 @@ function setupPerf(app: App, canvas: HTMLCanvasElement) {
       at: new Date().toISOString(),
       fps: Math.round(fps * 10) / 10,
       worst: Math.round(worst),
+      long,
       parts,
       slowest,
       view: JSON.parse(app.perf_view()),
@@ -134,25 +140,129 @@ function setupPerf(app: App, canvas: HTMLCanvasElement) {
     if (readings.length > 10) readings.shift();
     const lines = parts.split("; ").slice(0, 10);
     box.textContent =
-      `${fps.toFixed(1)} fps, worst gap ${worst.toFixed(0)} ms, ` +
+      `${fps.toFixed(1)} fps, worst gap ${worst.toFixed(0)} ms, ${long} over 25 ms, ` +
       `canvas ${canvas.width}x${canvas.height}\n` +
       lines.join("\n") +
       `\n${slowest.trim().split("; ").slice(0, 8).join("\n  ")}`;
-    [from, frames, worst] = [now, 0, 0];
+    [from, frames, worst, long] = [now, 0, 0, 0];
   };
 }
 
-function sizeCanvas(canvas: HTMLCanvasElement) {
-  // Cap the pixel ratio so tablets and phones stay smooth. Touch screens get a bit less.
-  const touch = window.matchMedia("(pointer: coarse)").matches;
-  const dpr = Math.min(window.devicePixelRatio || 1, touch ? 1.5 : 2);
-  const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-  const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+/** Pixels drawn per CSS pixel at most: the screen's own, up to 2. */
+const sharpest = () => Math.min(window.devicePixelRatio || 1, 2);
+
+function sizeCanvas(canvas: HTMLCanvasElement, scale: number) {
+  const w = Math.max(1, Math.round(canvas.clientWidth * scale));
+  const h = Math.max(1, Math.round(canvas.clientHeight * scale));
   if (canvas.width !== w || canvas.height !== h) {
     canvas.width = w;
     canvas.height = h;
   }
 }
+
+/** Where Auto sharpness last settled on this device, to start there next time. */
+const AUTO_KEY = "zawnabout.autoscale";
+/** How far apart the sharpness levels Auto moves between are, in pixels per CSS pixel. */
+const STEP = 0.125;
+
+const percentile = (xs: number[], p: number) => [...xs].sort((a, b) => a - b)[Math.floor((xs.length - 1) * p)];
+
+/**
+ * Auto sharpness: how many pixels to draw for each CSS pixel, picked from how fast frames
+ * come. It reads one second of frames at a time. Two slow seconds in a row draw fewer
+ * pixels, as many fewer as the GPU's time says are needed. Three seconds with the GPU
+ * well under its time draw a step or two more. After any change it waits a few seconds
+ * before judging again, and it waits longer and longer before stepping back up where that
+ * keeps turning out too much, so the picture settles instead of shifting about. Drawing
+ * fewer pixels that does not help, such as when the browser holds frames back to save
+ * power, is undone.
+ */
+function autoSharpness(log: boolean) {
+  const clamp = (s: number) => Math.min(sharpest(), Math.max(1, Math.round(s / STEP) * STEP));
+  let scale = clamp(Number(load(AUTO_KEY)) || sharpest());
+  let gaps: number[] = [];
+  let gpus: number[] = [];
+  let [from, last, drew] = [performance.now(), 0, false];
+  // Not judged again until then, after a change or while the game starts.
+  let settle = performance.now() + 3000;
+  let [slow, roomy] = [0, 0];
+  // Stepping up waits this long after stepping down, doubling each time an up was undone.
+  let [upWait, downAt, upAt] = [10_000, -Infinity, -Infinity];
+  // A step down still being tried: where it came from, and how slow frames and the GPU
+  // were before it.
+  let tried: { scale: number; gap: number; busy: number | null } | null = null;
+  // Stepping down did not help, so it waits until then.
+  let noDownUntil = 0;
+  const set = (s: number, why: string) => {
+    if (log) console.log(`sharpness ${scale} to ${s}: ${why}`);
+    scale = s;
+    settle = performance.now() + 3000;
+    [slow, roomy] = [0, 0];
+    keep(AUTO_KEY, String(s));
+  };
+  return {
+    scale: () => clamp(scale),
+    /** One frame: when it began, and the GPU's time over a frame that finished, if one did. */
+    tick(now: number, gpu: number) {
+      // Only frames after drawn ones count, and gaps long enough to be a hidden tab say
+      // nothing about drawing. A second of frames is judged at once, or more on a GPU
+      // slow enough to give fewer than five in a second.
+      if (drew && now - last < 2000) gaps.push(now - last);
+      if (gpu >= 0) gpus.push(gpu);
+      last = now;
+      if (now - from < 1000 || gaps.length < 5) return;
+      const [g, u] = [gaps, gpus];
+      [gaps, gpus, from] = [[], [], now];
+      if (now < settle) return;
+      const gap = percentile(g, 0.75);
+      // Under 50 frames a second, or too many stutters.
+      const isSlow = gap > 20;
+      const busy = u.length >= 5 ? percentile(u, 0.5) : null;
+      if (tried) {
+        // Waiting for the screen to refresh can hide a faster GPU in the gaps, so its
+        // own time counts too.
+        const quicker = busy !== null && tried.busy !== null && busy < tried.busy * 0.9;
+        const helped = !isSlow || gap < tried.gap * 0.9 || quicker;
+        if (!helped) {
+          noDownUntil = now + 60_000;
+          set(tried.scale, `fewer pixels did not help (${gap.toFixed(1)} ms frames)`);
+        }
+        tried = null;
+        if (!helped) return;
+      }
+      slow = isSlow ? slow + 1 : 0;
+      if (slow >= 2 && scale > 1 && now >= noDownUntil) {
+        // Pixels cost GPU time roughly in proportion, so aim for 14 ms of it.
+        const want = busy ? scale * Math.sqrt(14 / busy) : scale - STEP;
+        const next = Math.max(1, scale - 4 * STEP, Math.min(scale - STEP, Math.floor(want / STEP) * STEP));
+        if (now - upAt < 10_000) upWait = Math.min(upWait * 2, 300_000);
+        tried = { scale, gap, busy };
+        downAt = now;
+        set(next, `slow (${gap.toFixed(1)} ms frames, GPU ${busy?.toFixed(1)} ms)`);
+        return;
+      }
+      // A step up, or two, would still leave the GPU a fifth of a 60 Hz frame spare. Part
+      // of the GPU's time does not grow with pixels, so this guesses high, and a step that
+      // turns out too much comes back down.
+      const fits = (s: number) => !isSlow && busy !== null && s <= sharpest() && busy * (s / scale) ** 2 < 13;
+      roomy = fits(scale + STEP) ? roomy + 1 : 0;
+      if (roomy >= 3 && now - downAt >= upWait) {
+        upAt = now;
+        set(fits(scale + 2 * STEP) ? scale + 2 * STEP : scale + STEP, `room to spare (GPU ${busy?.toFixed(1)} ms)`);
+      }
+    },
+    drew(on: boolean) {
+      drew = on;
+    },
+  };
+}
+
+/** The pixels to draw per CSS pixel for each Settings sharpness, Auto aside. */
+const FIXED: Record<string, () => number> = {
+  sharp: sharpest,
+  balanced: () => Math.min(sharpest(), 1.5),
+  fast: () => 1,
+};
 
 function pollGamepad(app: App, state: { had: boolean }) {
   const pad = navigator.getGamepads?.().find((p) => p && p.connected);
@@ -195,17 +305,23 @@ function pickSave(app: App) {
 
 async function start() {
   const canvas = $<HTMLCanvasElement>("game");
+  const loading = $("loading");
   if (!("gpu" in navigator)) {
+    loading.remove();
     $("nogpu").classList.remove("hidden");
     return;
   }
   await init();
-  sizeCanvas(canvas);
+  const auto = autoSharpness(perf);
+  sizeCanvas(canvas, auto.scale());
+  // Making the world holds the page for a few seconds, so let the loading dots show first.
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r)));
   let app: App;
   try {
     app = await App.create(canvas, Number(query.get("seed") ?? 1));
   } catch (e) {
     console.error(e);
+    loading.remove();
     $("nogpu").classList.remove("hidden");
     return;
   }
@@ -396,8 +512,13 @@ async function start() {
     const dt = Math.min((now - last) / 1000, 0.25);
     last = now;
     pollGamepad(app, pad);
-    sizeCanvas(canvas);
+    const sharp = app.sharpness();
+    if (sharp === "auto") auto.tick(now, app.take_gpu());
+    const scale = FIXED[sharp]?.() ?? auto.scale();
+    sizeCanvas(canvas, scale);
+    app.set_ui_scale(sharpest() / scale);
     const host = app.frame(dt, canvas.width, canvas.height);
+    auto.drew(app.drew());
     answer();
     // The page's own buttons and touch controls step aside while the journal is up. The
     // big map pauses the game too, but it is page chrome itself, so it stays.
@@ -416,6 +537,11 @@ async function start() {
     debugPanel?.update();
     perfShow?.(now);
     minimap.update(notes.active() ? notes.spots() : []);
+    // The loading screen fades once the first frame is drawn.
+    if (!loading.classList.contains("done")) {
+      loading.classList.add("done");
+      loading.addEventListener("transitionend", () => loading.remove());
+    }
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);

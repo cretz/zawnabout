@@ -23,13 +23,14 @@ pub struct Script {
     keep_cards: bool,
 }
 
-const HOST: [&str; 9] = [
+const HOST: [&str; 10] = [
     "shot",
     "size",
     "save-trace",
     "stats",
     "hide-mesh",
     "profile",
+    "gpu",
     "clouds",
     "sound",
     "quit",
