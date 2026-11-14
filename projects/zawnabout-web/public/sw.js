@@ -41,19 +41,16 @@ async function fresh() {
   return { html, kept: keep(html, res) };
 }
 
+/**
+ * Keeps a new page once all its built files are kept. Any file failing leaves the copy
+ * as it was. The page before it keeps its files too, since a launch that fell back to
+ * that copy may still be loading them.
+ */
 async function keep(html, res) {
   const cache = await caches.open(CACHE);
-  const used = new Set();
-  const todo = names(html, PAGE);
-  while (todo.length) {
-    const url = todo.pop();
-    if (used.has(url)) continue;
-    used.add(url);
-    const file = await get(url);
-    // A name that only looked like a built file.
-    if (!file.ok) continue;
-    if (url.endsWith(".js")) todo.push(...names(await file.text(), url));
-  }
+  const used = await uses(html, get);
+  const old = await cache.match(PAGE);
+  if (old) for (const url of await uses(await old.text(), (u) => caches.match(u))) used.add(url);
   for (const name of STEADY) {
     const url = new URL(name, PAGE).href;
     const file = await fetch(url, { cache: "no-cache" }).catch(() => null);
@@ -63,6 +60,22 @@ async function keep(html, res) {
   for (const req of await cache.keys()) {
     if (new URL(req.url).pathname.match(BUILT) && !used.has(req.url)) await cache.delete(req);
   }
+}
+
+/** Every built file a page uses, read through `load`, which may have none of one. */
+async function uses(html, load) {
+  const used = new Set();
+  const todo = names(html, PAGE);
+  while (todo.length) {
+    const url = todo.pop();
+    if (used.has(url)) continue;
+    used.add(url);
+    const file = await load(url);
+    if (!file) continue;
+    if (!real(file)) throw new Error(`${url} ${file.status}`);
+    if (url.endsWith(".js")) todo.push(...names(await file.text(), url));
+  }
+  return used;
 }
 
 /** The built files a page or script names, as full addresses. */
@@ -94,6 +107,12 @@ async function page(e) {
 const html = (text) =>
   new Response(text, { headers: { "content-type": "text/html; charset=utf-8" } });
 
+/**
+ * Whether a built file came back as itself. Some Wi-Fi sign-in pages, and servers that
+ * answer every address with the page, send a web page instead.
+ */
+const real = (res) => res.ok && !(res.headers.get("content-type") ?? "").includes("text/html");
+
 /** Downloads under way, so the page and the keeping share one of each. */
 const loading = new Map();
 
@@ -103,7 +122,7 @@ async function get(url) {
   if (copy) return copy;
   if (!loading.has(url)) {
     const load = fetch(url).then(async (res) => {
-      if (res.ok) await (await caches.open(CACHE)).put(url, res.clone());
+      if (real(res)) await (await caches.open(CACHE)).put(url, res.clone());
       return res;
     });
     loading.set(url, load);
