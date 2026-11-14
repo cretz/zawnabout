@@ -1,0 +1,7 @@
+# From the start meadow, fly up to the home summit perch and land on it.
+land-perch home/summit-perch
+wait 8
+shot perch-summit-1-flying.png
+wait-until landed 60
+expect on-perch home/summit-perch
+shot perch-summit-2-perched.png

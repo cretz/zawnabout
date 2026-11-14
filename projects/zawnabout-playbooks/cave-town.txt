@@ -1,0 +1,8 @@
+# Drop into lantern hollow on the great hall floor and stand among its houses.
+place -2050 -880 1000 90
+hold brake
+wait-until ground 60
+release all
+expect ground
+expect near -2050 -955 1000 60
+shot cave-town.png

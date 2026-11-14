@@ -1,0 +1,16 @@
+# Ride the cave line round the great hall: board the tour train, stay aboard over the
+# trestles and through the station stops, and look out over Lantern Hollow.
+ride tour
+wait 0.5
+expect riding tour
+wait 20
+shot ride-cave-1.png
+wait 100
+expect riding tour
+shot ride-cave-2.png
+wait 120
+expect riding tour
+shot ride-cave-3.png
+wait 120
+expect riding tour
+expect ground

@@ -1,0 +1,448 @@
+// Crescent island. Center at world 2600 -2000. A broken ring about 3.4km across around a sea
+// lagoon. The main body wraps west and north with a hooked spit on the south. Two low keys close
+// the east side, with narrow channels between them.
+// The most modern place in the world: a canal city on the lagoon, the airport on the north arm.
+
+land crescent-main base=12 jag=25 {
+    // North arm tip, then the outer shore going west and round to the south hook.
+    p 1250 -1050 edge=beach sharp=#true
+    p 1000 -1250
+    p 700 -1380
+    p 400 -1520
+    p 100 -1500
+    p -200 -1600
+    p -550 -1520
+    p -800 -1350 edge=rocky
+    p -1050 -1250 edge=cliff
+    p -1300 -1050
+    p -1550 -850
+    p -1600 -550
+    p -1750 -300 sharp=#true
+    p -1650 -50
+    p -1700 200
+    p -1550 450 edge=rocky
+    p -1450 700
+    p -1250 900 edge=beach
+    p -1050 1150
+    p -800 1300
+    p -500 1400
+    p -200 1550
+    p 100 1500
+    p 350 1580
+    p 600 1450
+    p 800 1300 sharp=#true
+    // Lagoon shore, back west and round to the north arm tip.
+    p 650 1200 edge=beach
+    p 500 1150
+    p 300 1150
+    p 50 1100
+    p -250 1080
+    p -500 950
+    p -700 800 edge=rocky
+    p -900 550
+    p -1000 300
+    p -1050 0
+    p -1000 -300
+    p -900 -550 edge=beach
+    p -700 -800
+    p -400 -950
+    p -100 -1050
+    p 250 -1000
+    p 550 -1080
+    p 850 -950
+    p 1100 -900
+}
+land north-key base=6 jag=20 {
+    p 1350 -850 edge=beach
+    p 1600 -650
+    p 1700 -350 edge=rocky
+    p 1550 -200
+    p 1350 -450
+    p 1200 -700
+}
+land south-key base=6 jag=20 {
+    p 1600 -50 edge=beach
+    p 1650 200
+    p 1500 550
+    p 1300 800 sharp=#true
+    p 1150 750
+    p 1300 450
+    p 1400 100
+}
+
+mountain moon-hill x=-1250 z=-200 h=320 r=420 shape=crater rim=320 inner=180 floor=272 stretch=1.5 rot=10 {
+    note "The back of the ring. Its outer face is a sea cliff, its top hides a pool."
+}
+lake sky-pool level=262 {
+    note "Hidden lake in the hill's crater. Looks like a dark spot from the city."
+    p -1350 -330
+    p -1180 -340
+    p -1130 -150
+    p -1230 -50
+    p -1350 -120
+}
+dugout pool-nook x=-1250 y=275 z=-370 facing=north r=20
+
+spire the-eye x=100 z=0 h=40 r=90 top=flat {
+    note "Ring of rock in the middle of the lagoon. Looks like a reef with a hole."
+}
+
+forest key-palms kind=open trees=palm {
+    p 1200 -900
+    p 1750 -650
+    p 1700 300
+    p 1300 850
+    p 1100 0
+}
+meadow poppy-field flowers=poppy {
+    note "Red and orange poppies on the dry northwest arm."
+    p -1500 -980
+    p -1150 -1000
+    p -950 -930
+    p -980 -720
+    p -1200 -640
+    p -1480 -680
+}
+
+// Places
+
+city moonharbor style=modern tech=modern {
+    note "The most advanced city. Towers along the lagoon, lit at night, canals running inland between them."
+    p -1500 350
+    p -1000 200
+    p -850 550
+    p -650 850
+    p -250 1100
+    p -100 1450
+    p -700 1350
+    p -1200 1000
+    canal moon-canal-1 w=24 level=0 {
+        p -800 700
+        p -1000 850
+        p -1250 900
+    }
+    canal moon-canal-2 w=20 level=0 {
+        p -400 1000
+        p -600 1150
+        p -900 1100
+        p -1000 850
+    }
+    canal moon-canal-3 w=16 level=0 {
+        p -950 400
+        p -1200 500
+        p -1250 700
+    }
+    site moon-tower kind=tower x=-1050 z=650 {
+        note "Tall TV tower. Highest perch in the city."
+    }
+    site moon-marina kind=marina x=-600 z=950
+    site seaplane-base kind=seaplane x=-500 z=700
+}
+
+landmark moon-span kind=span-tower x=-819 z=1002 rot=48.5 {
+    note "Moonharbor's office block over the ring road. Fly through under it, or land in its roof garden."
+}
+
+site crescent-airport kind=airport x=100 z=-1250 {
+    note "1980s airport. Terminal and tower on the lagoon side of the runway."
+    runway main-runway w=60 {
+        p -550 -1300
+        p 750 -1200
+    }
+}
+
+village south-key-village tech=modern {
+    note "Beach houses and a yacht club on the south key."
+    p 1400 0
+    p 1650 150
+    p 1450 600
+    p 1250 600
+    site yacht-club kind=marina x=1300 z=500
+}
+
+site channel-bridge kind=bridge x=1000 z=1000 {
+    note "Road bridge over the main channel, hook to south key. Tall enough to fly under."
+}
+site key-bridge kind=bridge x=1500 z=-120
+site north-bridge kind=bridge x=1250 z=-900
+
+road crescent-road w=14 {
+    note "Ring road from the south hook round the city and north arm, over three bridges and back."
+    p 650 1350
+    p 300 1350
+    p -200 1300
+    p -600 1150
+    p -1000 800
+    p -1250 400
+    p -1225 18 290 tunnel=#true
+    p -1150 18 -50 tunnel=#true
+    p -1100 18 -500 tunnel=#true
+    p -1050 18 -590 tunnel=#true
+    p -850 -950
+    p -400 -1150
+    p 300 -1080
+    p 1000 -1050
+    p 1250 -800
+    p 1450 -500
+    p 1500 -120
+    p 1500 200
+    p 1350 600
+    p 1200 800
+    p 700 1250
+    p 650 1350
+}
+
+landmark vault-camp kind=campsite x=300 y=-900 z=200 rot=45 {
+    note "Cavers camped under the lagoon, in the blue glow."
+}
+
+landmark vault-farm kind=shroomfarm x=100 y=-900 z=-150 rot=25 {
+    note "Mushroom beds in the blue glow under the lagoon."
+}
+
+// The vault under the lagoon. Part of the deep, reached from home by the deep road.
+
+caves vault {
+    cavern lagoon-vault x=0 y=-750 z=0 w=1900 h=450 d=1700 rot=-15 shape=dome glow=0.3 decor=shroom {
+        spout vault-spout x=400 z=-300 w=14
+        spout vault-spout-2 x=-500 z=300 w=9
+        note "Blue glow. Daylight drops through the eye in one beam."
+        beacon vault-beacon x=-300 y=-970 z=200
+    }
+    mouth eye-shaft kind=chimney w=50 hidden=#true light=#true {
+        note "Ringed at the top by tall lantern stones, so it reads as a way down people made, not a hole."
+        note "Straight down from the top, then a long slope into the vault, so it can be flown up and down without bumping the walls."
+        p 100 60 0
+        p 100 -60 0
+        p 490 -600 310
+    }
+    mouth hill-door kind=cliff w=90 light=#true {
+        note "Opens in the outer face of moon hill."
+        p -900 -600 0
+        p -1300 -250 -150
+        p -1800 90 -300
+    }
+}
+
+// The railway: one big loop round the whole crescent, just outside the ring road, through
+// a tunnel under Moon Hill (the points marked `tunnel`). Two trains go round all day. Land on one and ride it.
+railway crescent-line {
+    note "The full loop round the lagoon: city, hill tunnel, airport, north arm, bridges, south key."
+    p 663 6 1377
+    p 307 12 1379
+    p -205 13 1330
+    p -614 14 1177
+    p -1023 13 819
+    p -1279 15 409 tunnel=#true
+    p -1180 15 -51 tunnel=#true
+    p -1127 15 -512 tunnel=#true
+    p -870 15 -972 tunnel=#true
+    p -410 14 -1178
+    p 308 12 -1109
+    p 1021 11 -1072
+    p 1275 8 -816
+    p 1478 8 -510
+    p 1530 10 -122
+    p 1530 9 204
+    p 1377 7 612
+    p 1208 3 809
+    p 708 3 1259
+    p 663 6 1377
+    station moon-station x=-960 z=760
+    station airport-station x=300 z=-1050
+    station north-station x=1420 z=-470
+    station key-station x=300 z=1320
+}
+
+// The subway: a loop deep under Moonharbor, four stations in vaulted halls, each
+// reached down a daylit stair shaft from the street. Generated by subway.py.
+railway moon-subway subway=#true {
+    note "The Moonharbor subway: a full loop under the city. Ride it round."
+    p -1187 -45 310 tunnel=#true
+    p -1153 -45 320 tunnel=#true
+    p -1120 -45 330 tunnel=#true
+    p -1087 -45 340 tunnel=#true
+    p -1053 -45 350 tunnel=#true
+    p -900 -45 480 tunnel=#true
+    p -640 -45 873 tunnel=#true
+    p -620 -45 901 tunnel=#true
+    p -600 -45 930 tunnel=#true
+    p -580 -45 959 tunnel=#true
+    p -560 -45 987 tunnel=#true
+    p -500 -45 1080 tunnel=#true
+    p -462 -45 1169 tunnel=#true
+    p -441 -45 1197 tunnel=#true
+    p -420 -45 1225 tunnel=#true
+    p -399 -45 1253 tunnel=#true
+    p -378 -45 1281 tunnel=#true
+    p -480 -45 1340 tunnel=#true
+    p -700 -45 1280 tunnel=#true
+    p -830 -45 1196 tunnel=#true
+    p -865 -45 1193 tunnel=#true
+    p -900 -45 1190 tunnel=#true
+    p -935 -45 1187 tunnel=#true
+    p -970 -45 1184 tunnel=#true
+    p -1180 -45 1060 tunnel=#true
+    p -1300 -45 750 tunnel=#true
+    p -1260 -45 450 tunnel=#true
+    p -1187 -45 310 tunnel=#true
+    station subway-central x=-1121 z=333
+    station subway-canals x=-602 z=932
+    station subway-hill x=-422 z=1227
+    station subway-west x=-900 z=1187
+}
+caves moon-metro {
+    // The open cutting down to each stair, cut square so the gate's walls line it and no
+    // rough rim shows round the tunnel where it meets the street.
+    cavern subway-central-cut x=-1133.5 y=-0.1 z=418.8 w=19.2 h=38 d=42 rot=30 shape=block glow=0 decor=bare
+    cavern subway-canals-cut x=-665.5 y=-0.4 z=976.8 w=19.2 h=38 d=42 rot=30 shape=block glow=0 decor=bare
+    cavern subway-hill-cut x=-515.8 y=0.2 z=1236.5 w=19.2 h=38 d=42 rot=60 shape=block glow=0 decor=bare
+    cavern subway-west-cut x=-904.5 y=-5.9 z=1117.2 w=19.2 h=38 d=42 rot=150 shape=block glow=0 decor=bare
+    cavern subway-central-hall x=-1122 y=-34 z=337 w=120 h=26 d=38 rot=17 shape=carved glow=0.75 decor=tiled
+    mouth subway-central-stairs kind=chimney w=20 tight=#true decor=tiled {
+        p -1096 -39 353
+        p -1155 35.2 456
+    }
+    cavern subway-canals-hall x=-606 y=-34 z=934 w=120 h=26 d=38 rot=55 shape=carved glow=0.75 decor=tiled
+    mouth subway-canals-stairs kind=chimney w=20 tight=#true decor=tiled {
+        p -629 -39 914
+        p -687 33.2 1014
+    }
+    cavern subway-hill-hall x=-426 y=-34 z=1229 w=120 h=26 d=38 rot=53 shape=carved glow=0.75 decor=tiled
+    mouth subway-hill-stairs kind=chimney w=20 tight=#true decor=tiled {
+        p -456 -39 1202
+        p -553 30.8 1258
+    }
+    cavern subway-west-hall x=-899 y=-34 z=1183 w=120 h=26 d=38 rot=185 shape=carved glow=0.75 decor=tiled
+    mouth subway-west-stairs kind=chimney w=20 tight=#true decor=tiled {
+        p -869 -39 1178
+        p -926 31.8 1080
+    }
+}
+landmark subway-central-gate kind=metro-gate x=-1144 z=437 rot=330
+landmark subway-central-flight kind=metro-stairs x=-1096 y=-47 z=353 rot=330 text="96.8 60.5"
+landmark subway-canals-gate kind=metro-gate x=-676 z=995 rot=330
+landmark subway-canals-flight kind=metro-stairs x=-629 y=-47 z=914 rot=330 text="93.6 58.5"
+landmark subway-hill-gate kind=metro-gate x=-534 z=1247 rot=300
+landmark subway-hill-flight kind=metro-stairs x=-456 y=-47 z=1202 rot=300 text="89.6 56.0"
+landmark subway-west-gate kind=metro-gate x=-915 z=1099 rot=210
+landmark subway-west-flight kind=metro-stairs x=-869 y=-47 z=1178 rot=210 text="91.2 57.0"
+
+// The vault mine line: carts round the lagoon vault under the eye's beam, past the
+// blue mine. Laid by scratch/scripts/caveline.py over the vault's floor.
+landmark vault-mine kind=mine x=860 y=-900 z=-380 rot=230 {
+    note "A mine for blue glow stone in the lagoon vault's wall."
+}
+railway vault-line mine=#true {
+    note "Mine carts round the lagoon vault, under the beam from the eye."
+    p -125 -861.7 -570
+    p -95 -860.1 -576
+    p -63 -858.5 -582
+    p -26 -856.7 -587
+    p 9 -854.9 -591
+    p 44 -853.1 -594
+    p 78 -852.1 -596
+    p 111 -853.8 -598
+    p 144 -855.4 -597
+    p 175 -857.0 -596
+    p 206 -858.5 -594
+    p 237 -860.1 -591
+    p 276 -862.0 -584
+    p 313 -864.0 -576
+    p 350 -865.8 -566
+    p 385 -867.7 -554
+    p 418 -869.5 -540
+    p 451 -871.3 -524
+    p 481 -873.1 -506
+    p 511 -874.0 -486
+    p 539 -872.2 -464
+    p 565 -872.0 -441
+    p 589 -873.7 -417
+    p 612 -875.4 -393
+    p 632 -877.0 -367
+    p 650 -878.6 -340
+    p 667 -880.3 -312
+    p 681 -881.9 -284
+    p 694 -881.6 -254
+    p 704 -883.2 -223
+    p 713 -882.9 -192
+    p 720 -881.2 -159
+    p 724 -879.6 -125
+    p 727 -877.8 -91
+    p 728 -876.0 -55
+    p 727 -874.2 -19
+    p 723 -872.3 19
+    p 718 -870.5 54
+    p 711 -869.3 88
+    p 701 -870.7 121
+    p 689 -872.3 151
+    p 676 -872.7 180
+    p 660 -871.2 207
+    p 641 -869.6 232
+    p 621 -868.1 255
+    p 599 -867.0 277
+    p 574 -868.5 297
+    p 547 -870.2 315
+    p 518 -868.8 332
+    p 487 -867.1 346
+    p 454 -866.5 359
+    p 419 -868.4 370
+    p 381 -870.3 380
+    p 343 -872.2 388
+    p 305 -871.9 394
+    p 266 -869.9 400
+    p 227 -868.0 404
+    p 188 -866.0 406
+    p 148 -864.0 407
+    p 118 -862.5 407
+    p 88 -861.0 406
+    p 57 -859.6 405
+    p 26 -858.0 403
+    p -5 -857.6 399
+    p -36 -859.2 395
+    p -68 -860.1 391
+    p -99 -858.4 386
+    p -131 -856.8 379
+    p -163 -857.5 372
+    p -196 -859.2 365
+    p -228 -860.9 356
+    p -261 -860.7 347
+    p -292 -860.0 336
+    p -322 -861.3 325
+    p -350 -862.8 312
+    p -384 -863.1 293
+    p -416 -861.2 272
+    p -444 -859.4 249
+    p -469 -858.3 224
+    p -491 -859.8 196
+    p -509 -861.5 166
+    p -525 -863.3 135
+    p -538 -865.1 101
+    p -547 -867.0 64
+    p -553 -868.9 26
+    p -555 -870.4 -4
+    p -556 -872.0 -36
+    p -555 -873.6 -68
+    p -553 -875.3 -102
+    p -548 -877.1 -137
+    p -542 -878.4 -171
+    p -535 -877.2 -204
+    p -526 -878.8 -235
+    p -515 -880.4 -265
+    p -503 -882.0 -294
+    p -490 -883.5 -321
+    p -475 -883.0 -348
+    p -452 -881.0 -380
+    p -427 -879.0 -411
+    p -398 -877.0 -439
+    p -375 -875.5 -458
+    p -351 -874.0 -477
+    p -325 -872.4 -494
+    p -298 -870.8 -509
+    p -268 -869.2 -523
+    p -238 -867.6 -536
+    p -206 -865.8 -548
+    p -172 -864.1 -559
+    p -137 -862.3 -567
+    p -125 -861.7 -570
+}

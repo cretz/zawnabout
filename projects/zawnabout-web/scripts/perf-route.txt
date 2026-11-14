@@ -1,0 +1,40 @@
+# A route through the places that have stuttered on slow devices, for `pnpm perf`. Each
+# stretch fails the run if more of its frames than the number after it took over 33 ms.
+# The limits leave room for the noise between runs.
+wait 6
+spawn -2280 0 1230 90 0
+wait 4
+frames-start
+key-down KeyW
+wait 8
+key-up KeyW
+frames grass-walk 6
+place -2300 220 -1400 180
+hold flap
+wait 3
+frames-start
+hold turn 1
+wait 3
+hold turn -1
+wait 3
+hold turn 1
+wait 3
+hold turn -1
+wait 3
+release turn
+frames water-zigzag 3
+place -1290 6 -236 236
+hold flap
+wait 2
+frames-start
+wait 10
+frames cave 8
+place 1500 140 -900 270
+hold flap
+frames-start
+wait 15
+frames long-flight 8
+spawn 1680 0 -1104 0 0
+frames-start
+wait 8
+frames land-lawn 6

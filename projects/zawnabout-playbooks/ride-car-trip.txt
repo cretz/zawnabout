@@ -1,0 +1,16 @@
+# Ride a car on a whole trip across the island: through the junctions onto other roads,
+# a stop at the far end, round and home again, never turning back at a junction.
+land-on car.5
+wait-until riding car.5 60
+expect riding car.5
+wait 40
+shot car-trip-1.png
+wait 40
+expect riding car.5
+shot car-trip-2.png
+wait 40
+expect riding car.5
+shot car-trip-3.png
+wait 40
+expect riding car.5
+shot car-trip-4.png

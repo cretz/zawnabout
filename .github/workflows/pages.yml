@@ -1,0 +1,67 @@
+# Publish the web game to GitHub Pages (https://zawnabout.quest) on every push to `main`,
+# so the page is whatever main says it is. Releases do not wait for it, nor it for them.
+#
+# One-time setup: Settings, Pages, Source "GitHub Actions", custom domain zawnabout.quest.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, a newer one replacing an older one still going.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The same pin as `projects/rust-toolchain.toml`.
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: projects
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: projects/zawnabout-web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: projects/zawnabout-web/pnpm-lock.yaml
+      # The wasm build, its bindings and the page, into `dist/`.
+      - name: Build the web game
+        working-directory: projects/zawnabout-web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          test -f dist/index.html
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: projects/zawnabout-web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

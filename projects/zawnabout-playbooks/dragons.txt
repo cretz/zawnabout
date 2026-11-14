@@ -1,0 +1,119 @@
+# Gameplay: the four dragons. Meet Grandmother Cinder and follow her to her secret, race
+# Blaze to Fang Lodge and win, coax shy Wisp out on the third try, swap a spyglass with
+# Tinker, then take Cinder's egg home, warm it with fire and fly with the hatchling.
+# Travelling, cards are logged and put away. Talking, they stay for an answer.
+wait 1
+goto-kin 0 30
+wait 0.5
+expect met 0
+goto-kin 0 7
+wait 0.5
+expect can-talk
+cards keep
+ui-key Enter
+expect card
+shot ask-follow.png
+ui-key Enter
+expect busy
+wait 1
+shot follow.png
+cards auto
+wait 30
+goto-kin 0 12
+wait 30
+goto-kin 0 12
+wait 30
+goto-kin 0 12
+wait-until not busy 10
+goto-find cinder-scale 0
+wait 1
+expect found cinder-scale
+# Blaze races to Fang Lodge. Win by getting there first.
+goto-kin 1 30
+wait 0.5
+expect met 1
+goto-kin 1 7
+wait 0.5
+cards keep
+ui-key Enter
+expect card
+ui-key Enter
+expect busy
+wait 1
+shot race.png
+goto 4607 3215 15 90
+wait-until card 3
+shot won.png
+ui-key Enter
+cards auto
+# Wisp flies off twice, and stays the third time.
+goto-kin 2 3
+wait 1
+expect not met 2
+wait 22
+goto-kin 2 3
+wait 1
+expect not met 2
+wait 22
+goto-kin 2 3
+wait-until met 2 10
+# Tinker swaps for a spyglass.
+goto-find star-spyglass 0
+wait 1
+expect found star-spyglass
+goto-kin 3 4
+wait 0.5
+expect met 3
+goto-kin 3 2
+wait 0.5
+cards keep
+ui-key Enter
+expect card
+shot trade.png
+ui-key Enter
+wait 0.3
+expect card
+ui-key Enter
+# Back to Cinder for the egg.
+cards auto
+goto-kin 0 7
+wait 0.5
+cards keep
+ui-key Enter
+expect card
+shot egg.png
+ui-key Enter
+wait 0.3
+ui-key Enter
+expect egg 1
+# A lair, a friend's gift there, and fire to hatch the egg.
+goto-find fern-hollow 0
+wait-until card 3
+ui-key Enter
+expect lair fern-hollow
+wait 0.5
+ui-key Enter
+goto-find fern-hollow 0
+wait 0.5
+cards keep
+hold breath
+wait 3
+release breath
+wait-until card 3
+shot hatched.png
+ui-key Enter
+expect egg 2
+wait 1
+shot little.png
+goto -2500 1300 60 90
+wait 10
+shot together.png
+book dragons
+wait 0.3
+shot journal.png
+ui-key ArrowDown
+ui-key ArrowDown
+ui-key ArrowDown
+ui-key ArrowDown
+shot family.png
+book close

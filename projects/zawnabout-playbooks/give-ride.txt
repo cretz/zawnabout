@@ -1,0 +1,24 @@
+# Gameplay: Granny Pim climbs on for a ride up to the summit snowman, chats on the way,
+# and hops off with thanks when the dragon lands there.
+cards keep
+goto-find pim 6
+wait 0.3
+expect can-talk
+ui-key Enter
+expect card
+ui-key Enter
+expect riding
+shot aboard.png
+goto -1600 600 120 0
+wait-until say 20
+wait 0.2
+shot chat.png
+ask-rider
+expect card
+shot ask.png
+ui-key Escape
+goto -1705 -415 0 0
+wait-until card 5
+expect not riding
+expect helped pim
+shot thanks.png

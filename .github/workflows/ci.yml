@@ -1,0 +1,115 @@
+name: CI
+
+# Pull requests, and `main` once one merges. A branch on its own is not waiting on
+# anything, and checking it on push too would run everything twice once its PR is open.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# One run per branch: a newer push cancels the older run instead of racing it for the
+# build cache.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    shell: bash
+    working-directory: projects
+
+jobs:
+  # Formatting and lints once, for native (tests included) and the web build.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The same pin as `projects/rust-toolchain.toml`, so CI denies the lints a developer sees.
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - name: Linux packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev
+      # Kept even when the run fails, so the next try does not rebuild every dependency.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: projects
+          cache-on-failure: true
+      - run: cargo fmt --check
+      - run: cargo clippy --release --locked --all-targets --all-features -- -D warnings
+      - run: cargo clippy --release --locked --target wasm32-unknown-unknown -p zawnabout-web -- -D warnings
+
+  # Tests and every playbook on each platform. CI machines have no GPU, so wgpu falls back
+  # to a software one: lavapipe on Linux, WARP on Windows, the runner's virtual GPU on macOS.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev mesa-vulkan-drivers
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: projects
+          cache-on-failure: true
+      - run: cargo build --release --locked
+      - run: cargo test --release --locked
+      # Every playbook, against the binary built above, on the runner's software GPU.
+      # Windows runs a few only: its software GPU (WARP) takes about 20 s to load each
+      # playbook's world, since wgpu uploads through memory WARP reads slowly
+      # (gfx-rs/wgpu#9123). The few still cover starting, flying, landing, a ride, a cave
+      # and a postcard on Windows.
+      - name: Playbooks
+        env:
+          ZAWNABOUT_PLAYBOOK_OUT: ${{ runner.temp }}/playbooks
+          ZAWNABOUT_PLAYBOOKS: ${{ runner.os == 'Windows' && 'flight,land-town,ride-train,cave-town,take-postcard' || '' }}
+        run: cargo test --release --locked -p zawnabout-native --features playbooks --test playbooks -- --nocapture
+      - name: Keep the playbook logs and shots
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playbooks-${{ matrix.os }}
+          path: ${{ runner.temp }}/playbooks
+          if-no-files-found: ignore
+
+  # The web page: its TypeScript checked and the whole bundle built, as Pages builds it
+  # from `main`, so a broken page shows on the pull request and not after the merge.
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: projects
+          cache-on-failure: true
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: projects/zawnabout-web/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: projects/zawnabout-web/pnpm-lock.yaml
+      # The build makes the wasm bindings in `pkg/` that the typecheck needs.
+      - name: Build and typecheck
+        working-directory: projects/zawnabout-web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+          pnpm typecheck

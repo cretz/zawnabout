@@ -1,0 +1,44 @@
+# Core flight envelope: takeoff, cruise, glide, dive, brake and hover, ground landing.
+# Start on the lone landing rock, facing west over open sea.
+spawn 5200 0 900 270
+tap flap
+hold flap
+hold pitch 0.4
+wait 5
+expect air
+expect height-above 15
+release pitch
+wait 10
+expect speed-above 60
+release flap
+wait 10
+expect air
+expect speed-below 120
+hold flap
+hold pitch 0.6
+wait 10
+expect height-above 120
+release all
+hold tuck
+hold pitch -1
+wait 4.5
+expect speed-above 60
+release all
+wait 5
+expect air
+hold brake
+wait 3
+expect speed-below 20
+hold flap
+wait 3
+expect air
+release all
+# Dive most of the way down, then brake to land.
+hold tuck
+hold pitch -1
+wait 6
+release all
+hold brake
+wait-until ground 200
+expect ground
+expect speed-below 10

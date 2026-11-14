@@ -1,0 +1,6 @@
+# Tap a hot air balloon over the meadows and land on top of it, then drift along.
+land-on 3
+wait-until riding 3 40
+wait 6
+expect riding 3
+shot land-balloon.png

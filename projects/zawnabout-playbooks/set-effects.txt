@@ -1,0 +1,52 @@
+# Gameplay: finishing a set brings something to the islands. The moon chess set brings
+# players and bunting to Moonharbor's big board, the festival lanterns light up Kettle
+# Harbor's market. Talks to one of the chess players.
+play reset
+goto-find chess-king 0
+wait 0.5
+expect found chess-king
+goto-find chess-queen 0
+wait 0.5
+expect found chess-queen
+goto-find chess-rook 0
+wait 0.5
+expect found chess-rook
+goto-find chess-knight 0
+wait 0.5
+expect found chess-knight
+goto-find chess-bishop 0
+wait 0.5
+expect found chess-bishop
+goto-find chess-pawn 0
+wait 0.5
+expect found chess-pawn
+goto-find fair-lantern 0
+wait 0.5
+expect found fair-lantern
+goto-find swing-lantern 0
+wait 0.5
+expect found swing-lantern
+goto-find lone-lantern 0
+wait 0.5
+expect found lone-lantern
+goto-find hall-lantern 0
+wait 0.5
+expect found hall-lantern
+goto-find ring-lantern 0
+wait 0.5
+expect found ring-lantern
+goto 1530 -1438 30 270
+wait 3
+shot chess.png
+goto 1489 -1452 0 0
+wait 0.5
+expect can-talk
+cards keep
+ui-key Enter
+expect card
+shot olga.png
+ui-key Enter
+expect not card
+goto -1800 1640 25 200
+wait 3
+shot market.png

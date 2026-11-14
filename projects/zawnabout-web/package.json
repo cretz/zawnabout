@@ -1,0 +1,27 @@
+{
+  "name": "zawnabout-web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.0.9",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "wasm": "node scripts/build-wasm.mjs",
+    "dev": "pnpm wasm && vite",
+    "dev:lan": "pnpm wasm && node scripts/lan-cert.mjs && vite --host --mode lan",
+    "build": "pnpm wasm && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "shot": "node scripts/shot.mjs",
+    "perf": "pnpm wasm && node scripts/shot.mjs scripts/perf-route.txt perf-out --size 810x543 --dpr 2 --cpu 4"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@webgpu/types": "^0.1.74",
+    "playwright": "^1.64.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}

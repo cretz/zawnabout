@@ -1,0 +1,30 @@
+[package]
+name = "zawnabout-game"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true }
+fontdue = "0.9"
+glam = { workspace = true }
+wgpu = { workspace = true }
+zawnabout-play = { workspace = true, optional = true }
+zawnabout-sim = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The page's clock, for profiling on the device.
+web-sys = { version = "0.3", features = ["Performance", "Window"] }
+
+[features]
+# Probes: tests that print what they find for a person to read, not checks. Run one with
+# `cargo test --release -p CRATE --features probes NAME -- --nocapture`.
+probes = []
+# Gameplay on top of the islands. Without it the game is the islands alone.
+default = ["play"]
+play = ["dep:zawnabout-play"]
+
+[lints]
+workspace = true

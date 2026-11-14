@@ -1,0 +1,16 @@
+# Fly through the falls into the hidden door and follow its tunnel down toward the glass lake.
+place -2470 82 650 270
+hold flap
+wait 1.6
+release flap
+expect air
+hold pitch -0.55
+wait 2.5
+expect near -2650 20 650 60
+hold pitch -0.7
+hold turn 0.15
+wait 5
+release all
+expect air
+expect near -2850 -160 700 90
+shot falls-door.png

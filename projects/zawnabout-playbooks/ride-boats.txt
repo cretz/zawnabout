@@ -1,0 +1,24 @@
+# Ride the small boats two minutes each: a punt on the glass lake underground, a punt on
+# the glass river, and a trawler out of Kettle Harbor with its gulls.
+ride punt.0
+wait 0.5
+expect riding punt.0
+wait 60
+expect riding punt.0
+wait 60
+expect riding punt.0
+shot ride-boats-punt.png
+ride punt.4
+wait 0.5
+expect riding punt.4
+wait 120
+expect riding punt.4
+ride trawler.0
+wait 0.5
+expect riding trawler.0
+wait 60
+expect riding trawler.0
+shot ride-boats-trawler.png
+wait 60
+expect riding trawler.0
+expect ground

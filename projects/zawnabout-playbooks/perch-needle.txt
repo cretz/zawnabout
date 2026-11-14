@@ -1,0 +1,6 @@
+# Fly in over the needles and land on top of the tallest sea spire.
+goto -4300 3100 220 0
+land-perch needles/great-needle-top
+wait-until landed 40
+expect on-perch needles/great-needle-top
+shot perch-needle.png

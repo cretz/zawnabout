@@ -1,0 +1,62 @@
+// Needles. Center at world -4300 3600. A cluster of sea spires about 1.2km across.
+// No town and no land, the spires rise straight from the sea. Perches, ledges, an arch,
+// birds, and one spire that is hollow.
+
+spire great-needle x=0 z=0 h=320 r=70 top=flat {
+    note "Tallest. Ledges spiral up it."
+    perch great-needle-top x=0 y=320 z=0
+    beacon needle-beacon x=10 y=320 z=-10
+    shelf great-ledge-1 y=110 depth=12 w=14 {
+        p 70 0
+        p 0 70
+        p -70 0
+    }
+    shelf great-ledge-2 y=210 depth=12 w=14 {
+        p -70 0
+        p 0 -70
+        p 70 0
+    }
+}
+spire needle-2 x=-260 z=-180 h=210 r=50 top=flat {
+    perch needle-2-top x=-260 y=210 z=-180
+}
+spire needle-3 x=230 z=-260 h=170 r=45 top=point
+spire needle-4 x=380 z=80 h=240 r=55 top=flat {
+    perch needle-4-top x=380 y=240 z=80
+}
+spire needle-5 x=120 z=330 h=130 r=40 top=flat
+spire needle-6 x=-300 z=250 h=180 r=50 top=flat
+spire needle-7 x=-480 z=30 h=90 r=35 top=flat
+spire needle-8 x=520 z=-220 h=110 r=35 top=point
+spire hollow-needle x=-150 z=450 h=150 r=60 top=flat {
+    note "Looks like the rest. The top is open and it is hollow down to the sea."
+}
+
+arch needle-arch w=30 thick=20 {
+    p -260 140 -180
+    p -130 160 -90
+    p 0 150 0
+}
+
+roost needle-colony {
+    note "Seabird colony later. Ledges all over the cluster."
+    p -500 -300
+    p 550 400
+}
+
+caves hollow {
+    note "Isolated. Drop in through the top of the hollow needle."
+    mouth hollow-top kind=chimney w=40 hidden=#true light=#true {
+        p -150 170 450
+        p -150 40 450
+    }
+    cavern hollow-room x=-150 y=25 z=450 w=90 h=40 d=90 shape=dome glow=0.4
+    mouth hollow-side kind=stack w=24 tight=#true hidden=#true light=#true {
+        p -150 25 450
+        p -150 22 530
+    }
+}
+
+site needle-wreck kind=wreck x=600 z=450 {
+    note "A schooner that tried to sail between the needles, long ago."
+}

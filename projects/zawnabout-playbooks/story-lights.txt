@@ -1,0 +1,100 @@
+# Gameplay: Tobin asks for help with the lights going out. Every lamp is lit with fire,
+# island by island, set aside part way (the lights come back) and picked up again.
+play reset
+goto-find tobin 5
+wait 0.5
+expect can-talk
+cards keep
+ui-key Enter
+expect card
+shot offer.png
+ui-key Enter
+expect not card
+cards auto
+expect dark
+goto-lamp 0
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 1
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 2
+hold breath
+wait 1
+release all
+wait 0.3
+expect not dark
+goto-lamp 3
+expect dark
+story lights-out stop
+expect not dark
+story lights-out start
+expect dark
+goto-lamp 3
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 4
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 5
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 6
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 7
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 8
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 9
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 10
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 11
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 12
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 13
+hold breath
+wait 1
+release all
+wait 0.3
+goto-lamp 14
+hold breath
+wait 1
+release all
+wait 0.3
+expect story-done lights-out
+expect not dark
+book stories
+shot stories.png

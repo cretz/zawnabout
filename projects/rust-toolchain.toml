@@ -1,0 +1,5 @@
+# Pinned so the clippy lint set is the same everywhere. Bump deliberately.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-unknown-unknown"]

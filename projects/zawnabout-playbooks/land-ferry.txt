@@ -1,0 +1,6 @@
+# Tap the ferry as it sails: land on its deck and ride.
+land-on 0
+wait-until riding 0 40
+wait 5
+expect riding 0
+shot land-ferry.png

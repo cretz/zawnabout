@@ -1,0 +1,28 @@
+[package]
+name = "zawnabout-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "zawnabout"
+path = "src/main.rs"
+
+[features]
+# The playbooks test (tests/playbooks.rs), which needs a GPU (a software one does).
+playbooks = []
+
+[dependencies]
+cpal = "0.16"
+gilrs = "0.11"
+png = "0.18"
+pollster = "1"
+rfd = "0.15"
+wgpu = { workspace = true }
+winit = "0.30"
+zawnabout-game = { workspace = true }
+
+[lints]
+workspace = true

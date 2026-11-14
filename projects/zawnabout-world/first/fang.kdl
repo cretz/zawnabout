@@ -1,0 +1,399 @@
+// Fang. Center at world 3600 3300. The tallest peak in the world, an old dormant crater on top
+// with a lake inside, rainforest on the slopes and a stilt village on the shore. Old lava flows
+// pushed lobes out into the sea, so the coast is all fingers and coves.
+
+land base=10 jag=35 {
+    p -100 -1150 edge=cliff
+    p 250 -1100
+    p 500 -1250 sharp=#true
+    p 700 -1050
+    p 850 -850
+    p 1150 -700 edge=rocky
+    p 1200 -450
+    p 1050 -250
+    p 1250 -50
+    p 1350 150 sharp=#true
+    p 1150 350
+    p 1050 600 edge=beach
+    p 900 850
+    p 650 950
+    p 400 850 sharp=#true
+    p 250 1050
+    p 100 1250
+    p -150 1150
+    p -400 1050 edge=beach
+    p -650 950
+    p -900 700
+    p -1050 450
+    p -1250 250 edge=rocky sharp=#true
+    p -1200 0
+    p -1050 -200
+    p -1150 -450 edge=cliff
+    p -900 -750
+    p -600 -900
+    p -350 -1050
+}
+
+mountain fang-peak x=0 z=0 h=950 r=950 shape=crater rim=950 inner=260 floor=790 stretch=1.15 rot=30 {
+    note "Dormant. Leave room to wake it up as a volcano later."
+    perch fang-rim x=0 z=-300
+    beacon fang-beacon x=200 z=-150
+}
+ridge fang-spur-east width=760 smooth=#true {
+    note "A long gentle shoulder, so the ski runs can come down it from under the rim."
+    p 300 -100 h=820
+    p 700 -130 h=640
+    p 1080 -150 h=470
+    p 1240 -100 h=220
+    p 1330 -50 h=40
+}
+ridge fang-spur-north width=300 {
+    p 100 -300 h=800
+    p 400 -800 h=380
+    p 500 -1200 h=80
+}
+ridge fang-spur-west width=350 {
+    p -300 50 h=780
+    p -800 200 h=300
+    p -1200 250 h=40
+}
+lake crater-lake level=775 {
+    note "Hidden lake inside the crater. Only seen from above the rim."
+    p -170 -60
+    p 0 -190
+    p 180 -90
+    p 150 120
+    p -60 170
+}
+
+gorge mist-gorge w=120 {
+    note "Notch in the south rim where the crater lake spills out, down to the sea."
+    p 0 200 depth=220
+    p 50 500 depth=150
+    p 0 800 depth=80
+    p 100 1250 depth=30
+}
+river mist-river w=25 {
+    p 0 0
+    p 0 230
+    falls mist-falls h=300
+    p 30 500
+    p 0 800
+    p 100 1280
+}
+river canopy-creek w=14 {
+    note "Comes down the west flank to the village. Stilt houses along both banks."
+    p -500 -300
+    p -800 -100
+    p -1000 50
+    p -1230 120
+}
+
+spire fang-stack x=1450 z=-50 h=70 r=40 top=flat
+arch fang-arch w=40 thick=25 {
+    note "Sea arch from the east shore out to a stack. Fly under it."
+    p 1200 60 -80
+    p 1430 60 -50
+}
+
+forest fang-jungle kind=rain trees=jungle {
+    note "Thick rainforest on the lower slopes, all the way round."
+    p -100 -1050
+    p 600 -1100
+    p 1100 -500
+    p 1250 150
+    p 900 800
+    p 200 1150
+    p -600 900
+    p -1150 300
+    p -1000 -500
+}
+meadow hibiscus-shore flowers=hibiscus {
+    note "Hibiscus on the open northwest slopes, where the jungle stops."
+    p -1080 -560
+    p -1010 -860
+    p -760 -880
+    p -700 -740
+    p -880 -600
+}
+
+village canopy style=stilts tech=simple {
+    note "Stilt houses over the water, along the creek and on platforms in the trees. Lanterns, few machines."
+    p -1350 -100
+    p -1050 -150
+    p -800 -150
+    p -750 50
+    p -1000 350
+    p -1300 350
+    beacon canopy-beacon x=-1000 z=100
+}
+
+// The ski area on the east spur: snow runs from under the rim down to a lodge village,
+// two chairlifts, and a gondola up from the cove at the end of the north shore road.
+snowfield fang-runs {
+    note "Groomed runs. Skiers come down all day."
+    p 330 -330
+    p 700 -390
+    p 1000 -380
+    p 1090 -200
+    p 1010 60
+    p 700 110
+    p 380 130
+    p 290 -90
+}
+village fang-lodge style=hill tech=mid {
+    note "Chalets, the lift stations and a lodge at the foot of the runs, above the sea cliffs."
+    p 890 -220
+    p 1030 -240
+    p 1140 -70
+    p 1150 40
+    p 960 60
+    p 880 -80
+    tier y=410
+    tier y=440
+    tier y=470
+    tier y=500
+}
+route fang-chair-1 kind=chairlift {
+    note "From the lodge to just under the rim."
+    p 1060 -20
+    p 420 -110
+}
+route fang-chair-2 kind=chairlift {
+    p 960 -190
+    p 650 -330
+}
+road fang-road w=9 {
+    note "Round the north shore from the stilt village, under the north spur and on to the cove, where the gondola goes up to the lodge."
+    p -1000 -150
+    p -900 -550
+    p -550 -880
+    p -100 -980
+    p 150 -965
+    p 240 18 -958 tunnel=#true
+    p 450 18 -930 tunnel=#true
+    p 640 18 -880 tunnel=#true
+    p 690 19 -866 tunnel=#true
+    p 720 -852
+    p 820 -830
+}
+village fang-cove style=hill tech=mid {
+    note "A few houses, a car park and the gondola's valley station in the cove under the east spur."
+    p 700 -900
+    p 880 -880
+    p 900 -760
+    p 760 -740
+    p 690 -800
+}
+route fang-gondola kind=gondola {
+    note "Cabins from the cove up the east spur to the lodge. The only way up but on wings."
+    p 845 -790
+    p 985 -200
+}
+
+dugout fang-nook-1 x=-500 y=257 z=-550 facing=north r=22
+dugout fang-nook-2 x=-200 y=178 z=-730 facing=north r=22
+dugout fang-nook-3 x=250 y=269 z=-730 facing=north r=22
+dugout fang-nook-4 x=550 y=31 z=-1185 facing=north r=22
+dugout fang-nook-5 x=-850 y=22 z=0 facing=north r=22
+dugout fang-nook-6 x=1100 y=60 z=-650 facing=east r=22
+
+landmark deep-camp kind=campsite x=300 y=-800 z=300 rot=15 {
+    note "A geologists' camp in the deep ember chamber."
+}
+
+// Old lava tube and the magma chamber under it. Isolated from every other system.
+
+caves old-tube {
+    mouth crater-vent kind=cliff w=50 hidden=#true light=#true {
+        note "Dark opening low in the crater wall, just above the lake."
+        p 150 820 100
+        p 300 700 200
+    }
+    passage tube w=60 {
+        p 300 700 200
+        p 500 500 0
+        p 400 350 -300
+    }
+    cavern ember-hall x=200 y=300 z=-400 w=600 h=250 d=500 rot=25 shape=dome glow=0.3 decor=ember {
+        note "Old lava chamber. Warm colors."
+        beacon ember-beacon x=200 y=180 z=-400
+    }
+    mouth tube-mouth kind=cliff w=60 hidden=#true {
+        p 300 250 -650
+        p 300 60 -1000
+        p 300 45 -1200
+    }
+    passage tube-deep w=90 {
+        p 250 180 -450
+        p 450 0 -300
+        p 300 -250 -100
+        p 100 -430 0
+    }
+    cavern fang-deep x=0 y=-650 z=100 w=1800 h=450 d=1500 rot=20 shape=hall glow=0.3 decor=ember {
+        note "The emptied magma chamber. Huge, warm glow from the walls, the deepest heat in the world."
+        beacon fang-deep-beacon x=-300 y=-860 z=300
+    }
+}
+
+// The ember mine line: ore carts round the floor of the fang deep, past the ember mine
+// in its east wall and back. Laid by scratch/scripts/caveline.py over the deep's floor.
+landmark ember-mine kind=mine x=780 y=-800 z=-240 rot=250 {
+    note "Miners dig glowing ember stone out of the fang deep's east wall."
+}
+railway ember-line mine=#true {
+    note "Ride the ore carts round the warm glow of the fang deep."
+    p -272 -855.0 -447
+    p -239 -853.4 -452
+    p -207 -851.7 -455
+    p -174 -850.1 -459
+    p -142 -848.5 -461
+    p -111 -846.9 -462
+    p -80 -845.5 -462
+    p -49 -847.0 -462
+    p -18 -848.5 -461
+    p 12 -850.1 -459
+    p 49 -851.9 -455
+    p 88 -853.9 -449
+    p 126 -854.5 -442
+    p 165 -856.3 -433
+    p 202 -858.3 -422
+    p 239 -860.2 -410
+    p 275 -862.2 -397
+    p 311 -864.1 -382
+    p 346 -866.0 -365
+    p 381 -866.3 -347
+    p 414 -868.2 -328
+    p 445 -868.8 -308
+    p 474 -867.0 -287
+    p 501 -865.3 -265
+    p 527 -863.6 -243
+    p 550 -862.6 -220
+    p 571 -864.1 -196
+    p 591 -865.7 -171
+    p 608 -867.2 -145
+    p 624 -868.8 -119
+    p 637 -870.3 -92
+    p 649 -871.8 -64
+    p 658 -873.3 -35
+    p 666 -874.8 -6
+    p 672 -876.4 24
+    p 676 -877.9 55
+    p 677 -879.5 86
+    p 676 -881.5 126
+    p 670 -881.6 169
+    p 660 -879.5 210
+    p 644 -877.4 250
+    p 624 -875.2 288
+    p 599 -873.0 323
+    p 576 -871.3 350
+    p 554 -869.7 372
+    p 530 -868.1 394
+    p 504 -866.4 414
+    p 475 -864.7 434
+    p 445 -865.0 453
+    p 413 -866.8 471
+    p 380 -868.6 486
+    p 347 -867.7 500
+    p 313 -865.9 511
+    p 278 -864.2 521
+    p 242 -866.0 529
+    p 206 -867.9 534
+    p 169 -869.7 538
+    p 131 -871.6 540
+    p 92 -873.6 540
+    p 52 -875.6 538
+    p 19 -877.3 534
+    p -12 -877.5 530
+    p -43 -876.0 525
+    p -75 -874.4 519
+    p -107 -873.7 512
+    p -139 -872.2 503
+    p -172 -870.5 494
+    p -203 -868.8 484
+    p -234 -867.2 473
+    p -264 -865.6 463
+    p -293 -864.1 452
+    p -329 -862.1 436
+    p -364 -860.2 420
+    p -397 -858.3 402
+    p -429 -856.5 384
+    p -459 -854.7 366
+    p -487 -853.3 346
+    p -513 -853.7 326
+    p -537 -853.7 305
+    p -560 -852.5 283
+    p -581 -853.9 260
+    p -600 -855.4 237
+    p -625 -857.7 200
+    p -647 -859.8 162
+    p -665 -861.9 125
+    p -680 -863.9 88
+    p -691 -865.8 50
+    p -698 -864.5 12
+    p -702 -862.6 -25
+    p -703 -860.8 -62
+    p -700 -858.9 -100
+    p -694 -857.0 -138
+    p -684 -856.2 -175
+    p -670 -857.0 -212
+    p -652 -859.0 -248
+    p -629 -861.0 -280
+    p -601 -863.1 -310
+    p -569 -865.2 -338
+    p -536 -867.2 -360
+    p -508 -867.5 -375
+    p -479 -865.8 -389
+    p -447 -864.1 -402
+    p -414 -862.3 -414
+    p -378 -860.5 -424
+    p -343 -858.7 -433
+    p -313 -857.2 -439
+    p -282 -855.6 -445
+    p -272 -855.0 -447
+}
+
+// Basalt Gate: a grand station cut into the fang's south side. A gorge runs up from the
+// beach to its front, the railway runs through its great hall, and out the back on a
+// viaduct over a cave lake to a station in the cavern. The rock is cut a little wider
+// than the building, which lines it inside and covers the cuts with its two fronts.
+gorge gate-gorge w=140 {
+    note "Cut from the beach to Basalt Gate's front."
+    p 400 900 depth=0
+    p 400 800 depth=10
+    p 400 700 depth=140
+    p 400 600 depth=300
+    p 400 530 depth=400
+}
+caves basalt-gate-rock {
+    cavern basalt-front x=400 y=83 z=527 w=180 h=162 d=34 shape=block glow=0 decor=bare
+    cavern basalt-hall x=400 y=39 z=372 w=84 h=78 d=330 shape=block glow=0.7 decor=bare
+    cavern basalt-back x=400 y=43 z=227 w=180 h=222 d=55 shape=block glow=0 decor=bare
+    cavern basalt-cave x=400 y=4 z=40 w=520 h=260 d=420 shape=dome glow=0.35 decor=ember {
+        note "Behind Basalt Gate. The viaduct crosses the warm lake to the cave station."
+        lake basalt-pool level=-61 {
+            p 290 150
+            p 510 150
+            p 550 40
+            p 500 -70
+            p 300 -70
+            p 250 40
+        }
+    }
+}
+landmark basalt-gate kind=basaltgate x=400 y=2 z=530 rot=0 {
+    note "The station's front faces down the gorge to the sea."
+}
+railway basalt-line {
+    note "Back and forth from the beach, through Basalt Gate and over the cave lake."
+    p 400 860
+    p 400 760
+    p 400 2 650
+    p 400 2 537
+    p 400 2 300
+    p 400 2 200
+    p 400 2 -60
+    station basalt-beach x=400 z=840
+    station basalt-gate-station x=400 z=380
+    station basalt-cave-station x=400 z=-40
+}
