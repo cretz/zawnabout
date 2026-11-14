@@ -727,3 +727,25 @@ body.halted #minimap {
   border-radius: 6px;
   pointer-events: auto;
 }
+
+/* How to get full screen on an iPhone, which only a home screen app has. */
+#home-hint {
+  z-index: 40;
+  width: min(380px, calc(100vw - 32px));
+  font-size: 18px;
+  line-height: 1.4;
+}
+
+#home-hint p {
+  margin: 0 0 18px;
+}
+
+#home-hint button {
+  border: none;
+  border-radius: 14px;
+  padding: 10px 28px;
+  font-size: 18px;
+  font-weight: 700;
+  background: var(--coral);
+  color: var(--cream);
+}

@@ -28,7 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      # All history and tags, so the help page can name the build as git describes it.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       # The same pin as `projects/rust-toolchain.toml`.
       - uses: dtolnay/rust-toolchain@1.99.1
         with:

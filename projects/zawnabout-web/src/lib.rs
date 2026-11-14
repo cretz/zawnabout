@@ -192,6 +192,27 @@ mod web {
             self.game.ui_scale = k;
         }
 
+        /// Where the usable top starts and what the page has in the top corners, in HUD
+        /// pixels: the top left's right edge and bottom, the top right's left edge and
+        /// bottom. Lines shown at the top keep clear of them.
+        pub fn set_top_clear(&mut self, safe: f32, lx: f32, ly: f32, rx: f32, ry: f32) {
+            self.game.hud.top = zawnabout_game::hud::TopClear {
+                safe,
+                left: (lx, ly),
+                right: (rx, ry),
+            };
+        }
+
+        /// Which build this is, shown small on the journal's help page.
+        pub fn set_build(&mut self, text: &str) {
+            self.game.hud.book.build = text.to_string();
+        }
+
+        /// Shows a line at the top, as stunt rewards and finds do.
+        pub fn toast(&mut self, who: &str, text: &str) {
+            self.game.toast(who, text);
+        }
+
         /// The sharpness picked in Settings: `auto`, `sharp`, `balanced` or `fast`.
         pub fn sharpness(&self) -> String {
             zawnabout_game::book::SHARPNESS[self.game.sharpness].to_lowercase()
