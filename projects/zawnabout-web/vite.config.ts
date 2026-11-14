@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { dirname, join } from "node:path";
@@ -120,6 +121,16 @@ function fontLicense(): Plugin {
   };
 }
 
+// Which build this is, as git names it: the release tag, or the tag with how many commits
+// since and the commit. "dev" without git.
+function buildName(): string {
+  try {
+    return execSync("git describe --tags --always", { encoding: "utf8" }).trim();
+  } catch {
+    return "dev";
+  }
+}
+
 // One static page: index.html, a script bundle and the wasm file. `--mode lan` serves
 // HTTPS with the self-signed certificate from scripts/lan-cert.mjs, for phones on the LAN.
 export default defineConfig(({ mode }) => {
@@ -130,6 +141,7 @@ export default defineConfig(({ mode }) => {
       : undefined;
   return {
     base: "./",
+    define: { __BUILD__: JSON.stringify(buildName()) },
     server: { port: mode === "lan" ? 5443 : 5180, https },
     build: { target: "es2024", assetsInlineLimit: 0 },
     plugins: [notesPlugin(), fontLicense()],

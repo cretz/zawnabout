@@ -368,6 +368,8 @@ pub struct Book {
     zoom: Option<usize>,
     /// How far a page turn has left to go: 1 just turned, 0 done.
     flip: Cell<f32>,
+    /// Which build this is, shown small on the help page. None when empty.
+    pub build: String,
 }
 
 const PAPER: u32 = 0xFFF6E6;
@@ -1034,15 +1036,22 @@ impl Book {
                 }
                 ry += line * 0.2;
             }
-            about(d, ui, a, b, hits);
+            about(d, ui, a, b, &self.build, hits);
         }
         for (k, v) in pairs {
             d.write(Vec2::new(a.x, y), px, &k, rgba(RED, 1.0));
-            d.write(Vec2::new(col, y), px, &v, ink);
+            let room = b.x - col - px * 0.3;
+            let w = crate::font::get().measure(px, &v);
+            let size = if w > room {
+                (px * room / w).max(px * 0.75)
+            } else {
+                px
+            };
+            d.write(Vec2::new(col, y + (px - size) * 0.5), size, &v, ink);
             y += line;
         }
         if view.touch {
-            about(d, ui, a, b, hits);
+            about(d, ui, a, b, &self.build, hits);
         }
     }
 
@@ -1581,6 +1590,16 @@ impl Book {
             .map(|r| f.measure(px * 0.9, r.label()))
             .fold(0.0, f32::max)
             + px;
+        // A soft hint after a row's choices: the first wording that fits before the page
+        // edge, or none, as on a phone held upright.
+        let hint = |d: &mut Draw, at: Vec2, says: &[&str]| {
+            if let Some(t) = says
+                .iter()
+                .find(|t| at.x + f.measure(px * 0.75, t) <= b.x - px * 0.4)
+            {
+                d.write(at, px * 0.75, t, soft);
+            }
+        };
         let rows = Row::ALL.len() as f32;
         let step = ((b.y - a.y) / rows).min(line * 1.5);
         let chip_h = step * 0.78;
@@ -1598,19 +1617,16 @@ impl Book {
                 Row::Name => {
                     d.write(Vec2::new(cx, ty), px * 0.9, look.name(), rgba(RED, 1.0));
                     let w = f.measure(px * 0.9, look.name());
-                    d.write(
-                        Vec2::new(cx + w + px, ty),
-                        px * 0.75,
-                        "pick for another",
-                        soft,
-                    );
+                    hint(d, Vec2::new(cx + w + px, ty), &["pick for another"]);
                 }
                 Row::Surprise => {
-                    d.write(
+                    hint(
+                        d,
                         Vec2::new(cx, ty),
-                        px * 0.75,
-                        "a whole new look, keeping what you wear",
-                        soft,
+                        &[
+                            "a whole new look, keeping what you wear",
+                            "a whole new look",
+                        ],
                     );
                 }
                 _ => {
@@ -1650,11 +1666,10 @@ impl Book {
                         cx += w + px * 0.45;
                     }
                     if row == Row::Wear && choices.len() == 1 {
-                        d.write(
+                        hint(
+                            d,
                             Vec2::new(cx + px * 0.2, ty),
-                            px * 0.75,
-                            "none in your hoard yet",
-                            soft,
+                            &["none in your hoard yet", "none yet"],
                         );
                     }
                 }
@@ -1793,11 +1808,26 @@ impl Book {
             &gold,
             rgba(GOLD, 1.0),
         );
-        let lair = match &hoard.lair {
-            Some(l) => format!("Lair: {l}"),
-            None => "No lair yet. Land in a cozy cave to make it home.".into(),
+        let lw = match &hoard.lair {
+            Some(l) => d.write(Vec2::new(a.x, y), px * 0.9, &format!("Lair: {l}"), ink),
+            None => {
+                // The longest wording that fits before the button and the gold, as on a
+                // phone held upright.
+                let bpx = ui.px * 0.85;
+                let bw = f.measure(bpx, "Show me") + bpx * 1.6;
+                let room = b.x - gw - px * 1.6 - bw - a.x;
+                let says = [
+                    "No lair yet. Land in a cozy cave to make it home.",
+                    "No lair yet. Find a cozy cave.",
+                    "No lair yet.",
+                ];
+                let t = says
+                    .iter()
+                    .find(|t| f.measure(px * 0.9, t) <= room)
+                    .unwrap_or(&says[2]);
+                d.write(Vec2::new(a.x, y), px * 0.9, t, ink)
+            }
         };
-        let lw = d.write(Vec2::new(a.x, y), px * 0.9, &lair, ink);
         if hoard.lair.is_none() {
             Self::show_me_button(
                 d,
@@ -2132,12 +2162,21 @@ impl Book {
                 format!("{left} to go")
             };
             let cw = f.measure(px * 0.75, &count);
+            let room = b.x - x - cw - px * 1.2;
+            let full = f.measure(px * 0.85, &g.name);
+            let size = if full > room {
+                (px * 0.85 * room / full).max(px * 0.7)
+            } else {
+                px * 0.85
+            };
             let mut name = g.name.clone();
-            while f.measure(px * 0.85, &name) > b.x - x - cw - px * 1.2 && name.chars().count() > 3
-            {
-                name.pop();
+            if f.measure(size, &name) > room {
+                while f.measure(size, &format!("{name}…")) > room && name.chars().count() > 3 {
+                    name.pop();
+                }
+                name = format!("{}…", name.trim_end());
             }
-            d.write(Vec2::new(x, y), px * 0.85, &name, ink);
+            d.write(Vec2::new(x, y + (px * 0.85 - size) * 0.5), size, &name, ink);
             d.write(
                 Vec2::new(b.x - cw - px * 0.3, y + px * 0.1),
                 px * 0.75,
@@ -2162,12 +2201,16 @@ impl Book {
                 ty += line * 0.8;
             }
         }
-        d.write(
-            Vec2::new(x, b.y - line * 0.85),
-            px * 0.7,
+        let key = [
             "Gold: still to do.  Grey: done.  Red arrow: you.",
-            soft,
-        );
+            "Gold: to do.  Grey: done.  Red: you.",
+            "Gold: to do.  Grey: done.",
+        ];
+        let key = key
+            .iter()
+            .find(|t| x + f.measure(px * 0.7, t) <= b.x - px * 0.3)
+            .unwrap_or(&key[2]);
+        d.write(Vec2::new(x, b.y - line * 0.85), px * 0.7, key, soft);
     }
 }
 
@@ -2261,8 +2304,15 @@ fn draw_card(d: &mut Draw, card: &Card, ui: &Ui, hits: &mut Vec<(Vec2, Vec2, Hit
     }
 }
 
-/// What a passenger says as you fly, at the foot of the screen. It never pauses.
-pub(crate) fn draw_toast(d: &mut Draw, who: &str, text: &str, fade: f32) {
+/// What a passenger says as you fly, and finds and stunts, at the top of the screen, away
+/// from thumbs on a touch screen. It never pauses.
+pub(crate) fn draw_toast(
+    d: &mut Draw,
+    who: &str,
+    text: &str,
+    fade: f32,
+    top: crate::hud::TopClear,
+) {
     let f = crate::font::get();
     let (w, h) = (d.size.x, d.size.y);
     let px = (h / 34.0).min(w / 34.0).clamp(11.0, 26.0);
@@ -2276,7 +2326,18 @@ pub(crate) fn draw_toast(d: &mut Draw, who: &str, text: &str, fade: f32) {
         .fold(f.measure(px, who), f32::max);
     let bw = (tw + px * 2.0).min(w - 24.0);
     let bh = px * 1.9 + lines.len() as f32 * small * 1.25;
-    let p0 = Vec2::new((w - bw) * 0.5, h - px * 3.3 - bh);
+    // Level with what the host has in the top corners, or just under whichever it would
+    // reach, as on a phone held upright.
+    let x0 = (w - bw) * 0.5;
+    let gap = px * 0.6;
+    let mut y0 = top.safe.max(gap);
+    if top.left.1 > 0.0 && x0 < top.left.0 + gap {
+        y0 = y0.max(top.left.1 + gap);
+    }
+    if top.right.1 > 0.0 && x0 + bw > top.right.0 - gap {
+        y0 = y0.max(top.right.1 + gap);
+    }
+    let p0 = Vec2::new(x0, y0);
     d.rect(p0, p0 + Vec2::new(bw, bh), rgba(PAPER, 0.92 * fade));
     let x = p0.x + px;
     d.write(Vec2::new(x, p0.y + px * 0.45), px, who, rgba(RED, fade));
@@ -2389,17 +2450,29 @@ fn zawnabout_pic_size() -> (f32, f32) {
 
 /// The about lines at the foot of help: the game runs only here and keeps nothing
 /// anywhere else, and where its source is. Returns where the lines end.
-fn about(d: &mut Draw, ui: &Ui, a: Vec2, b: Vec2, hits: &mut Vec<(Vec2, Vec2, Hit)>) -> f32 {
+fn about(
+    d: &mut Draw,
+    ui: &Ui,
+    a: Vec2,
+    b: Vec2,
+    build: &str,
+    hits: &mut Vec<(Vec2, Vec2, Hit)>,
+) -> f32 {
     let (px, line) = (ui.px * 0.8, ui.line * 0.8);
     let soft = rgba(0x8A6A50, 1.0);
-    let mut y = b.y - line * 2.3;
-    d.write(
-        Vec2::new(a.x, y),
+    let mut lines = crate::font::get().wrap(
         px,
         "zawnabout runs right here and never sends anything anywhere. Your game stays with you.",
-        soft,
+        b.x - a.x,
     );
-    y += line;
+    if !build.is_empty() {
+        lines.push(format!("Version {build}"));
+    }
+    let mut y = b.y - line * (lines.len() as f32 + 1.3);
+    for l in &lines {
+        d.write(Vec2::new(a.x, y), px, l, soft);
+        y += line;
+    }
     let lead = "Made in the open, come see how: ";
     let lw = d.write(Vec2::new(a.x, y), px, lead, soft);
     let link = Vec2::new(a.x + lw, y);

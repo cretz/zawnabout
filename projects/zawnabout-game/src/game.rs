@@ -764,6 +764,12 @@ impl Game {
         Some((at, (1.6 / clip.w).max(0.04)))
     }
 
+    /// Shows a line at the top, such as the host saying the game is the copy kept for
+    /// playing offline.
+    pub fn toast(&mut self, who: &str, text: &str) {
+        self.toast_all(vec![(who.to_string(), text.to_string())]);
+    }
+
     /// Queues lines to show, a newer one about the same thing taking the older one's
     /// place, and only the last few kept so nothing shows long after it happened.
     fn toast_all(&mut self, lines: Vec<(String, String)>) {

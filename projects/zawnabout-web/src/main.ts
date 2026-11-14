@@ -19,6 +19,8 @@ const SAVE_KEY = "zawnabout.save.a";
 const GAME_KEYS = new Set(["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "ShiftLeft", "ShiftRight", "Tab"]);
 
 declare global {
+  /** Which build this is, from vite.config.ts. */
+  const __BUILD__: string;
   interface Window {
     zawnabout?: {
       app: App;
@@ -146,6 +148,53 @@ function setupPerf(app: App, canvas: HTMLCanvasElement) {
       `\n${slowest.trim().split("; ").slice(0, 8).join("\n  ")}`;
     [from, frames, worst, long] = [now, 0, 0, 0];
   };
+}
+
+/** Tells the game what the page has in the top corners, the round buttons and the map
+ *  when it sits up there, so lines it shows along the top keep clear of them and of a
+ *  notch. The HUD has `sharpest()` pixels per CSS pixel. */
+function topClear(app: App) {
+  const k = sharpest();
+  const half = innerWidth / 2;
+  let safe = 0;
+  let [lx, ly, rx, ry] = [0, 0, innerWidth, 0];
+  for (const id of ["book-btn", "notes-btn", "full-btn", "minimap"]) {
+    const r = document.getElementById(id)?.getBoundingClientRect();
+    // Only what is showing, and up in the top half.
+    if (!r || r.width === 0 || r.top > innerHeight / 2) continue;
+    if (id === "book-btn") safe = r.top;
+    if (r.left + r.width / 2 < half) [lx, ly] = [Math.max(lx, r.right), Math.max(ly, r.bottom)];
+    else [rx, ry] = [Math.min(rx, r.left), Math.max(ry, r.bottom)];
+  }
+  app.set_top_clear(safe * k, lx * k, ly * k, rx * k, ry * k);
+}
+
+/**
+ * Keeps the page at its own size. iPhone Safari zooms on a pinch or a double tap even when
+ * the page asks it not to, and can stay zoomed after the phone turns, leaving part of the
+ * game off screen. Its own pinch gestures are stopped, and any zoom or scroll left over is
+ * undone by setting the viewport again.
+ */
+function guardZoom() {
+  const stop = (e: Event) => e.preventDefault();
+  for (const name of ["gesturestart", "gesturechange", "gestureend", "dblclick"]) {
+    document.addEventListener(name, stop, { passive: false });
+  }
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+  const fit = () => {
+    const v = window.visualViewport;
+    const off = v && (Math.abs(v.scale - 1) > 0.01 || v.offsetLeft !== 0 || v.offsetTop !== 0);
+    if (off && meta) {
+      const content = meta.content;
+      meta.content = `${content}, x=1`;
+      requestAnimationFrame(() => (meta.content = content));
+    }
+    if (scrollX !== 0 || scrollY !== 0) scrollTo(0, 0);
+  };
+  window.visualViewport?.addEventListener("resize", fit);
+  window.visualViewport?.addEventListener("scroll", fit);
+  addEventListener("orientationchange", () => setTimeout(fit, 300));
+  addEventListener("scroll", fit);
 }
 
 /** Pixels drawn per CSS pixel at most: the screen's own, up to 2. */
@@ -355,19 +404,36 @@ async function start() {
 
   const touch = query.has("touch") || matchMedia("(pointer: coarse)").matches;
   app.set_touch(touch);
+  // The copy kept for playing offline, which the offline script marks when it uses it.
+  const offline = document.documentElement.hasAttribute("data-offline");
+  app.set_build(offline ? `${__BUILD__} (offline copy)` : __BUILD__);
+  if (offline) {
+    app.toast("Offline", "Playing the copy saved on this device. Your game still saves.");
+  }
+  // Keeps a copy for next time. Not on the dev server, which would keep serving it.
+  if (!import.meta.env.DEV && "serviceWorker" in navigator) {
+    navigator.serviceWorker.register("./sw.js").catch((e) => console.warn("offline copy", e));
+  }
   // Full screen where the browser allows it. iPhone Safari does not, so there the button
-  // explains Add to Home Screen, which opens without any browser bars.
+  // explains Add to Home Screen, which opens without any browser bars. Opened from the
+  // home screen, there are no bars to hide.
   const full = $("full-btn");
-  if (touch || document.fullscreenEnabled) full.classList.remove("hidden");
+  const homeApp =
+    (navigator as { standalone?: boolean }).standalone === true ||
+    matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches;
+  if (document.fullscreenEnabled || (touch && !homeApp)) full.classList.remove("hidden");
+  const hint = $("home-hint");
+  $("home-hint-ok").addEventListener("click", () => hint.classList.add("hidden"));
   full.addEventListener("click", async () => {
     if (document.fullscreenElement) {
       await document.exitFullscreen();
     } else if (document.fullscreenEnabled) {
       await document.documentElement.requestFullscreen({ navigationUI: "hide" }).catch(() => {});
     } else {
-      alert("For full screen on iPhone: tap Share, then Add to Home Screen, and open the dragon from there.");
+      hint.classList.remove("hidden");
     }
   });
+  guardZoom();
 
   // Notes mode leaves design notes in the repo through the dev server, so only the dev
   // server has it. The published page has no button, no N key and none of its code.
@@ -519,6 +585,7 @@ async function start() {
     const scale = FIXED[sharp]?.() ?? auto.scale();
     sizeCanvas(canvas, scale);
     app.set_ui_scale(sharpest() / scale);
+    topClear(app);
     const host = app.frame(dt, canvas.width, canvas.height);
     auto.drew(app.drew());
     answer();

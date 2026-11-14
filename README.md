@@ -36,3 +36,9 @@ Mac.
 
 Downloads for Windows, macOS and Linux will be on the
 [Releases](https://github.com/cretz/zawnabout/releases) page.
+
+## How it's made
+
+zawnabout is built by an AI coding agent, with a person steering. Pull requests aren't
+accepted, but issues are very welcome: bug reports, ideas and wishes all go to the agent
+to work on.

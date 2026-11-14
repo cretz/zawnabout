@@ -4,6 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="zawnabout" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png" />
+    <link rel="apple-touch-icon" href="./icon-180.png" />
     <meta name="theme-color" content="#5faeeb" />
     <title>zawnabout</title>
     <link rel="stylesheet" href="./src/style.css" />
@@ -66,6 +72,11 @@
       <input id="debug-cmd" placeholder="command, e.g. spawn 0 60 0 0 20" autocomplete="off" />
       <pre id="debug-out"></pre>
       <div id="debug-params"></div>
+    </div>
+
+    <div id="home-hint" class="card center hidden">
+      <p>For full screen on iPhone, tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>, and open zawnabout from your home screen.</p>
+      <button id="home-hint-ok" class="primary">OK</button>
     </div>
 
     <div id="nogpu" class="card center hidden">

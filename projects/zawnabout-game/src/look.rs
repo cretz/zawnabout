@@ -348,6 +348,72 @@ impl Look {
 mod tests {
     use super::*;
 
+    /// Saved looks are numbers into these lists, so each list as 0.1.0 had it must still
+    /// start the list, in the same order. New choices go on the end.
+    #[test]
+    fn old_looks_keep_their_choices() {
+        let names = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let lists: [(&str, Vec<String>, &[&str]); 9] = [
+            (
+                "body",
+                names(&BODY.map(|c| c.0)),
+                &[
+                    "Coral", "Sky", "Leaf", "Violet", "Sunny", "Rose", "Teal", "Midnight", "Snow",
+                    "Plum", "Copper", "Mint",
+                ],
+            ),
+            (
+                "belly",
+                names(&BELLY.map(|c| c.0)),
+                &["Cream", "Peach", "Butter", "Mint", "Sky", "Lilac", "Snow"],
+            ),
+            (
+                "wings",
+                names(&WINGS.map(|c| c.0)),
+                &["Peach", "Sky", "Lilac", "Mint", "Rose", "Gold", "Dusk"],
+            ),
+            (
+                "trim",
+                names(&TRIM.map(|c| c.0)),
+                &["Gold", "Silver", "Rose gold", "Jade", "Pearl", "Bronze"],
+            ),
+            (
+                "eyes",
+                names(&EYES.map(|c| c.0)),
+                &["Night", "Ocean", "Forest", "Amber", "Berry"],
+            ),
+            (
+                "pattern",
+                names(&PATTERNS),
+                &["Classic", "Stripes", "Spots", "Plain"],
+            ),
+            (
+                "horns",
+                names(&HORNS),
+                &["Swept", "Short", "Long", "Curled"],
+            ),
+            (
+                "crest",
+                names(&CRESTS),
+                &["Blades", "Little blades", "Feathers", "None"],
+            ),
+            ("tail", names(&TAILS), &["Feather fan", "Spade", "Tuft"]),
+        ];
+        for (what, now, then) in lists {
+            assert!(now.len() >= then.len(), "{what} lost choices");
+            assert_eq!(now[..then.len()], names(then)[..], "{what} choices moved");
+        }
+        for wear in ["crown", "hat", "ribbon", "medal", "gem"] {
+            assert!(WEARABLE.contains(&wear), "{wear} can no longer be worn");
+        }
+        let look = Look::parse("11 6 6 5 4 3 3 3 2 gem Maple").expect("a 0.1.0 look");
+        assert_eq!(
+            (look.body, look.tail, look.wear.as_deref()),
+            (11, 2, Some("gem"))
+        );
+        assert_eq!(look.name, "Maple");
+    }
+
     #[test]
     fn prefs_round_trip() {
         for seed in 0..50 {

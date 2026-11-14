@@ -431,4 +431,122 @@ mod tests {
         assert!(back.load("hello").is_err());
         assert_eq!(back.found, play.found);
     }
+
+    /// Saves from released builds, each with something of everything. They never change.
+    const OLD: [(&str, &str); 1] = [("0.1.0", include_str!("../tests/saves/0.1.0.txt"))];
+
+    /// A save from any release still loads with nothing lost: every line it had comes
+    /// back when saved again. A renamed or removed id, or a line read differently, fails
+    /// here.
+    #[test]
+    fn old_saves_load() {
+        let sim = Sim::new(1);
+        for (version, text) in OLD {
+            let mut play = Play::new(&sim.world);
+            play.load(text).unwrap_or_else(|e| panic!("{version}: {e}"));
+            let again = play.save();
+            for line in text.lines().filter(|l| !l.is_empty()) {
+                assert!(
+                    again.lines().any(|l| l == line),
+                    "{version} save lost `{line}`"
+                );
+            }
+        }
+    }
+
+    /// Writes a save with something of everything, for a new release to add to [`OLD`]:
+    /// `cargo test --release -p zawnabout-play full_save -- --ignored`, then rename the
+    /// file it names.
+    #[test]
+    #[ignore]
+    fn full_save() {
+        use std::fmt::Write;
+        let sim = Sim::new(1);
+        let play = Play::new(&sim.world);
+        let d = &play.def;
+        let mut s = format!("{}\n[hoard]\n", super::HEAD);
+        if let Some(l) = d.lairs.first() {
+            let _ = writeln!(s, "lair {}", l.id);
+        }
+        for f in d.finds.iter() {
+            let _ = writeln!(s, "found {}", f.id);
+        }
+        s += "[places]\n";
+        for c in d.postcards.iter() {
+            let _ = writeln!(s, "postcard {}", c.id);
+        }
+        let mut pic = Play::new(&sim.world);
+        if !d.postcards.is_empty() {
+            pic.set_pic(0, &vec![200; paint::PIC.0 * paint::PIC.1 * 4]);
+            if let Some(p) = &pic.pics[0] {
+                let _ = writeln!(s, "pic {} {p}", d.postcards[0].id);
+            }
+        }
+        s += "[people]\n";
+        for (i, l) in d.locals.iter().enumerate() {
+            let _ = writeln!(s, "met {}", l.id);
+            let _ = writeln!(s, "{} {}", if i % 2 == 0 { "done" } else { "asked" }, l.id);
+        }
+        if let Some(l) = d.locals.get(1) {
+            let _ = writeln!(s, "carry {}", l.id);
+        }
+        s += "[flying]\n";
+        for t in d.stunts.iter() {
+            let _ = writeln!(s, "stunt {}", t.id);
+        }
+        for (c, course) in d.courses.iter().enumerate() {
+            if c % 2 == 0 {
+                let _ = writeln!(s, "course {}", course.id);
+            } else {
+                for g in 0..play.flying.gates[c].len().saturating_sub(1) {
+                    let _ = writeln!(s, "gate {} {g}", course.id);
+                }
+            }
+        }
+        for r in d.races.iter() {
+            let _ = writeln!(s, "tried {}\nwon {}", r.id, r.id);
+        }
+        s += "[stories]\n";
+        for (i, story) in d.stories.iter().enumerate() {
+            let _ = writeln!(s, "{} {}", if i == 0 { "active" } else { "done" }, story.id);
+            for (r, region) in story.regions.iter().enumerate() {
+                for k in 0..play.stories.lit[i][r].len() {
+                    let _ = writeln!(s, "lamp {} {} {k}", story.id, region.id);
+                }
+            }
+        }
+        s += "[dragons]\n";
+        let last = d.kin.len().saturating_sub(1);
+        for (i, k) in d.kin.iter().enumerate() {
+            if i == last {
+                let _ = writeln!(s, "coaxed {} 1", k.id);
+                continue;
+            }
+            let _ = writeln!(
+                s,
+                "dragon {}\nfollowed {}\nbeat {}\ngifted {}",
+                k.id, k.id, k.id, k.id
+            );
+            if let Some(f) = d.finds.get(i) {
+                let _ = writeln!(s, "traded {} {}", k.id, f.id);
+            }
+        }
+        s += "egg hatched\n";
+        for (name, _) in crate::kin::FIRSTS {
+            let _ = writeln!(s, "first {name}");
+        }
+        s += "[happenings]\n";
+        for h in d.happenings.iter() {
+            let _ = writeln!(s, "saw {}", h.id);
+        }
+        for f in d.favors.iter() {
+            let _ = writeln!(s, "thanks {}", f.id);
+        }
+        let mut back = Play::new(&sim.world);
+        back.load(&s).expect("loads");
+        let out = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/saves/new.txt");
+        std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+        std::fs::write(&out, back.save()).unwrap();
+        println!("wrote {}", out.display());
+    }
 }

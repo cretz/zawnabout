@@ -169,6 +169,16 @@ impl Draw {
     }
 }
 
+/// The host's own things along the top of the screen, in HUD pixels: where the usable top
+/// starts (below a notch), what stands in the top left corner (its right edge and bottom)
+/// and what stands in the top right (its left edge and bottom). Zero where there is none.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TopClear {
+    pub safe: f32,
+    pub left: (f32, f32),
+    pub right: (f32, f32),
+}
+
 /// What the HUD shows and is in the middle of.
 #[derive(Clone, Debug, Default)]
 pub struct Hud {
@@ -177,8 +187,10 @@ pub struct Hud {
     pub map: bool,
     /// The journal, drawn whether or not `on` is.
     pub book: crate::book::Book,
-    /// A line shown at the bottom, who or what said it, and how many seconds it stays.
+    /// A line shown at the top, who or what said it, and how many seconds it stays.
     pub toast: Option<(String, String, f32)>,
+    /// What the toast keeps clear of along the top.
+    pub top: TopClear,
     /// What the passenger just said, in a bubble beside them, and how long it stays.
     pub say: Option<(String, f32)>,
     /// Where the passenger's head is on screen, in pixels, while one rides.
@@ -597,7 +609,7 @@ impl Hud {
         if let Some((who, text, left)) = &self.toast
             && !self.book.showing()
         {
-            crate::book::draw_toast(d, who, text, left.clamp(0.0, 1.0));
+            crate::book::draw_toast(d, who, text, left.clamp(0.0, 1.0), self.top);
         }
     }
 
