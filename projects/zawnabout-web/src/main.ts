@@ -369,7 +369,9 @@ async function start() {
     }
   });
 
-  const notes = setupNotes(app, canvas, touch);
+  // Notes mode leaves design notes in the repo through the dev server, so only the dev
+  // server has it. The published page has no button, no N key and none of its code.
+  const notes = import.meta.env.DEV ? setupNotes(app, canvas, touch) : noNotes();
   setupSound(app);
   // The atlas pauses the world while it is open.
   const minimap = setupMinimap(app, touch, (on) => app.command(on ? "pause" : "resume"));
@@ -548,3 +550,10 @@ async function start() {
 }
 
 start();
+
+/** Notes mode off: the published page drops its button and moves full screen into its place. */
+function noNotes(): ReturnType<typeof setupNotes> {
+  document.getElementById("notes-btn")?.remove();
+  document.getElementById("full-btn")?.classList.replace("third", "second");
+  return { spots: () => [], active: () => false, toggle: () => {}, writing: () => false, pick: () => {} };
+}
