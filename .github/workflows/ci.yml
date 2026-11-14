@@ -101,9 +101,10 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: projects/zawnabout-web/pnpm-lock.yaml
-      - name: Typecheck and build
+      # The build makes the wasm bindings in `pkg/` that the typecheck needs.
+      - name: Build and typecheck
         working-directory: projects/zawnabout-web
         run: |
           pnpm install --frozen-lockfile
-          pnpm typecheck
           pnpm build
+          pnpm typecheck
