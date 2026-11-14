@@ -105,6 +105,33 @@ impl Swoop {
         if wall.is_none() {
             p2.y = p2.y.max(clear.min(end.y + reach * 1.5));
         }
+        // The curve only leans toward its middle points, so over a tall thing midway it
+        // sags below them. Lift both until no point along it has its feet in rock,
+        // staying under any roof.
+        let ceiling = roof - stand_height - 4.0;
+        for _ in 0..4 {
+            let pts = [pos, p1, p2, end];
+            let mut lift = 0.0_f32;
+            for i in 2..SAMPLES - 1 {
+                let t = i as f32 / SAMPLES as f32;
+                let feet = bezier(&pts, t) - Vec3::Y * stand_height;
+                if !world.solid_at(feet) {
+                    continue;
+                }
+                let Some(k) =
+                    (1..=100).find(|k| !world.solid_at(feet + Vec3::Y * (*k as f32 * 4.0)))
+                else {
+                    continue;
+                };
+                // Raising both middle points by `d` raises the curve by 3t(1-t)d here.
+                lift = lift.max((k as f32 * 4.0 + 4.0) / (3.0 * t * (1.0 - t)));
+            }
+            if lift <= 0.0 {
+                break;
+            }
+            p1.y = (p1.y + lift).min(ceiling.max(p1.y));
+            p2.y = (p2.y + lift).min(ceiling.max(p2.y));
+        }
 
         let mut s = Self {
             target,
@@ -201,5 +228,29 @@ impl Swoop {
     /// Fraction of the way there.
     pub fn progress(&self) -> f32 {
         self.travelled / self.length().max(1e-3)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hop past the great needle, 320 m of rock midway, goes over it, not through it.
+    #[test]
+    fn clears_a_tall_stack_midway() {
+        let world = World::generate(1);
+        let (x, z) = (-4300.0, 3600.0);
+        let stand = 2.0;
+        let from = Vec3::new(x - 200.0, world.support(x - 200.0, z, 1.0e4) + 10.0, z);
+        let to = Vec3::new(x + 200.0, world.support(x + 200.0, z, 1.0e4), z);
+        assert!(
+            world.solid_at(Vec3::new(x, 200.0, z)),
+            "the needle stands midway"
+        );
+        let s = Swoop::plan(&world, from, Vec3::ZERO, to, stand);
+        for i in 1..SAMPLES {
+            let p = bezier(&s.points, i as f32 / SAMPLES as f32);
+            assert!(!world.solid_at(p), "flies through rock at {p}");
+        }
     }
 }

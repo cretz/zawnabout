@@ -24,7 +24,8 @@ class Store {
       const res = await fetch("/__notes");
       if (res.ok && res.headers.get("content-type")?.includes("json")) {
         this.server = true;
-        return await res.json();
+        const notes: Note[] = await res.json();
+        return notes.concat(await this.upload());
       }
     } catch {
       // No dev server, so keep notes locally.
@@ -51,6 +52,28 @@ class Store {
     all.push(note);
     this.setLocal(all);
     return note;
+  }
+
+  /** Sends notes kept in this browser while the server was away, and keeps any it still
+   *  can't take. Returns them all, so none drop out of the list. */
+  private async upload(): Promise<Note[]> {
+    const sent: Note[] = [];
+    const left: Note[] = [];
+    for (const note of this.local()) {
+      try {
+        // A local id is not the server's kind, so it gives the note one of its own.
+        const res = await fetch("/__notes", { method: "POST", body: JSON.stringify(note) });
+        if (res.ok) {
+          sent.push(await res.json());
+          continue;
+        }
+      } catch {
+        // Still away: keep it here for next time.
+      }
+      left.push(note);
+    }
+    if (sent.length > 0) this.setLocal(left);
+    return sent.concat(left);
   }
 
   async remove(id: string) {
