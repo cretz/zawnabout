@@ -59,12 +59,14 @@ class Store {
   private async upload(): Promise<Note[]> {
     const sent: Note[] = [];
     const left: Note[] = [];
+    const gone = new Set<string | undefined>();
     for (const note of this.local()) {
       try {
         // A local id is not the server's kind, so it gives the note one of its own.
         const res = await fetch("/__notes", { method: "POST", body: JSON.stringify(note) });
         if (res.ok) {
           sent.push(await res.json());
+          gone.add(note.id);
           continue;
         }
       } catch {
@@ -72,16 +74,23 @@ class Store {
       }
       left.push(note);
     }
-    if (sent.length > 0) this.setLocal(left);
+    // Read the store again: a note may have been kept here while these were sending.
+    if (gone.size > 0) this.setLocal(this.local().filter((n) => !gone.has(n.id)));
     return sent.concat(left);
   }
 
-  async remove(id: string) {
-    if (this.server) {
-      await fetch(`/__notes/${id}`, { method: "DELETE" });
-      return;
+  /** Deletes a note. Returns false if the server would not, so it stays listed. */
+  async remove(id: string): Promise<boolean> {
+    // One still waiting in this browser is only here, whichever mode this is.
+    if (this.server && !id.startsWith("local-")) {
+      try {
+        return (await fetch(`/__notes/${id}`, { method: "DELETE" })).ok;
+      } catch {
+        return false;
+      }
     }
     this.setLocal(this.local().filter((n) => n.id !== id));
+    return true;
   }
 
   private local(): Note[] {
@@ -153,7 +162,7 @@ export function setupNotes(app: App, canvas: HTMLCanvasElement, touch: boolean) 
       });
       item.querySelector(".del")!.addEventListener("click", async () => {
         if (!n.id || !confirm("Delete this note?")) return;
-        await store.remove(n.id);
+        if (!(await store.remove(n.id))) return alert("The server could not delete that note.");
         notes = notes.filter((m) => m !== n);
         pins();
         render();
