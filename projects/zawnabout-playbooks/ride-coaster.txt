@@ -1,0 +1,15 @@
+# Land on a roller coaster car at the theme park and ride a full lap: up the lift hill
+# slowly, then racing down the drops and round the banked turns.
+land-on coastercar.2
+wait-until riding coastercar.2 60
+expect riding coastercar.2
+wait 6
+shot ride-coaster-lift.png
+wait 14
+expect riding coastercar.2
+shot ride-coaster-drop.png
+wait 20
+expect riding coastercar.2
+shot ride-coaster-turn.png
+wait 30
+expect riding coastercar.2

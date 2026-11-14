@@ -1,0 +1,10 @@
+# Land on the cruise liner's pool deck and ride its grand tour for a while.
+ride cruise
+wait 0.5
+expect riding cruise
+wait 3
+shot ride-cruise-a.png
+wait 60
+expect riding cruise
+expect ground
+shot ride-cruise-b.png

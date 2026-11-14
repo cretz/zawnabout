@@ -1,0 +1,51 @@
+# Gameplay: walk up to Fen by the start beacon, take on the favor, light the beacon, and
+# come back for thanks. Then chat with a townsperson in Kettle Harbor.
+cards keep
+land-at -1951 1157
+wait-until landed 20
+wait 0.5
+expect can-talk
+shot fen.png
+ui-key Enter
+expect card
+shot ask.png
+ui-key Enter
+expect not card
+light home/home-beacon
+ui-key Enter
+expect card
+shot thanks.png
+ui-key Enter
+expect helped fen
+book people
+shot people.png
+book close
+land-at -1760 1680
+wait-until landed 25
+folk-search 150
+wait 0.2
+goto-folk
+folk-search 9
+wait 0.3
+expect can-talk
+ui-key Enter
+expect card
+shot chat.png
+ui-key Enter
+# A fetch favor: Pip's kite is stuck on the clock tower. Carry it back.
+goto-find pip 6
+wait 0.3
+ui-key Enter
+ui-key Enter
+goto-find pip-item 0
+wait-until card 8
+shot carry.png
+ui-key Enter
+goto-find pip 6
+wait 0.3
+ui-key Enter
+expect helped pip
+ui-key Enter
+book hoard
+shot hoard.png
+book close

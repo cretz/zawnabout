@@ -1,0 +1,18 @@
+# Gameplay: landing at a beautiful spot takes a postcard, a painted picture of the view,
+# which shows on its card and then in the journal's places page.
+cards keep
+land-perch home/kettle-light
+wait-until card 40
+expect halted
+expect found chess-king
+ui-key Enter
+# The king is picked up hovering by the lamp; the postcard comes on landing.
+wait-until card 20
+expect card
+shot card.png
+ui-key Enter
+expect not card
+book places
+shot places.png
+book close
+expect not halted

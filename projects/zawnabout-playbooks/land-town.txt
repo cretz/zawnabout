@@ -1,0 +1,7 @@
+# Tap-to-land in the middle of tidewater: on a roof or in a street, either way standing.
+goto -300 -3700 120 180
+land-at -300 -4050
+wait-until landed 40
+expect ground
+expect near -300 30 -4050 40
+shot land-town.png

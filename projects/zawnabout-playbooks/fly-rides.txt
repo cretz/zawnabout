@@ -1,0 +1,62 @@
+# Gameplay: a ride stunt on every kind of vehicle that has one. Made from play.kdl.
+play reset
+ride train
+wait 40
+expect flown train-surfer
+ride ferry
+wait 12
+expect flown ferry-stowaway
+ride balloon
+wait 12
+expect flown balloon-hitcher
+ride ferriscar
+wait 12
+expect flown round-and-round
+ride liftchair
+wait 12
+expect flown chairlift-hitcher
+ride liftcabin
+wait 12
+expect flown cable-car-roof
+ride punt
+wait 12
+expect flown punt-passenger
+ride trawler
+wait 12
+expect flown gulls-seat
+ride cruise
+wait 12
+expect flown first-class
+ride coastercar
+wait 12
+expect flown coaster-rider
+ride car
+wait 12
+expect flown roof-rack
+ride seaplane
+wait 12
+expect flown wing-walker
+ride sailboat
+wait 12
+expect flown sail-away
+ride dropring
+wait 12
+expect flown going-down
+ride speedboat
+wait 12
+expect flown speedboat-surfer
+ride airliner
+wait 12
+expect flown jet-setter
+ride helicopter
+wait 12
+expect flown chopper-hopper
+ride motoryacht
+wait 12
+expect flown life-of-luxury
+ride supply
+wait 120
+expect flown supply-run
+ride racecar
+wait 12
+expect flown pole-position

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="theme-color" content="#5faeeb" />
+    <title>zawnabout</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+
+    <div id="loading" role="status" aria-label="Loading">
+      <div class="loading-name">zawnabout</div>
+      <div class="loading-dots"><span></span><span></span><span></span></div>
+    </div>
+
+    <canvas id="minimap" class="hidden" title="Map (click to enlarge)"></canvas>
+
+    <button id="book-btn" class="round" aria-label="Journal" title="Journal and pause (Esc)">&#128214;</button>
+    <button id="notes-btn" class="round second" aria-label="Notes mode" title="Notes mode (N)">&#9998;</button>
+    <button id="full-btn" class="round third hidden" aria-label="Full screen" title="Full screen">&#x26F6;</button>
+
+    <div id="notes-bar" class="hidden">
+      <strong>Notes mode</strong>, everything is paused. <span id="notes-help"></span>
+      <button id="notes-exit">Back to flying</button>
+    </div>
+    <div id="notes-panel" class="card hidden">
+      <div class="notes-head">
+        <strong>Notes</strong>
+        <span id="notes-where"></span>
+        <button id="notes-download" class="hidden">Download</button>
+      </div>
+      <div id="notes-list"></div>
+    </div>
+    <div id="note-dialog" class="card center hidden">
+      <p id="note-near"></p>
+      <textarea id="note-text" rows="5" placeholder="What would you like here?"></textarea>
+      <div class="note-actions">
+        <button id="note-cancel">Cancel</button>
+        <button id="note-save" class="primary">Save note</button>
+      </div>
+    </div>
+
+    <div id="touch" class="hidden">
+      <div id="stick-zone"><div id="stick-base"><div id="stick-knob"></div></div></div>
+      <div id="buttons">
+        <button class="pad small fire" data-action="breath">Fire</button>
+        <button class="pad small" data-action="brake">Brake</button>
+        <button class="pad small" data-action="tuck">Dive</button>
+        <button class="pad big" data-action="flap">Flap</button>
+      </div>
+    </div>
+
+    <div id="debug" class="hidden">
+      <div class="debug-head">
+        <strong>debug</strong>
+        <span class="debug-actions">
+          <button id="debug-copy">copy</button>
+          <button id="debug-reset">reset</button>
+          <button id="debug-hide">hide</button>
+        </span>
+      </div>
+      <pre id="debug-state"></pre>
+      <input id="debug-cmd" placeholder="command, e.g. spawn 0 60 0 0 20" autocomplete="off" />
+      <pre id="debug-out"></pre>
+      <div id="debug-params"></div>
+    </div>
+
+    <div id="nogpu" class="card center hidden">
+      <h1>Oh no!</h1>
+      <p>This browser can't show the dragon yet. It needs WebGPU, which recent Chrome, Edge and Safari have.</p>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

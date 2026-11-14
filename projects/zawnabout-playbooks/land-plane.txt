@@ -1,0 +1,7 @@
+# Tap the airliner from the ground: the swoop follows it and lands on its back, then it
+# carries you round its circuit.
+land-on 2
+wait-until riding 2 90
+wait 6
+expect riding 2
+shot land-plane.png

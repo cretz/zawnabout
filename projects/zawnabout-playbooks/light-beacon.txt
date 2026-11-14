@@ -1,0 +1,13 @@
+# Land by the first beacon in the great hall, breathe fire at it, and it stays lit.
+place -2000 -935 1032 0
+hold brake
+wait-until ground 20
+release all
+expect ground
+hold breath
+wait 0.6
+release all
+expect lit home/hall-beacon-1
+wait 2
+expect lit home/hall-beacon-1
+shot light-beacon.png

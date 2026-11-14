@@ -1,0 +1,8 @@
+# Drop into the great hall under home, land on its floor and stand there.
+place -1500 -600 700 90
+hold brake
+wait-until ground 120
+release all
+expect ground
+expect near -1450 -965 700 200
+shot cave-hall.png

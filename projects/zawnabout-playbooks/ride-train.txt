@@ -1,0 +1,13 @@
+# Ride the crescent line on the engine for three minutes, through at least one station
+# halt.
+ride train
+wait 0.5
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+wait 62
+expect riding train
+expect ground
+shot ride-train.png

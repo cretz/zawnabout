@@ -1,0 +1,13 @@
+# Land on the elder mine train and ride it round the elder deep, past the crystal mine
+# and over the trestles.
+ride mine
+wait 2
+expect riding mine
+wait 20
+shot ride-mine-1.png
+wait 40
+expect riding mine
+shot ride-mine-2.png
+wait 60
+expect riding mine
+shot ride-mine-3.png

@@ -1,0 +1,9 @@
+# Holding forward on the ground breaks into a run, faster than a walk.
+release all
+hold pitch 1
+wait 2
+expect ground
+expect speed-above 18
+release all
+wait 2
+expect speed-below 2

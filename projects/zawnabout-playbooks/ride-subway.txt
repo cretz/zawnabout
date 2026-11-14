@@ -1,0 +1,11 @@
+# Ride the Moonharbor subway for two minutes: board the lead car and stay aboard through
+# the tunnel and a station stop.
+ride metro
+wait 0.5
+expect riding metro
+wait 62
+expect riding metro
+wait 62
+expect riding metro
+expect ground
+shot ride-subway.png

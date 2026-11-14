@@ -1,0 +1,257 @@
+// The twins. Center at world -1200 -4300. Two islands across a narrow strait, joined by a
+// natural stone land bridge high enough for ships and dragons to pass under.
+// Elder (west) is a rugged ridge with an inlet on its south side, old stone and carved halls.
+// Younger (east) is long and low, running north east, the seafaring city on its coves.
+
+land elder base=30 jag=30 {
+    p -1400 -250 edge=cliff
+    p -1250 -500
+    p -1000 -600
+    p -850 -750 sharp=#true
+    p -600 -720
+    p -400 -800
+    p -200 -650
+    p -50 -500 edge=rocky
+    p 0 -300
+    p -60 -100
+    p 20 100
+    p -80 250 edge=beach
+    p -200 350
+    p -300 250
+    p -380 100 sharp=#true
+    p -470 250
+    p -500 450
+    p -650 550
+    p -850 520 edge=rocky
+    p -1000 600
+    p -1150 450
+    p -1200 250 edge=cliff
+    p -1350 100
+    p -1500 -50
+}
+land younger base=15 jag=25 {
+    p 250 -200 edge=rocky
+    p 400 -450
+    p 650 -600
+    p 900 -800
+    p 1150 -900 edge=cliff sharp=#true
+    p 1300 -750
+    p 1250 -550 edge=beach
+    p 1100 -400
+    p 1200 -200
+    p 1400 -50
+    p 1450 200
+    p 1300 350 edge=rocky
+    p 1150 300 sharp=#true
+    p 1000 450
+    p 1050 650 edge=beach
+    p 850 700
+    p 600 600
+    p 450 450
+    p 300 300
+    p 200 100
+}
+
+ridge elder-ridge width=500 {
+    note "Its north face is a sheer sea cliff with huge old faces carved into it."
+    p -1300 -250 h=300
+    p -1000 -400 h=480
+    p -750 -350 h=600
+    p -450 -450 h=450
+    p -150 -250 h=200
+}
+mountain elder-peak x=-750 z=-350 h=600 r=380 shape=crag stretch=1.4 rot=-10 {
+    perch elder-summit x=-750 z=-360
+}
+hill younger-hill x=700 z=-300 h=120 r=300 stretch=1.8 rot=-40
+
+arch long-bridge w=80 thick=40 {
+    note "Natural land bridge over the strait. About 130m of air under it."
+    p -150 120 -50
+    p 50 170 -40
+    p 250 160 -20
+    p 400 110 0
+}
+
+forest old-oaks kind=open trees=round {
+    p -1350 -100
+    p -1100 -300
+    p -900 -100
+    p -950 300
+    p -1150 400
+}
+meadow lupine-slope flowers=lupine {
+    note "Purple and pink lupines on the east isle's north slope, as in cold hills."
+    p 800 -800
+    p 1060 -830
+    p 1170 -720
+    p 1130 -600
+    p 950 -580
+    p 790 -660
+}
+
+// Places
+
+city stonehold style=stone tech=old {
+    note "Old stone town climbing from the inlet up the south slope. Lamps, a little power, mostly quiet."
+    p -800 0
+    p -200 -100
+    p -120 300
+    p -450 550
+    p -850 450
+    tier y=40
+    tier y=80
+    tier y=120
+    site stonehold-quay kind=docks x=-380 z=200
+    beacon stonehold-beacon x=-500 z=150
+}
+
+city tidewater style=seafaring tech=mid {
+    note "The seafaring city, half built out over the water. Docks, shipyards, a ferry terminal, canals cut across the island, masts everywhere."
+    p 450 -100
+    p 1350 -150
+    p 1500 300
+    p 1100 750
+    p 450 600
+    canal tidewater-cut w=22 level=0 {
+        note "Cuts right across the island from the harbor cove to the strait side."
+        p 1150 300
+        p 800 200
+        p 500 350
+        p 300 300
+    }
+    canal tidewater-loop w=16 level=0 {
+        p 800 200
+        p 750 450
+        p 900 650
+    }
+    site tidewater-docks kind=docks x=1200 z=250
+    site tidewater-yard kind=shipyard x=850 z=700
+    site tidewater-ferry kind=ferry x=600 z=620
+    site tidewater-light kind=lighthouse x=1150 z=-900
+}
+
+dugout strait-hole x=300 y=12 z=-330 facing=north r=20 {
+    note "Just above the waves on younger's north shore."
+}
+
+landmark elder-mine kind=mine x=-650 y=-330 z=-150 rot=200 {
+    note "The stone folk still mine crystal in the elder deep."
+}
+
+landmark elder-gallery kind=gallery x=-700 y=170 z=-420 rot=10 text="243 143" {
+    note "A walkway round the elder hall's walls, high up among the carvings, with stairs up from the floor."
+}
+landmark elder-market kind=market x=-760 y=170 z=-470 rot=-10 {
+    note "Stone folk selling crystal, bread and lamp oil among the old columns."
+}
+landmark elder-cafe kind=cafe x=-560 y=170 z=-330 rot=170 {
+    note "Tea by lantern light in the elder hall."
+}
+
+// Elder halls. Isolated. Carved by the old stone folk long ago.
+
+caves elder-halls {
+    cavern elder-hall x=-700 y=170 z=-420 w=500 h=140 d=300 rot=-10 shape=carved glow=0.3 decor=ruins {
+        note "Straight walls and columns, much older than the town."
+        beacon elder-hall-beacon x=-700 y=105 z=-420
+        ruin elder-arch kind=arch x=-860 y=170 z=-440
+        ruin elder-columns kind=columns x=-780 y=170 z=-360
+        ruin elder-statue kind=statue x=-620 y=170 z=-470
+        ruin elder-wall kind=wall x=-540 y=170 z=-400
+        ruin elder-columns-2 kind=columns x=-640 y=170 z=-520
+    }
+    cavern elder-deep x=-700 y=-220 z=-250 w=900 h=300 d=700 rot=-10 shape=hall glow=0.25 decor=crystal {
+        note "Natural hall under the island that the carvers broke into."
+        beacon elder-deep-beacon x=-500 y=-360 z=-150
+    }
+    passage elder-stair w=60 {
+        p -600 150 -420
+        p -650 50 -250
+        p -700 -100 -250
+    }
+    mouth elder-gate kind=gate w=80 light=#true {
+        note "Huge carved door facing the town. Not hidden at all."
+        p -700 160 -400
+        p -680 190 -150
+        p -650 220 100
+        p -600 230 300
+    }
+    mouth elder-chimney kind=chimney w=40 hidden=#true light=#true {
+        p -700 220 -440
+        p -740 650 -460
+    }
+}
+
+// The elder mine line: ore carts of miners and visitors behind a little engine, round
+// the edge of the elder deep on trestles where the floor drops, out past the crystal mine
+// and back. Laid by scratch/scripts/caveline.py over the deep's floor.
+railway elder-line mine=#true {
+    note "Ride the mine carts round the elder deep. Land on one and hold on."
+    p -729 -355.5 -565
+    p -693 -356.6 -565
+    p -658 -356.9 -564
+    p -625 -355.9 -563
+    p -593 -354.9 -560
+    p -564 -354.0 -555
+    p -529 -354.2 -548
+    p -494 -355.3 -538
+    p -462 -356.3 -526
+    p -433 -357.3 -511
+    p -407 -356.9 -495
+    p -376 -355.7 -469
+    p -348 -354.3 -435
+    p -326 -353.0 -396
+    p -315 -352.1 -367
+    p -307 -351.5 -336
+    p -301 -352.5 -303
+    p -299 -353.6 -267
+    p -298 -354.6 -234
+    p -299 -355.5 -203
+    p -303 -356.6 -162
+    p -310 -357.0 -125
+    p -322 -357.9 -94
+    p -348 -359.4 -54
+    p -394 -358.5 -26
+    p -432 -357.4 -19
+    p -465 -357.8 -20
+    p -500 -358.8 -23
+    p -535 -359.9 -25
+    p -569 -360.9 -25
+    p -604 -360.6 -24
+    p -640 -361.7 -22
+    p -675 -362.7 -19
+    p -710 -363.8 -14
+    p -745 -364.9 -8
+    p -781 -364.6 -0
+    p -816 -363.5 8
+    p -852 -362.4 18
+    p -885 -361.4 23
+    p -916 -360.4 22
+    p -968 -358.7 -1
+    p -990 -357.8 -22
+    p -1009 -356.8 -50
+    p -1026 -355.6 -84
+    p -1039 -356.1 -125
+    p -1047 -356.2 -155
+    p -1053 -355.5 -189
+    p -1058 -356.6 -225
+    p -1062 -357.8 -265
+    p -1062 -358.9 -302
+    p -1060 -359.9 -336
+    p -1054 -360.7 -368
+    p -1044 -359.8 -398
+    p -1024 -358.4 -438
+    p -997 -357.1 -472
+    p -967 -355.9 -498
+    p -940 -355.0 -515
+    p -910 -354.0 -529
+    p -877 -352.9 -541
+    p -841 -352.1 -551
+    p -805 -353.2 -558
+    p -774 -354.2 -562
+    p -740 -355.2 -564
+    p -729 -355.5 -565
+    station elder-yard x=-500 z=-565
+    station elder-crossing x=-1045 z=-250
+}

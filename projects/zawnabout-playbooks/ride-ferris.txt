@@ -1,0 +1,15 @@
+# Land on a ferris wheel car at the meadow fair and ride it twice round, looking out over
+# the fair from the top.
+land-on ferriscar.2
+wait-until riding ferriscar.2 40
+expect riding ferriscar.2
+wait 9
+shot ride-ferris-up.png
+wait 9
+expect riding ferriscar.2
+shot ride-ferris-top.png
+wait 26
+expect riding ferriscar.2
+wait 35
+expect riding ferriscar.2
+expect ground

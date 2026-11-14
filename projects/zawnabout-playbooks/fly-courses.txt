@@ -1,0 +1,154 @@
+# Gameplay: flies through every stunt gap and course gate in play.kdl, then wins the
+# cable car race by standing at its finish once it is on. Made from play.kdl.
+play reset
+try-gate under-sea-arch
+wait 2
+expect flown under-sea-arch
+try-gate needle-eye
+wait 2
+expect flown needle-eye
+try-gate under-long-bridge
+wait 2
+expect flown under-long-bridge
+try-gate under-moon-span
+wait 2
+expect flown under-moon-span
+try-gate under-rope-bridge
+wait 2
+expect flown under-rope-bridge
+try-gate through-the-eye
+wait 6
+expect flown through-the-eye
+# The goals are too low to fly through: walk out through each from the pitch.
+goto 1128.7 -1651.8 0 -80
+wait 0.5
+hold pitch 1
+wait 4
+release all
+expect flown goal
+goto 1221.3 -1668.2 0 100
+wait 0.5
+hold pitch 1
+wait 4
+release all
+expect flown own-goal
+try-gate kettle-bridges 0
+wait 2
+expect gate kettle-bridges 0
+try-gate kettle-bridges 1
+wait 2
+expect gate kettle-bridges 1
+try-gate kettle-bridges 2
+wait 2
+expect gate kettle-bridges 2
+try-gate kettle-bridges 3
+wait 2
+expect gate kettle-bridges 3
+try-gate kettle-bridges 4
+wait 2
+expect gate kettle-bridges 4
+try-gate kettle-bridges 5
+wait 2
+expect gate kettle-bridges 5
+try-gate kettle-bridges 6
+wait 2
+expect gate kettle-bridges 6
+expect flown kettle-bridges
+try-gate moon-bridges 0
+wait 2
+expect gate moon-bridges 0
+try-gate moon-bridges 1
+wait 2
+expect gate moon-bridges 1
+try-gate moon-bridges 2
+wait 2
+expect gate moon-bridges 2
+try-gate moon-bridges 3
+wait 2
+expect gate moon-bridges 3
+expect flown moon-bridges
+try-gate needle-weave 0
+wait 2
+expect gate needle-weave 0
+try-gate needle-weave 1
+wait 2
+expect gate needle-weave 1
+try-gate needle-weave 2
+wait 2
+expect gate needle-weave 2
+try-gate needle-weave 3
+wait 2
+expect gate needle-weave 3
+try-gate needle-weave 4
+wait 2
+expect gate needle-weave 4
+expect flown needle-weave
+try-gate lighthouse-run 0
+wait 2
+expect gate lighthouse-run 0
+try-gate lighthouse-run 1
+wait 2
+expect gate lighthouse-run 1
+try-gate lighthouse-run 2
+wait 2
+expect gate lighthouse-run 2
+expect flown lighthouse-run
+try-gate falls-chaser 0
+wait 2
+expect gate falls-chaser 0
+try-gate falls-chaser 1
+wait 2
+expect gate falls-chaser 1
+try-gate falls-chaser 2
+wait 2
+expect gate falls-chaser 2
+try-gate falls-chaser 3
+wait 2
+expect gate falls-chaser 3
+expect flown falls-chaser
+try-gate gull-nooks 0
+wait 2
+expect gate gull-nooks 0
+try-gate gull-nooks 1
+wait 2
+expect gate gull-nooks 1
+try-gate gull-nooks 2
+wait 2
+expect gate gull-nooks 2
+try-gate gull-nooks 3
+wait 2
+expect gate gull-nooks 3
+try-gate gull-nooks 4
+wait 2
+expect gate gull-nooks 4
+expect flown gull-nooks
+try-gate fang-nooks 0
+wait 2
+expect gate fang-nooks 0
+try-gate fang-nooks 1
+wait 2
+expect gate fang-nooks 1
+try-gate fang-nooks 2
+wait 2
+expect gate fang-nooks 2
+try-gate fang-nooks 3
+wait 2
+expect gate fang-nooks 3
+try-gate fang-nooks 4
+wait 2
+expect gate fang-nooks 4
+try-gate fang-nooks 5
+wait 2
+expect gate fang-nooks 5
+expect flown fang-nooks
+shot gates.png
+goto-race gondola-race start
+wait-until racing 300
+expect toast
+shot race-on.png
+goto-race gondola-race end
+wait 1
+expect flown gondola-race
+expect not racing
+book flying
+shot journal.png

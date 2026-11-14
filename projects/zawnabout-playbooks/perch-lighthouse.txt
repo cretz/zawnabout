@@ -1,0 +1,5 @@
+# From the start meadow, fly to the kettle harbor lighthouse and perch on its lamp room.
+land-perch home/kettle-light
+wait-until landed 60
+expect on-perch home/kettle-light
+shot perch-lighthouse.png

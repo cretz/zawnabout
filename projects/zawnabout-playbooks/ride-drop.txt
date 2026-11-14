@@ -1,0 +1,9 @@
+# Land on the theme park's drop tower ring and ride it up, hang at the top, then fall.
+land-on dropring.0
+wait-until riding dropring.0 60
+expect riding dropring.0
+wait 20
+shot ride-drop-up.png
+wait 30
+expect riding dropring.0
+shot ride-drop-again.png
