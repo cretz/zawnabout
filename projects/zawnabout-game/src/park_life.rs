@@ -194,6 +194,24 @@ pub struct ParkLife {
     line: MeshId,
     water_skis: MeshId,
     parasail: MeshId,
+    dolphin: MeshId,
+    surfboard: MeshId,
+    /// Beach umbrellas, with which way the sea is from them.
+    beaches: Vec<(Mat4, Vec2)>,
+    /// Surf shacks, with which way the sea is.
+    shacks: Vec<(Mat4, Vec2)>,
+    /// Lookouts, where paragliders take off.
+    lookouts: Vec<Mat4>,
+    /// Climbing crags: the top, and climbers' spots down the face, each a point on the
+    /// rock and which way the face looks.
+    crags: Vec<(Mat4, Vec<(Vec3, Vec3)>)>,
+    /// Goat herds: spots on steep ground round each lick.
+    goat_spots: Vec<Vec<Vec3>>,
+    /// Rope bridges, for the bungee jumpers.
+    rope_bridges: Vec<Mat4>,
+    goat: MeshId,
+    /// Spots on each farm's pasture, in its frame, clear of any road through it.
+    pastures: Vec<Vec<Vec2>>,
     cow: MeshId,
     swing_crown: MeshId,
     swing_chair: MeshId,
@@ -255,6 +273,113 @@ const PASTEL: [Rgb; 5] = [
     Rgb(0xFFF1C8),
     Rgb(0xDDF5DD),
 ];
+
+impl ParkLife {
+    /// What a drawn mesh is, if it is an animal that answers when talked to: its name
+    /// and its call.
+    pub fn critter(&self, m: MeshId) -> Option<(&'static str, crate::audio::Call)> {
+        use crate::audio::Call;
+        Some(if m == self.cow {
+            ("Cow", Call::Moo)
+        } else if m == self.sheep {
+            ("Sheep", Call::Baa)
+        } else if m == self.seal {
+            ("Seal", Call::Bark)
+        } else if m == self.elephant {
+            ("Elephant", Call::Trumpet)
+        } else if m == self.giraffe {
+            ("Giraffe", Call::Moo)
+        } else if m == self.zebra {
+            ("Zebra", Call::Neigh)
+        } else if m == self.lion || m == self.lioness {
+            ("Lion", Call::Roar)
+        } else if m == self.penguin {
+            ("Penguin", Call::Squawk)
+        } else if m == self.goat {
+            ("Mountain goat", Call::Baa)
+        } else {
+            return None;
+        })
+    }
+}
+
+/// Each crag's frame, and spots for climbers down the cliff in front of it (+z): the
+/// face found by stepping down and back in toward the rock.
+fn crags(world: &World) -> Vec<(Mat4, Vec<(Vec3, Vec3)>)> {
+    world
+        .buildings
+        .iter()
+        .filter(|b| b.kind == Kind::Crag)
+        .map(|b| {
+            let f = b.front();
+            let out = Vec3::new(f.x, 0.0, f.y);
+            let side = Vec3::new(-f.y, 0.0, f.x);
+            let mut spots = Vec::new();
+            for (k, across) in [-4.0f32, 4.0, 0.0].into_iter().enumerate() {
+                let drop = 10.0 + k as f32 * 9.0;
+                // From well out in front, step in toward the rock at this height.
+                let mut p = b.pos + side * across + out * 30.0 - Vec3::Y * drop;
+                for _ in 0..60 {
+                    if world.terrain.sdf(p) < 0.8 {
+                        break;
+                    }
+                    p -= out * 0.5;
+                }
+                if world.terrain.sdf(p) < 1.5 {
+                    spots.push((p + out * 0.6, out));
+                }
+            }
+            (frame(b), spots)
+        })
+        .collect()
+}
+
+/// Spots for goats on the steep ground round each lick: steep, but not a cliff.
+fn goat_spots(world: &World) -> Vec<Vec<Vec3>> {
+    world
+        .buildings
+        .iter()
+        .filter(|b| b.kind == Kind::Goats)
+        .map(|b| {
+            (0..40u32)
+                .filter_map(|i| {
+                    let a = hash(i * 7 + b.seed) * TAU;
+                    let r = 8.0 + hash(i * 13 + b.seed) * 70.0;
+                    let (x, z) = (b.pos.x + a.cos() * r, b.pos.z + a.sin() * r);
+                    let up = world.terrain.normal(x, z).y;
+                    (up < 0.93 && up > 0.45).then(|| Vec3::new(x, world.terrain.height(x, z), z))
+                })
+                .take(7)
+                .collect()
+        })
+        .collect()
+}
+
+/// Every landmark of kind `k`, with the way to the nearest sea from it, flat.
+fn seaward(world: &World, k: Kind) -> Vec<(Mat4, Vec2)> {
+    world
+        .buildings
+        .iter()
+        .filter(|b| b.kind == k)
+        .map(|b| {
+            let c = Vec2::new(b.pos.x, b.pos.z);
+            let way = (0..16)
+                .map(|i| {
+                    let a = i as f32 / 16.0 * TAU;
+                    Vec2::new(a.cos(), a.sin())
+                })
+                .min_by(|a, b| {
+                    let h = |d: Vec2| {
+                        let p = c + d * 35.0;
+                        world.terrain.height(p.x, p.y)
+                    };
+                    h(*a).total_cmp(&h(*b))
+                })
+                .unwrap_or(Vec2::Y);
+            (frame(b), way)
+        })
+        .collect()
+}
 
 /// How far away each park's life shows (m).
 const ZOO_NEAR: f32 = 600.0;
@@ -353,6 +478,38 @@ impl ParkLife {
             line: add(&models::line()),
             water_skis: add(&models::water_skis()),
             parasail: add(&models::parasail()),
+            dolphin: add(&models::dolphin()),
+            surfboard: add(&models::surfboard()),
+            beaches: seaward(world, Kind::Umbrellas),
+            shacks: seaward(world, Kind::SurfShack),
+            lookouts: of(Kind::Lookout),
+            crags: crags(world),
+            goat_spots: goat_spots(world),
+            rope_bridges: of(Kind::RopeBridge),
+            goat: add(&models::goat()),
+            pastures: world
+                .buildings
+                .iter()
+                .filter(|b| b.kind == Kind::Farm)
+                .map(|b| {
+                    let (mid, half) = PASTURE;
+                    let mut spots = Vec::new();
+                    for i in 0..8 {
+                        for j in 0..8 {
+                            let at = mid
+                                + Vec2::new(
+                                    (i as f32 / 7.0 * 2.0 - 1.0) * half.x,
+                                    (j as f32 / 7.0 * 2.0 - 1.0) * half.y,
+                                );
+                            let w = b.at(at.x, 0.0, at.y);
+                            if world.terrain.road_spot(w.x, w.z, 4.0).is_none() {
+                                spots.push(at);
+                            }
+                        }
+                    }
+                    spots
+                })
+                .collect(),
             cow: add(&models::cow()),
             swing_crown: add(&models::swing_crown()),
             swing_chair: add(&models::swing_chair(zawnabout_sim::landmark::SWING_REACH)),
@@ -461,8 +618,7 @@ impl ParkLife {
         }
         // Helicopter rotors, always turning, blurred into a disc.
         for &i in &self.helicopters {
-            let v = &traffic.vehicles[i];
-            let p = traffic.pose(v, sim_time);
+            let p = traffic.pose_of(i, sim_time);
             if p.pos.distance(cam) > 3000.0 {
                 continue;
             }
@@ -492,8 +648,7 @@ impl ParkLife {
         }
         // Riders in the coaster cars, two by two, fewer late at night.
         for &i in &self.coaster_cars {
-            let v = &traffic.vehicles[i];
-            let p = traffic.pose(v, sim_time);
+            let p = traffic.pose_of(i, sim_time);
             if p.pos.distance(cam) > 400.0 {
                 continue;
             }
@@ -739,26 +894,115 @@ impl ParkLife {
                 }
             }
         }
-        // Speedboats tow a water skier, swinging out behind on the rope, or a parasail
-        // riding high on its line. Every third one just zips about.
-        for v in &traffic.vehicles {
-            if v.kind != Kind::Speedboat || v.variant % 3 == 2 {
+        // Beaches by day: sunbathers on the towels, kids at sandcastles, swimmers bobbing
+        // in the shallows and someone strolling the waterline.
+        if night < 0.5 {
+            for (k, (f, sea)) in self.beaches.iter().enumerate() {
+                if near(f, PEOPLE_NEAR) {
+                    self.beach(f, *sea, k as u32, time, draws);
+                }
+            }
+        }
+        // Surfers ride in on the waves off every surf shack, and paddle back out.
+        if night < 0.6 {
+            for (k, (f, sea)) in self.shacks.iter().enumerate() {
+                if near(f, ZOO_NEAR) {
+                    self.surfers(f, *sea, k as u32, time, draws);
+                }
+            }
+        }
+        // Climbers on the crags, inching up their ropes and lowering off again.
+        if night < 0.5 {
+            for (k, (f, spots)) in self.crags.iter().enumerate() {
+                if near(f, PEOPLE_NEAR) {
+                    self.climbers(f, spots, k as u32, time, draws);
+                }
+            }
+        }
+        // Goats picking their way about the steep ground.
+        for (k, spots) in self.goat_spots.iter().enumerate() {
+            if spots.first().is_some_and(|p| p.distance(cam) < ZOO_NEAR) {
+                self.goats(spots, k as u32, time, draws);
+            }
+        }
+        // A bungee jumper under every rope bridge, bouncing on the cord.
+        if night < 0.5 {
+            for (k, f) in self.rope_bridges.iter().enumerate() {
+                if near(f, PEOPLE_NEAR) {
+                    self.bungee(f, k as u32, time, draws);
+                }
+            }
+        }
+        // Paragliders spiral down from the lookouts on the high ground.
+        if night < 0.5 {
+            for (k, f) in self.lookouts.iter().enumerate() {
+                if near(f, 1500.0) {
+                    self.paraglider(f, k as u32, time, draws);
+                }
+            }
+        }
+        // Round the riding pod, two more dolphins leap clear of the water in turn.
+        for (i, v) in traffic.vehicles.iter().enumerate() {
+            if v.kind != Kind::Dolphins {
                 continue;
             }
-            let p = traffic.pose(v, sim_time);
-            if p.pos.distance(cam) > 1200.0 {
+            let p = traffic.pose_of(i, sim_time);
+            if p.pos.distance(cam) > 600.0 {
                 continue;
             }
             let fwd = Vec3::new(p.heading.sin(), 0.0, p.heading.cos());
             let side = Vec3::new(fwd.z, 0.0, -fwd.x);
+            for k in 0..2 {
+                let u = (sim_time / 2.6 + k as f32 * 0.5).fract();
+                let s = if k == 0 { 4.5 } else { -4.5 };
+                let base = p.pos + side * s + fwd * (u * 6.0 - 3.0);
+                let y = (u * PI).sin() * 2.2 - 0.6;
+                let face =
+                    Quat::from_rotation_y(p.heading) * Quat::from_rotation_x((u - 0.5) * 1.6);
+                draws.push((
+                    self.dolphin,
+                    Instance::new(Mat4::from_rotation_translation(face, base + Vec3::Y * y)),
+                ));
+                // A splash where it bursts out, and where it dives back in.
+                for (at, since) in [(-2.5, (u + 0.91).fract()), (2.5, (u + 0.09).fract())] {
+                    if since > 0.22 {
+                        continue;
+                    }
+                    let fade = 1.0 - since / 0.22;
+                    let foot = p.pos + side * s + fwd * at;
+                    for j in 0..3u32 {
+                        let a = j as f32 * 2.1 + k as f32;
+                        let m = Mat4::from_scale_rotation_translation(
+                            Vec3::new(0.7, 0.9 + since * 4.0, 0.7) * (0.4 + since * 1.6),
+                            Quat::IDENTITY,
+                            foot + Vec3::new(a.cos() * 0.6, since * 3.0, a.sin() * 0.6),
+                        );
+                        fx.push((
+                            self.spray,
+                            Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, 0.7 * fade)),
+                        ));
+                    }
+                }
+            }
+        }
+        // Speedboats tow a water skier, swinging out behind on the rope, or a parasail
+        // riding high on its line. Every third one just zips about.
+        for (i, v) in traffic.vehicles.iter().enumerate() {
+            if v.kind != Kind::Speedboat || v.variant % 3 == 2 {
+                continue;
+            }
+            let p = traffic.pose_of(i, sim_time);
+            if p.pos.distance(cam) > 1200.0 {
+                continue;
+            }
+            let fwd = Vec3::new(p.heading.sin(), 0.0, p.heading.cos());
             let stern = p.pos - fwd * v.size.x * 0.5 + Vec3::Y * 0.9;
             let seed = (v.path as u32 * 31 + v.variant as u32).wrapping_mul(2_654_435_761);
             let face = Quat::from_rotation_y(p.heading);
             let (hand, end) = if v.variant % 3 == 0 {
                 // The skier carves from side to side across the wake, leaning back.
-                let swing = (sim_time * 0.6 + hash(seed) * 6.0).sin();
-                let at = p.pos - fwd * 20.0 + side * swing * 7.0;
-                let at = Vec3::new(at.x, p.pos.y, at.z);
+                let swing = traffic.ski_swing(&p);
+                let at = traffic.skier(i, &p).unwrap_or(p.pos);
                 let lean = Quat::from_rotation_y(p.heading - swing * 0.25)
                     * Quat::from_rotation_x(-0.35)
                     * Quat::from_rotation_z(-swing * 0.3);
@@ -774,8 +1018,7 @@ impl ParkLife {
                 (hand, stern)
             } else {
                 // The flier hangs in a harness under the canopy, high astern.
-                let sway = (sim_time * 0.4 + hash(seed) * 6.0).sin();
-                let at = p.pos - fwd * 48.0 + side * sway * 3.0 + Vec3::Y * 30.0;
+                let at = traffic.parasail(i, &p).unwrap_or(p.pos);
                 let toward = (stern - at).normalize_or(Vec3::NEG_Y);
                 let tilt = Quat::from_rotation_arc(Vec3::NEG_Y, toward).slerp(Quat::IDENTITY, 0.7);
                 draws.push((
@@ -897,6 +1140,226 @@ impl ParkLife {
     }
 
     /// A person, `seed` picking shirt and head, standing at `m`'s origin.
+    /// A day at the beach round a row of umbrellas, the sea toward `sea`.
+    fn beach(&self, f: &Mat4, sea: Vec2, k: u32, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
+        let at = f.w_axis.truncate();
+        let fwd = Vec3::new(sea.x, 0.0, sea.y);
+        let side = Vec3::new(-sea.y, 0.0, sea.x);
+        // Lying on the towels, a few at a time, turning over now and then.
+        for i in 0..4u32 {
+            let s = (k * 16 + i).wrapping_mul(2_246_822_519);
+            let slot = (time / 90.0 + hash(s) * 4.0) as u32;
+            if hash(s ^ slot.wrapping_mul(40_503)) < 0.35 {
+                continue;
+            }
+            let towel = Vec3::new(i as f32 * 4.5 - 6.75 + 0.4, 0.12, 1.6);
+            let flip = if slot.is_multiple_of(2) { 0.0 } else { PI };
+            let m = *f
+                * Mat4::from_translation(towel)
+                * Mat4::from_rotation_y(FRAC_PI_2)
+                * Mat4::from_rotation_x(-FRAC_PI_2)
+                * Mat4::from_rotation_z(flip)
+                * Mat4::from_translation(Vec3::new(0.0, -0.9, 0.0));
+            self.person(m, s, draws);
+        }
+        // Kids by a sandcastle, kneeling and getting up again.
+        for i in 0..2u32 {
+            let s = (k * 16 + 8 + i).wrapping_mul(2_246_822_519);
+            let p = at + side * (4.0 + i as f32 * 1.4) + fwd * 7.0;
+            let bob = ((time * 1.3 + i as f32 * 2.0).sin() * 0.5 + 0.5) * 0.35;
+            let m = Mat4::from_scale_rotation_translation(
+                Vec3::splat(0.7),
+                facing(Vec2::new(-side.x, -side.z) * if i == 0 { 1.0 } else { -1.0 }),
+                p - Vec3::Y * bob,
+            );
+            self.person(m, s, draws);
+        }
+        // Swimmers out in the shallows, heads and shoulders bobbing.
+        for i in 0..4u32 {
+            let s = (k * 16 + 10 + i).wrapping_mul(2_246_822_519);
+            let out = 18.0 + hash(s) * 22.0;
+            let along = (hash(s + 1) - 0.5) * 30.0 + (time * 0.15 + hash(s + 2) * 6.0).sin() * 3.0;
+            let p = at + fwd * out + side * along;
+            let bob = (time * 1.7 + hash(s + 3) * 6.0).sin() * 0.12;
+            let m = Mat4::from_rotation_translation(
+                facing(Vec2::new(-sea.x, -sea.y)),
+                Vec3::new(p.x, -1.15 + bob, p.z),
+            );
+            self.person(m, s, draws);
+        }
+        // Someone strolling along the waterline and back.
+        let s = (k * 16 + 15).wrapping_mul(2_246_822_519);
+        let walk = (time * 0.05 + hash(s)).fract();
+        let u = if walk < 0.5 {
+            walk * 2.0
+        } else {
+            2.0 - walk * 2.0
+        };
+        let dir = if walk < 0.5 { side } else { -side };
+        let p = at + fwd * 12.0 + side * (u * 60.0 - 30.0);
+        let m = Mat4::from_rotation_translation(facing(Vec2::new(dir.x, dir.z)), p);
+        self.person(m, s, draws);
+    }
+
+    /// Surfers off a surf shack: riding a wave in toward the shore, then lying on their
+    /// boards paddling back out, the sea toward `sea`.
+    fn surfers(&self, f: &Mat4, sea: Vec2, k: u32, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
+        let at = f.w_axis.truncate();
+        let fwd = Vec3::new(sea.x, 0.0, sea.y);
+        let side = Vec3::new(-sea.y, 0.0, sea.x);
+        for i in 0..4u32 {
+            let s = (k * 8 + i).wrapping_mul(2_654_435_761);
+            let cycle = (time / 26.0 + hash(s)).fract();
+            let lane = side * ((i as f32 - 1.5) * 14.0);
+            let (out, riding) = if cycle < 0.35 {
+                // Up and riding in.
+                (110.0 - cycle / 0.35 * 70.0, true)
+            } else {
+                // Lying down, paddling back out.
+                (40.0 + (cycle - 0.35) / 0.65 * 70.0, false)
+            };
+            let p = at + fwd * out + lane;
+            let y = -0.05 + (time * 1.4 + hash(s + 1) * 6.0).sin() * 0.1;
+            let toward = if riding { -fwd } else { fwd };
+            let face = facing(Vec2::new(toward.x, toward.z));
+            let board = Mat4::from_rotation_translation(face, Vec3::new(p.x, y, p.z));
+            draws.push((self.surfboard, Instance::new(board)));
+            let body = if riding {
+                let lean = (time * 0.9 + hash(s + 2) * 6.0).sin() * 0.15;
+                board
+                    * Mat4::from_rotation_y(FRAC_PI_2)
+                    * Mat4::from_rotation_z(lean)
+                    * Mat4::from_translation(Vec3::Y * 0.06)
+            } else {
+                board
+                    * Mat4::from_translation(Vec3::new(0.0, 0.2, 0.1))
+                    * Mat4::from_rotation_x(FRAC_PI_2)
+                    * Mat4::from_translation(Vec3::new(0.0, -0.9, 0.0))
+            };
+            self.person(body, s, draws);
+        }
+    }
+
+    /// Climbers on a crag's face, each on a rope from the anchors at the top, slowly
+    /// climbing, resting, and lowering off to start again.
+    fn climbers(
+        &self,
+        f: &Mat4,
+        spots: &[(Vec3, Vec3)],
+        k: u32,
+        time: f32,
+        draws: &mut Vec<(MeshId, Instance)>,
+    ) {
+        let top = f.w_axis.truncate();
+        for (i, (spot, out)) in spots.iter().enumerate() {
+            let s = (k * 8 + i as u32).wrapping_mul(2_654_435_761);
+            let cycle = (time / 70.0 + hash(s)).fract();
+            // Up the rope in fits and starts, then a quick lower back down.
+            let climb = if cycle < 0.8 {
+                cycle / 0.8
+            } else {
+                1.0 - (cycle - 0.8) / 0.2
+            };
+            let fits = climb + (time * 0.8 + hash(s + 1) * 6.0).sin() * 0.01;
+            let at = spot.lerp(top - Vec3::Y * 2.0 + *out * 0.6, fits * 0.85);
+            // Facing the rock, leaning out a little on the rope.
+            let face = facing(Vec2::new(-out.x, -out.z)) * Quat::from_rotation_x(-0.25);
+            let m = Mat4::from_rotation_translation(face, at - Vec3::Y * 0.9);
+            self.person(m, s, draws);
+            let hand = at + Vec3::Y * 0.6;
+            let anchor = top + Vec3::Y * 1.1;
+            let len = hand.distance(anchor);
+            draws.push((
+                self.line,
+                Instance::new(Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, len, 1.0),
+                    Quat::from_rotation_arc(Vec3::Y, (anchor - hand) / len.max(0.01)),
+                    hand,
+                )),
+            ));
+        }
+    }
+
+    /// A few goats round a lick, stepping from spot to spot on the steep ground and
+    /// stopping to nibble.
+    fn goats(&self, spots: &[Vec3], k: u32, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
+        if spots.len() < 2 {
+            return;
+        }
+        for g in 0..spots.len().min(5) as u32 {
+            let s = (k * 16 + g).wrapping_mul(2_246_822_519);
+            let step = (time / 18.0 + hash(s)) as u32;
+            let pick = |n: u32| {
+                spots
+                    [(hash(s ^ n.wrapping_mul(40_503)) * spots.len() as f32) as usize % spots.len()]
+            };
+            let (a, b) = (pick(step), pick(step + 1));
+            let u = ((time / 18.0 + hash(s)).fract() * 3.0).clamp(0.0, 1.0);
+            let at = a.lerp(b, u * u * (3.0 - 2.0 * u));
+            let dir = Vec2::new(b.x - a.x, b.z - a.z);
+            let m = Mat4::from_rotation_translation(facing(dir), at);
+            draws.push((self.goat, Instance::new(m)));
+        }
+    }
+
+    /// Someone on a bungee cord under a rope bridge: dropping, bouncing and slowly
+    /// hauled back up.
+    fn bungee(&self, f: &Mat4, k: u32, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
+        let s = k.wrapping_mul(2_654_435_761);
+        let deck = f.w_axis.truncate() + Vec3::Y * 0.2;
+        let t = (time + hash(s) * 40.0).rem_euclid(40.0);
+        let depth = if t < 2.0 {
+            // Off the edge.
+            0.5 * 9.8 * t * t
+        } else if t < 14.0 {
+            // Bouncing, each smaller.
+            let b = t - 2.0;
+            19.6 + (b * 2.6).cos() * 16.0 * (-b * 0.3).exp() - 2.0
+        } else if t < 30.0 {
+            // Hauled up.
+            17.6 * (1.0 - (t - 14.0) / 16.0)
+        } else {
+            0.0
+        };
+        let at = deck - Vec3::Y * depth;
+        let upside = Quat::from_rotation_x(PI);
+        let m = Mat4::from_rotation_translation(upside, at);
+        self.person(m, s, draws);
+        if depth > 0.5 {
+            draws.push((
+                self.line,
+                Instance::new(Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, depth, 1.0),
+                    Quat::IDENTITY,
+                    at,
+                )),
+            ));
+        }
+    }
+
+    /// A paraglider over a lookout: off the top, spiraling slowly down a long way out,
+    /// and round again.
+    fn paraglider(&self, f: &Mat4, k: u32, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
+        let at = f.w_axis.truncate();
+        let s = k.wrapping_mul(2_654_435_761);
+        let flight = (time / 160.0 + hash(s)).fract();
+        let a = time * 0.09 + hash(s + 1) * TAU;
+        let r = 90.0 + flight * 60.0;
+        let p = at + Vec3::new(a.cos() * r, 140.0 - flight * 110.0, a.sin() * r);
+        // Flying round the circle, heading along it.
+        let along = Vec2::new(-a.sin(), a.cos());
+        let face = facing(along) * Quat::from_rotation_z(-0.18);
+        draws.push((
+            self.parasail,
+            Instance::new(Mat4::from_rotation_translation(face, p)),
+        ));
+        self.person(
+            Mat4::from_rotation_translation(facing(along), p - Vec3::Y * 1.6),
+            s,
+            draws,
+        );
+    }
+
     fn person(&self, m: Mat4, seed: u32, draws: &mut Vec<(MeshId, Instance)>) {
         let shirt = linear(SHIRTS[(hash(seed) * 8.0) as usize % 8]);
         draws.push((self.body, Instance::tinted(m, shirt.extend(1.0))));
@@ -1744,13 +2207,17 @@ impl ParkLife {
         let m =
             *f * Mat4::from_rotation_translation(facing(dir), Vec3::new(at.x, 0.1 + bump, at.y));
         draws.push((self.tractor, Instance::new(m)));
-        // Cows and sheep grazing the pasture, wandering a few steps now and then.
-        let (mid, half) = PASTURE;
+        // Cows and sheep grazing the pasture, wandering a few steps now and then, never
+        // out onto a road through it.
+        let spots = &self.pastures[k as usize];
+        if spots.is_empty() {
+            return;
+        }
         for i in 0..9u32 {
             let seed = (k * 64 + i).wrapping_mul(2_246_822_519);
             let spot = move |n: u32| {
-                let r = |q: u32| hash(seed ^ n.wrapping_mul(40_503) ^ q.wrapping_mul(7_919));
-                mid + Vec2::new((r(1) * 2.0 - 1.0) * half.x, (r(2) * 2.0 - 1.0) * half.y)
+                let r = hash(seed ^ n.wrapping_mul(40_503));
+                spots[(r * spots.len() as f32) as usize % spots.len()]
             };
             let r = roam(spot, time + hash(seed) * 40.0, 25.0, 0.8);
             let mesh = if i % 3 == 0 { self.cow } else { self.sheep };
@@ -2048,7 +2515,7 @@ impl ParkLife {
             let Some(t) = traffic.halted_for(v, sim_time) else {
                 continue;
             };
-            let p = traffic.pose(v, sim_time);
+            let p = traffic.pose_of(i, sim_time);
             if p.pos.distance(cam) > 300.0 {
                 continue;
             }

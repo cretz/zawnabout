@@ -1409,6 +1409,22 @@ pub fn ghost_ship() -> MeshBuilder {
 }
 
 /// The glint over a find: a four point star, unit size, drawn glowing.
+/// A footprint pressed into snow: a flat dark oval, toes forward (+z), a hair above
+/// the ground.
+pub fn footprint() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let col = Rgb(0x8A9CB8);
+    let n = 8;
+    let c = Vec3::new(0.0, 0.04, 0.0);
+    for k in 0..n {
+        let a0 = k as f32 / n as f32 * std::f32::consts::TAU;
+        let a1 = (k + 1) as f32 / n as f32 * std::f32::consts::TAU;
+        let p = |a: f32| Vec3::new(a.sin() * 0.32, 0.04, a.cos() * 0.5);
+        m.tri(c, p(a1), p(a0), col);
+    }
+    m
+}
+
 pub fn star() -> MeshBuilder {
     let mut m = MeshBuilder::new();
     let w = Rgb(0xFFFFFF);

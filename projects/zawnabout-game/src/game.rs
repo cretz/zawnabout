@@ -3,8 +3,8 @@
 
 use std::fmt::Write;
 
-use glam::{Vec2, Vec3};
-use zawnabout_sim::{DT, Dragon, EntityId, Mode, ParamDef, Params, Sim};
+use glam::{Quat, Vec2, Vec3};
+use zawnabout_sim::{DT, Dragon, DragonInput, EntityId, Mode, ParamDef, Params, Sim};
 
 use crate::book::{Do, HoardView, View};
 use crate::camera::{Camera, CameraParams, Target};
@@ -89,6 +89,9 @@ pub enum Ask {
     Source,
 }
 
+/// How far the camera swings round (rad) to show someone to talk to beside the dragon.
+const TALK_SWING: f32 = 0.55;
+
 /// Someone to talk to, close by the dragon standing on the ground.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Listener {
@@ -100,6 +103,10 @@ pub enum Listener {
     Guest(usize, Vec3),
     /// A named dragon, by its number.
     Kin(usize, Vec3),
+    /// An animal or someone out in a boat: its name and its call.
+    Critter(Vec3, &'static str, crate::audio::Call),
+    /// The driver of car `i`, which the dragon stands on.
+    Driver(usize, Vec3),
 }
 
 impl Listener {
@@ -110,8 +117,18 @@ impl Listener {
                 *p + Vec3::Y * 2.6
             }
             Listener::Kin(_, p) => *p + Vec3::Y * 4.0,
+            Listener::Critter(p, ..) => *p + Vec3::Y * 3.0,
+            Listener::Driver(_, p) => *p + Vec3::Y * 2.4,
         }
     }
+}
+
+/// A race against a car to its next stop.
+#[derive(Clone, Debug)]
+pub struct CarRace {
+    pub car: usize,
+    pub at: Vec3,
+    pub town: String,
 }
 
 /// How near the dragon must stand to talk to someone.
@@ -150,6 +167,17 @@ pub struct Game {
     pub visuals: Vec<(EntityId, DragonVisual)>,
     /// A landing spot picked by a tap, sent with the next tick's input.
     pub land_request: Option<Vec3>,
+    /// A big bird the dragon was tapped to fly alongside, until steered away.
+    pub escort: Option<usize>,
+    /// Sounds of things talked to, for the sound to play.
+    pub calls: std::cell::RefCell<Vec<crate::audio::Call>>,
+    /// A race against a car to where it is going: offered by its driver, then under way.
+    pub race_offer: Option<CarRace>,
+    pub car_race: Option<CarRace>,
+    /// Every townsfolk line heard so far, so nobody says it again.
+    pub heard: std::collections::HashSet<String>,
+    /// Where the red arrow points, for the maps.
+    pub goal_spot: Option<Vec3>,
     /// Seconds left before a dragged look eases back.
     look_hold: f32,
     /// Look keys held: I up, K down, J left, L right.
@@ -184,6 +212,12 @@ pub struct Game {
     pub asks: Vec<Ask>,
     /// Gamepad buttons held as of the last poll, to spot presses.
     pad_was: Vec<bool>,
+    /// Gamepad buttons used for a card or the journal, kept from flying until let go.
+    pad_used: Vec<bool>,
+    /// The page's own map should open on the goal: Show me was picked.
+    pub map_wanted: bool,
+    /// The right stick, looking around.
+    pad_look: Vec2,
     /// Postcards waiting for their picture, the first being taken now.
     pub snaps: Vec<Snap>,
     /// The townsperson nearest the dragon, found while drawing them: where, and who.
@@ -191,6 +225,10 @@ pub struct Game {
     /// Anyone else drawn nearby, as of the last frame: fishers on the piers, shoppers at
     /// a market, people on a boat's deck. Who is a number from where they are.
     pub near_drawn: std::cell::Cell<Option<(Vec3, u32)>>,
+    /// The nearest animal or paddler drawn, with its name and call.
+    pub near_critter: std::cell::Cell<Option<(Vec3, &'static str, crate::audio::Call)>>,
+    /// The whale in sight nearest the dragon, for the whale postcard.
+    pub near_whale: std::cell::Cell<Option<Vec3>>,
     /// Townsfolk talked to so far, so lines change.
     chats: u32,
     /// How far to look for the nearest townsperson. Scripts widen it to find someone.
@@ -209,6 +247,12 @@ pub struct Game {
     kin_talks: u32,
     /// The racer being raced, if one is.
     racing: Option<usize>,
+    /// A dragon set to race, waiting for the player to take off.
+    race_ready: Option<usize>,
+    /// Who the dragon is turning round to face, having started talking to them.
+    face: Option<Vec3>,
+    /// A first game's few tips, which one is next and how long it has waited (s).
+    first_steps: Option<(u8, f32)>,
     /// Fire on the egg so far (s), time flown with the hatchling (s), and fire breathed
     /// beside it (s).
     warm: f32,
@@ -233,22 +277,37 @@ pub struct Floater {
     pub from: Vec3,
     pub age: f32,
     pub look: u32,
-    /// Where they touch down.
+    /// Where they touch down, under where they have drifted to.
     pub ground: f32,
+    /// How high they are now.
+    pub y: f32,
 }
 
 impl Floater {
-    /// How fast they drift down (m/s).
+    /// How fast they drift down the last stretch (m/s).
     pub const SINK: f32 = 3.5;
 
     /// Where they are now, and whether they have landed yet.
     pub fn at(&self) -> (Vec3, bool) {
-        let y = self.from.y - self.age * Self::SINK;
         let drift = Vec3::new((self.age * 0.7).sin() * 1.5, 0.0, self.age * 0.6);
         (
-            Vec3::new(self.from.x, y.max(self.ground), self.from.z) + drift,
-            y <= self.ground,
+            Vec3::new(self.from.x, self.y.max(self.ground), self.from.z) + drift,
+            self.y <= self.ground,
         )
+    }
+
+    /// Down a while: quick from high up with the umbrella tugging, gently at the end.
+    fn sink(&mut self, dt: f32, world: &zawnabout_sim::World) {
+        self.age += dt;
+        let (at, down) = self.at();
+        // Landed: the count goes on below the ground, to tell when to go home.
+        if down {
+            self.y -= Self::SINK * dt;
+            return;
+        }
+        self.ground = world.support_still(at.x, at.z, self.y + 2.0);
+        let high = self.y - self.ground;
+        self.y -= (Self::SINK + ((high - 12.0) * 0.5).clamp(0.0, 14.0)) * dt;
     }
 }
 
@@ -287,6 +346,12 @@ impl Game {
             camera: Camera::default(),
             visuals,
             land_request: None,
+            escort: None,
+            heard: std::collections::HashSet::new(),
+            race_offer: None,
+            car_race: None,
+            calls: std::cell::RefCell::new(Vec::new()),
+            goal_spot: None,
             look_hold: 0.0,
             look_keys: [false; 4],
             feedback: Feedback::default(),
@@ -306,9 +371,14 @@ impl Game {
             ui_scale: 1.0,
             asks: Vec::new(),
             pad_was: Vec::new(),
+            pad_used: Vec::new(),
+            map_wanted: false,
+            pad_look: Vec2::ZERO,
             snaps: Vec::new(),
             near_folk: std::cell::Cell::new(None),
             near_drawn: std::cell::Cell::new(None),
+            near_critter: std::cell::Cell::new(None),
+            near_whale: std::cell::Cell::new(None),
             chats: 0,
             folk_search: TALK_REACH,
             chore_offer: None,
@@ -318,6 +388,9 @@ impl Game {
             kin: Vec::new(),
             kin_talks: 0,
             racing: None,
+            race_ready: None,
+            face: None,
+            first_steps: None,
             warm: 0.0,
             together: 0.0,
             fired: 0.0,
@@ -471,19 +544,17 @@ impl Game {
         if d.mode != Mode::Ground || self.halted() || self.feedback.active {
             return None;
         }
+        // Dragons perch on crags and rims, so one a little above or below still counts.
+        let flat = |p: Vec3| (p.x - d.pos.x).hypot(p.z - d.pos.z);
         if let Some((i, f)) = self
             .flock
             .dragons
             .iter()
             .enumerate()
             .filter(|(i, f)| crate::play::kin_met(play, *i) && f.settled())
-            .min_by(|a, b| {
-                a.1.d
-                    .pos
-                    .distance(d.pos)
-                    .total_cmp(&b.1.d.pos.distance(d.pos))
-            })
-            && f.d.pos.distance(d.pos) < TALK_REACH * 1.6
+            .min_by(|a, b| flat(a.1.d.pos).total_cmp(&flat(b.1.d.pos)))
+            && flat(f.d.pos) < TALK_REACH * 1.6
+            && (f.d.pos.y - d.pos.y).abs() < TALK_REACH * 2.0
         {
             return Some(Listener::Kin(i, f.d.pos));
         }
@@ -493,13 +564,37 @@ impl Game {
         if let Some((k, p)) = crate::play::guest_near(play, d.pos, TALK_REACH) {
             return Some(Listener::Guest(k, p));
         }
+        // Standing on a car: its driver.
+        let traffic = &self.sim.world.traffic;
+        if let Some(i) = d.riding
+            && traffic.vehicles[i].kind == zawnabout_sim::town::Kind::Car
+        {
+            return Some(Listener::Driver(i, traffic.poses[i].pos));
+        }
         let dist = |(p, _): &(Vec3, u32)| (p.x - d.pos.x).hypot(p.z - d.pos.z);
-        let (p, seed) = [self.near_folk.get(), self.near_drawn.get()]
+        // A walker is both found and drawn: the one found keeps the same seed.
+        let walker = self.near_folk.get();
+        let drawn = self
+            .near_drawn
+            .get()
+            .filter(|(p, _)| walker.is_none_or(|(w, _)| w.distance(*p) > 1.5));
+        let folk = [walker, drawn]
             .into_iter()
             .flatten()
-            .filter(|f| dist(f) < TALK_REACH)
-            .min_by(|a, b| dist(a).total_cmp(&dist(b)))?;
-        Some(Listener::Folk(p, seed))
+            .filter(|f| dist(f) < TALK_REACH && crate::play::riding_folk(play) != Some(f.1))
+            .min_by(|a, b| dist(a).total_cmp(&dist(b)));
+        let critter = self
+            .near_critter
+            .get()
+            .filter(|(p, ..)| (p.x - d.pos.x).hypot(p.z - d.pos.z) < 16.0);
+        match (folk, critter) {
+            (Some(f), Some(c)) if (c.0.x - d.pos.x).hypot(c.0.z - d.pos.z) < dist(&f) => {
+                Some(Listener::Critter(c.0, c.1, c.2))
+            }
+            (Some((p, seed)), _) => Some(Listener::Folk(p, seed)),
+            (None, Some(c)) => Some(Listener::Critter(c.0, c.1, c.2)),
+            (None, None) => None,
+        }
     }
 
     /// Whether the one to talk to has a favor to ask or be thanked for.
@@ -516,6 +611,7 @@ impl Game {
         let Some(who) = self.listener() else {
             return self.ask_rider();
         };
+        self.face = Some(who.bubble());
         let card = match who {
             Listener::Local(i, _) => {
                 let sim = &self.sim;
@@ -546,6 +642,54 @@ impl Game {
                 };
                 card
             }
+            Listener::Critter(_, name, call) => {
+                let paddling = matches!(name, "Kayaker" | "Rower");
+                if !paddling {
+                    self.calls.borrow_mut().push(call);
+                }
+                let heard = &self.heard;
+                let body = crate::talk::critter(name, self.chats, &|l| heard.contains(l));
+                self.chats += 1;
+                self.heard.insert(body.clone());
+                crate::book::Card {
+                    title: name.into(),
+                    body,
+                    foot: String::new(),
+                    kind: crate::book::CardKind::Say,
+                }
+            }
+            Listener::Driver(i, _) => {
+                self.calls.borrow_mut().push(crate::audio::Call::Honk);
+                let time = self.sim.tick as f32 * zawnabout_sim::DT;
+                let to = self.sim.world.traffic.next_stop(i, time);
+                let town = to.map_or("the end of the road".to_string(), |p| self.town_near(p));
+                let racing = self.car_race.as_ref().is_some_and(|r| r.car == i);
+                let seed = i as u32 * 7 + 3;
+                let hello = crate::talk::driver(seed, self.chats);
+                self.chats += 1;
+                let body = if racing {
+                    format!("Ha! You can't win a race sitting on my roof! We're off to {town}.")
+                } else {
+                    format!(
+                        "{hello} We're off to {town}. Fancy a race there? First one there wins!"
+                    )
+                };
+                self.race_offer = to.map(|at| CarRace {
+                    car: i,
+                    at,
+                    town: town.clone(),
+                });
+                crate::book::Card {
+                    title: format!("{}, driving", crate::talk::name(seed)),
+                    body,
+                    foot: String::new(),
+                    kind: if racing || to.is_none() {
+                        crate::book::CardKind::Say
+                    } else {
+                        crate::book::CardKind::Drive
+                    },
+                }
+            }
             Listener::Folk(p, seed) => {
                 let world = &self.sim.world;
                 // Somewhere a dragon can walk up to: on the ground, not up on a roof or
@@ -563,7 +707,9 @@ impl Game {
                             !world.afloat(q.x, q.z, q.y)
                                 && !world.in_building(*q - Vec3::Y * 0.5)
                                 && !world.in_building(*q + Vec3::Y)
-                                && (q.y - p.y).abs() < 6.0
+                                // Not up on top of a statue or a wall: about where
+                                // they stand, or a little below.
+                                && (-6.0..2.0).contains(&(q.y - p.y))
                         })
                         .unwrap_or_else(|| at(x, z))
                 };
@@ -593,9 +739,12 @@ impl Game {
                     lair: crate::play::lair_tip(play, seed),
                 };
                 self.chats += 1;
+                let heard = &self.heard;
+                let body = crate::talk::line(seed, self.chats, &scene, &|l| heard.contains(l));
+                self.heard.insert(body.clone());
                 crate::book::Card {
                     title: crate::talk::name(seed).into(),
-                    body: crate::talk::line(seed, self.chats, &scene),
+                    body,
                     foot: String::new(),
                     kind: crate::book::CardKind::Say,
                 }
@@ -610,7 +759,7 @@ impl Game {
     /// hop off, or keep flying.
     pub fn ask_rider(&mut self) -> bool {
         let Some(rider) = self.play.as_ref().and_then(crate::play::rider) else {
-            return false;
+            return self.ask_favor();
         };
         let landed = self.player_dragon().mode == Mode::Ground;
         let wants = match rider.wants.strip_prefix("The ") {
@@ -631,6 +780,107 @@ impl Game {
             body,
             foot: String::new(),
             kind: crate::book::CardKind::Rider,
+        });
+        self.release_keys();
+        true
+    }
+
+    /// The name of the town nearest `p`, as people say it.
+    pub fn town_near(&self, p: Vec3) -> String {
+        let towns = self.sim.world.terrain.def.towns;
+        let best = towns
+            .iter()
+            .map(|t| {
+                let n = t.pts.len().max(1) as f32;
+                let c = t
+                    .pts
+                    .iter()
+                    .fold(Vec2::ZERO, |a, q| a + Vec2::new(q[0], q[1]))
+                    / n;
+                (c.distance(Vec2::new(p.x, p.z)), t.id)
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        match best {
+            Some((d, id)) if d < 900.0 => {
+                let last = id.rsplit('/').next().unwrap_or(id);
+                last.split('-')
+                    .map(|w| {
+                        let mut c = w.chars();
+                        c.next()
+                            .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+                            .unwrap_or_default()
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            }
+            _ => "the end of the road".into(),
+        }
+    }
+
+    /// A race against a car: won by landing where it is going first, lost when it gets
+    /// there first.
+    fn race_car(&mut self) {
+        let Some(r) = self.car_race.clone() else {
+            return;
+        };
+        let d = self.player_dragon();
+        let landed = d.mode == Mode::Ground && d.riding != Some(r.car);
+        let me = Vec2::new(d.pos.x, d.pos.z);
+        if landed && me.distance(Vec2::new(r.at.x, r.at.z)) < 45.0 {
+            self.car_race = None;
+            self.calls.borrow_mut().push(crate::audio::Call::Honk);
+            self.toast(
+                "You won!",
+                &format!(
+                    "First to {}! The driver honks a big hello as they pull in.",
+                    r.town
+                ),
+            );
+            return;
+        }
+        let car = self.sim.world.traffic.poses[r.car].pos;
+        if car.distance(r.at) < 12.0 {
+            self.car_race = None;
+            self.toast(
+                "The car got there first",
+                &format!(
+                    "Beaten to {}! Good race, though. Ask another driver for a rematch.",
+                    r.town
+                ),
+            );
+        }
+    }
+
+    /// With nobody aboard, the favor being looked for: where it is, or stop looking.
+    fn ask_favor(&mut self) -> bool {
+        let me = self.player_dragon().pos;
+        let world = &self.sim.world;
+        let sim = &self.sim;
+        let beacon = |id: &str| {
+            let (i, lit) = sim.beacon(id)?;
+            (!lit).then(|| world.beacons[i].flame)
+        };
+        let Some(goal) = self
+            .play
+            .as_ref()
+            .and_then(|p| crate::play::favor_goal(p, &beacon, me))
+        else {
+            return false;
+        };
+        let far = goal.at.distance(me);
+        let how = if far < 150.0 {
+            "It's right around here somewhere.".to_string()
+        } else {
+            format!(
+                "About {} m that way. Follow the red arrow.",
+                (far / 10.0).round() * 10.0
+            )
+        };
+        self.hud.book.cards.push(crate::book::Card {
+            title: goal.name,
+            body: format!("Still looking for this one. {how}"),
+            foot: "Favor under way".into(),
+            kind: crate::book::CardKind::Favor,
         });
         self.release_keys();
         true
@@ -700,45 +950,90 @@ impl Game {
                 },
             })
         });
-        self.hud.goal = flock_goal
+        let world = &self.sim.world;
+        let sim = &self.sim;
+        let beacon = |id: &str| {
+            let (i, lit) = sim.beacon(id)?;
+            (!lit).then(|| world.beacons[i].flame)
+        };
+        let race_goal = self.car_race.as_ref().map(|r| crate::play::Goal {
+            name: format!("Race to {}", r.town),
+            at: r.at,
+            r: 0.0,
+        });
+        let ground = |x: f32, z: f32| world.terrain.height(x, z).max(world.terrain.def.sea_level);
+        let vehicle_race = self
+            .play
+            .as_ref()
+            .and_then(|p| crate::play::race_goal(p, &ground));
+        let goal = race_goal
+            .or(vehicle_race)
+            .or(flock_goal)
             .or_else(|| self.play.as_ref().and_then(crate::play::goal))
-            .filter(|g| g.at.distance(me) > g.r)
-            .map(|g| {
-                let (mut at, seen) = self.to_screen(g.at + Vec3::Y * 2.0);
-                if !seen {
-                    // Which way to turn, worked out from the camera, so a spot behind
-                    // points down and round rather than wherever its flipped image falls.
-                    let cam = &self.camera;
-                    let fwd = (cam.look - cam.pos).normalize_or(Vec3::Z);
-                    let right = fwd.cross(Vec3::Y).normalize_or(Vec3::X);
-                    let up = right.cross(fwd);
-                    let to = g.at - cam.pos;
-                    let (x, y, z) = (to.dot(right), to.dot(up), to.dot(fwd));
-                    let mut dir = glam::Vec2::new(x, -y);
-                    if z < 0.0 {
-                        dir.y = dir.y.abs().max(x.abs() * 0.5 + 1.0);
-                    }
-                    at = self.hud.book.screen() * 0.5 + dir.normalize_or(glam::Vec2::Y) * 10000.0;
+            .or_else(|| {
+                self.play
+                    .as_ref()
+                    .and_then(|p| crate::play::favor_goal(p, &beacon, me))
+            })
+            .filter(|g| g.at.distance(me) > g.r);
+        self.goal_spot = goal.as_ref().map(|g| g.at);
+        self.hud.goal_xz = self.goal_spot.map(|p| Vec2::new(p.x, p.z));
+        self.hud.goal = goal.map(|g| {
+            let (mut at, seen) = self.to_screen(g.at + Vec3::Y * 2.0);
+            if !seen {
+                // Which way to turn, worked out from the camera, so a spot behind
+                // points down and round rather than wherever its flipped image falls.
+                let cam = &self.camera;
+                let fwd = (cam.look - cam.pos).normalize_or(Vec3::Z);
+                let right = fwd.cross(Vec3::Y).normalize_or(Vec3::X);
+                let up = right.cross(fwd);
+                let to = g.at - cam.pos;
+                let (x, y, z) = (to.dot(right), to.dot(up), to.dot(fwd));
+                let mut dir = glam::Vec2::new(x, -y);
+                if z < 0.0 {
+                    dir.y = dir.y.abs().max(x.abs() * 0.5 + 1.0);
                 }
-                let far = me.distance(g.at);
-                let far = if far < 1000.0 {
-                    format!("{:.0} m", (far / 10.0).round() * 10.0)
-                } else {
-                    format!("{:.1} km", far / 1000.0)
-                };
-                (at, seen, format!("{}  {far}", g.name))
-            });
+                at = self.hud.book.screen() * 0.5 + dir.normalize_or(glam::Vec2::Y) * 10000.0;
+            }
+            let far = me.distance(g.at);
+            let far = if far < 1000.0 {
+                format!("{:.0} m", (far / 10.0).round() * 10.0)
+            } else {
+                format!("{:.1} km", far / 1000.0)
+            };
+            // The arrow points straight there, as the crow flies. When rock is in the
+            // way, the tag says so: a cave to find a way into, a way out of one, or a
+            // hill to go round.
+            let t = &self.sim.world.terrain;
+            let covered = |p: Vec3| t.height(p.x, p.z) > p.y + 6.0;
+            // From head height, and only through real rock, so a bump in a field between
+            // here and a spot just over it is no hill.
+            let lift = Vec3::Y * 4.0;
+            let blocked = me.distance(g.at) > 60.0
+                && (1..24).any(|k| t.sdf((me + lift).lerp(g.at + lift, k as f32 / 24.0)) < -4.0);
+            let how = match (covered(me), covered(g.at)) {
+                (false, true) => ", inside a cave",
+                (true, false) => ", find the way out",
+                (true, true) if blocked => ", through the caves",
+                _ if blocked => ", round the hill",
+                _ => "",
+            };
+            (at, seen, format!("{}  {far}{how}", g.name))
+        });
+        // Looking for a favor with nobody aboard, the round button asks about it too, so
+        // a touch screen can show it on the map or stop looking.
+        if !riding && self.hud.goal.is_some() && self.flock.busy().is_none() {
+            self.hud.rider_at = Some(self.to_screen(head))
+                .filter(|(_, seen)| *seen)
+                .map(|(at, _)| at);
+        }
         let world = &self.sim.world;
         for f in &mut self.floaters {
-            f.age += dt;
-            if f.ground == f32::MIN {
-                f.ground = world.support_still(f.from.x, f.from.z, f.from.y);
-            }
+            f.sink(dt, world);
         }
-        self.floaters.retain(|f| {
-            let (_, down) = f.at();
-            !down || f.age < (f.from.y - f.ground) / Floater::SINK + 4.0
-        });
+        // A little while on the ground to fold the umbrella, then off home.
+        self.floaters
+            .retain(|f| f.y > f.ground - Floater::SINK * 4.0);
     }
 
     /// Whether a click or tap at a fraction of the screen falls on the passenger's
@@ -914,6 +1209,40 @@ impl Game {
         }
     }
 
+    /// A first game only: how to take off once the journal is put away, where to look
+    /// for someone to help once flying a while, and later what the journal keeps. Each once.
+    fn first_steps(&mut self, dt: f32) {
+        let Some((step, waited)) = self.first_steps else {
+            return;
+        };
+        if self.hud.book.open || self.halted() {
+            return;
+        }
+        let flying = self.player_dragon().mode == zawnabout_sim::Mode::Air;
+        let waited = waited + if step == 1 && !flying { 0.0 } else { dt };
+        let (wait, line) = match step {
+            0 => (
+                2.0,
+                "Hello, little dragon! Flap to take off, and steer wherever you like.",
+            ),
+            1 => (
+                8.0,
+                "See a ! over someone's head? Land right beside them to say hello.",
+            ),
+            _ => (
+                50.0,
+                "Shiny things, postcards, friends: your journal keeps them all.",
+            ),
+        };
+        if waited < wait {
+            self.first_steps = Some((step, waited));
+            return;
+        }
+        let gameplay = self.play.is_some();
+        self.first_steps = (step < 2 && gameplay).then_some((step + 1, 0.0));
+        self.toast_all(vec![("Tip".into(), line.into())]);
+    }
+
     /// Answers a dragon's ask: follow it, race it, swap, or take the egg.
     fn kin_answer(&mut self, i: usize, ask: crate::book::KinAsk) {
         use crate::book::KinAsk;
@@ -927,10 +1256,13 @@ impl Game {
                 )]);
             }
             KinAsk::Race => {
-                self.flock.race(i, k);
-                self.racing = Some(i);
+                // The racer waits for you to take off, so nobody gets a head start.
+                self.race_ready = Some(i);
                 let to = k.race.as_ref().map_or(String::new(), |r| r.0.clone());
-                self.toast_all(vec![(k.name.clone(), format!("Go! First to {to} wins!"))]);
+                self.toast_all(vec![(
+                    k.name.clone(),
+                    format!("On your marks! Take off and we race to {to}!"),
+                )]);
             }
             KinAsk::Trade | KinAsk::Egg => {
                 if let Some(play) = &mut self.play
@@ -982,6 +1314,19 @@ impl Game {
         let news = self.flock.tick(&self.kin, &met, &me, p, world, DT);
         let mut lines = Vec::new();
         let mut cards = Vec::new();
+        if let Some(i) = self.race_ready {
+            let k = &self.kin[i];
+            let start = self.flock.dragons.get(i).map(|f| f.d.pos);
+            if me.mode == Mode::Air {
+                self.race_ready = None;
+                self.flock.race(i, k);
+                self.racing = Some(i);
+                let to = k.race.as_ref().map_or(String::new(), |r| r.0.clone());
+                lines.push((k.name.clone(), format!("Go! First to {to} wins!")));
+            } else if start.is_none_or(|s| s.distance(me.pos) > 80.0) {
+                self.race_ready = None;
+            }
+        }
         for n in news {
             match n {
                 crate::kin::FlockNews::Shown(i) => {
@@ -1108,7 +1453,11 @@ impl Game {
 
     pub fn hoard_view(&self) -> Option<HoardView> {
         let world = &self.sim.world;
-        let beacon = |id: &str| world.beacons.iter().find(|b| b.id == id).map(|b| b.flame);
+        let sim = &self.sim;
+        let beacon = |id: &str| {
+            let (i, lit) = sim.beacon(id)?;
+            (!lit).then(|| world.beacons[i].flame)
+        };
         self.play.as_ref().map(|p| crate::play::view(p, &beacon))
     }
 
@@ -1131,7 +1480,12 @@ impl Game {
         if let Some(snap) = self.snaps.first()
             && let Some(play) = self.play.as_ref()
             && let Some((at, r)) = crate::play::card_spot(play, snap.card)
-            && let Some((pos, look)) = self.best_view(at, r, crate::play::card_low(play, snap.card))
+            && let Some((pos, look)) = self.best_view(
+                at,
+                r,
+                crate::play::card_low(play, snap.card),
+                crate::play::card_face(play, snap.card),
+            )
         {
             self.camera.pos = pos;
             self.camera.look = look;
@@ -1157,7 +1511,13 @@ impl Game {
     /// Where to stand to see the place at `at`, about `r` across, at its best: a little
     /// way off and up, with nothing in the way, the light from behind if it can be, and
     /// open air under the camera. None when no way round is clear.
-    fn best_view(&self, at: Vec3, r: f32, low: bool) -> Option<(Vec3, Vec3)> {
+    fn best_view(
+        &self,
+        at: Vec3,
+        r: f32,
+        low: bool,
+        (face, high): (Option<f32>, Option<f32>),
+    ) -> Option<(Vec3, Vec3)> {
         let world = &self.sim.world;
         let terrain = &world.terrain;
         // A falls is seen from its pool: aim halfway down the drop from its foot.
@@ -1178,7 +1538,10 @@ impl Game {
             None => (at, r),
         };
         let under = terrain.daylight(at + Vec3::Y * 2.0) < 0.5;
-        let subject = at + Vec3::Y * (r * 0.08).clamp(2.0, 8.0);
+        let subject = match high {
+            Some(h) => Vec3::new(at.x, terrain.def.sea_level + h, at.z),
+            None => at + Vec3::Y * (r * 0.08).clamp(2.0, 8.0),
+        };
         let far = if under {
             (r * 1.1).clamp(25.0, 80.0)
         } else {
@@ -1215,6 +1578,10 @@ impl Game {
             for k in 0..20 {
                 let a = k as f32 / 20.0 * std::f32::consts::TAU;
                 let out = Vec3::new(a.sin(), 0.0, a.cos());
+                // A carving is seen from in front, not round the side of its cliff.
+                if face.is_some_and(|f| out.dot(Vec3::new(f.sin(), 0.0, f.cos())) < 0.9) {
+                    continue;
+                }
                 let cam = subject + out * dist * e.cos() + Vec3::Y * dist * e.sin();
                 if terrain.sdf(cam) < room
                     || terrain.water(cam.x, cam.z, cam.y).is_some()
@@ -1306,22 +1673,38 @@ impl Game {
                     }
                 }
                 Do::RiderMap => {
-                    self.open_book();
-                    let hoard = self.hoard_view();
-                    let view = View {
-                        hoard: hoard.as_ref(),
-                        binds: &self.bindings,
-                        muted: self.muted,
-                        pause_away: self.pause_away,
-                        hold_hour: self.hold_hour,
-                        sharpness: self.scales.then_some(self.sharpness),
-                        touch: self.touch,
-                        hud: self.hud.on,
-                        map: self.map_view(),
-                        look: &self.dragon_look,
-                        wearables: self.wearables(),
-                    };
-                    self.hud.book.show_me("favors", &view);
+                    // The map you fly by, not the journal's: the big map here, or the
+                    // web page's atlas, which looks for this.
+                    if self.hud.on {
+                        self.hud.map = true;
+                    } else {
+                        self.map_wanted = true;
+                    }
+                }
+                Do::Drop(i) => {
+                    if let Some(play) = &mut self.play {
+                        crate::play::drop_errand(play, i);
+                        self.asks.push(Ask::Save);
+                    }
+                }
+                Do::CarRace => {
+                    if let Some(r) = self.race_offer.take() {
+                        self.toast(
+                            "Race!",
+                            &format!("Beat the car to {}! Land there before it does.", r.town),
+                        );
+                        self.car_race = Some(r);
+                    }
+                }
+                Do::StopLooking => {
+                    let me = self.player_dragon().pos;
+                    let world = &self.sim.world;
+                    let beacon =
+                        |id: &str| world.beacons.iter().find(|b| b.id == id).map(|b| b.flame);
+                    if let Some(play) = &mut self.play {
+                        crate::play::stop_looking(play, &beacon, me);
+                        self.asks.push(Ask::Save);
+                    }
                 }
                 Do::HopOff => {
                     let rider = self.play.as_ref().and_then(crate::play::rider);
@@ -1336,6 +1719,7 @@ impl Game {
                                 age: 0.0,
                                 look: rider.look,
                                 ground: f32::MIN,
+                                y: d.pos.y + 1.2,
                             });
                         }
                         self.toast_all(vec![(
@@ -1487,13 +1871,21 @@ impl Game {
         let pressed: Vec<usize> = (0..down.len())
             .filter(|i| down[*i] && !self.pad_was.get(*i).copied().unwrap_or(false))
             .collect();
+        self.pad_used.resize(down.len(), false);
+        for (used, d) in self.pad_used.iter_mut().zip(&down) {
+            *used &= *d;
+        }
         self.pad_was = down;
         let ui = self.hud.book.showing();
         let card = !self.hud.book.cards.is_empty();
         for b in pressed {
             // Y talks to whoever is close.
             if b == 3 && !ui && self.talk() {
+                self.pad_used[b] = true;
                 continue;
+            }
+            if ui {
+                self.pad_used[b] = true;
             }
             let code = match b {
                 9 if card => "Enter",
@@ -1510,10 +1902,24 @@ impl Game {
             };
             self.ui_key(code, None);
         }
+        // The right stick looks around, gently, past a small dead zone.
+        let axis = |i: usize| axes.get(i).copied().unwrap_or(0.0);
+        let look = Vec2::new(axis(2), axis(3));
+        self.pad_look = if look.length() > 0.2 {
+            look
+        } else {
+            Vec2::ZERO
+        };
         if ui || self.hud.book.showing() {
             self.input.gamepad(&[], &[]);
         } else {
-            self.input.gamepad(axes, buttons);
+            // A button that answered a card is not also a flap.
+            let free: Vec<f32> = buttons
+                .iter()
+                .zip(&self.pad_used)
+                .map(|(v, used)| if *used { 0.0 } else { *v })
+                .collect();
+            self.input.gamepad(axes, &free);
         }
     }
 
@@ -1582,6 +1988,7 @@ impl Game {
             self.dragon_look_version += 1;
             self.hud.book.page = crate::book::Page::You;
             self.asks.push(Ask::Prefs);
+            self.first_steps = Some((0, 0.0));
         }
     }
 
@@ -1794,20 +2201,104 @@ impl Game {
             return;
         }
         self.chatter(dt);
+        self.first_steps(dt);
+        self.race_car();
+        self.face_listener(dt);
         crate::prof::time("camera", || self.update_camera(dt));
         self.update_rider_bits(dt);
     }
 
+    /// The flying bird under a tap, if any: generous, since they are small and far.
+    fn bird_at(&self, nx: f32, ny: f32, aspect: f32) -> Option<usize> {
+        use zawnabout_sim::town::Kind;
+        let (near, dir) = self.ray(nx, ny, aspect);
+        let traffic = &self.sim.world.traffic;
+        let time = self.sim.tick as f32 * DT;
+        // Only a bird in front of the ground tapped, close enough to see, and tapped
+        // fairly near: a tap meant for a hill far beyond never sets off after one.
+        let ground = self
+            .surface_hit(near, dir)
+            .map_or(f32::MAX, |g| (g - near).length());
+        (0..traffic.vehicles.len())
+            .filter(|&i| matches!(traffic.vehicles[i].kind, Kind::Geese | Kind::Albatross))
+            .filter_map(|i| {
+                let c = traffic.pose_of(i, time).pos;
+                let t = (c - near).dot(dir);
+                let miss = (near + dir * t - c).length();
+                (t > 0.0 && t < ground.min(700.0) && miss < 6.0 + t * 0.015).then_some((t, i))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, i)| i)
+    }
+
+    /// Steering that brings the dragon up alongside bird `i` and keeps it there: on its
+    /// right, a little below, matching its pace.
+    fn escort_input(&self, i: usize, mine: DragonInput) -> DragonInput {
+        let d = self.player_dragon();
+        let p = self.sim.world.traffic.pose_of(i, self.sim.tick as f32 * DT);
+        let fwd = Vec3::new(p.heading.sin(), 0.0, p.heading.cos());
+        let side = Vec3::new(fwd.z, 0.0, -fwd.x);
+        let spot = p.pos + side * 16.0 - fwd * 16.0 - Vec3::Y * 2.0;
+        let aim = spot + p.vel * 2.0;
+        let to = aim - d.pos;
+        let want = to.x.atan2(to.z);
+        let err = (want - d.heading + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+            - std::f32::consts::PI;
+        let dist = Vec2::new(spot.x - d.pos.x, spot.z - d.pos.z).length();
+        let rise = spot.y - d.pos.y;
+        // Faster while behind its spot, slower while ahead of it.
+        let along = (spot - d.pos).dot(fwd);
+        let pace = p.vel.length() + (along * 0.4).clamp(-8.0, 16.0);
+        let speed = d.vel.length();
+        DragonInput {
+            pitch: (rise * 0.04 - d.vel.y * 0.06).clamp(-0.6, 0.6),
+            turn: (-err * 2.5).clamp(-1.0, 1.0),
+            flap: speed < pace || rise > 6.0,
+            flap_taps: u8::from(d.mode == Mode::Ground),
+            brake: speed > pace + 3.0 && dist < 60.0,
+            breath: mine.breath,
+            ..DragonInput::default()
+        }
+    }
+
     fn tick(&mut self) {
         let mut input = self.input.sample(DT, &self.bindings, &self.controls);
+        // Flying alongside a bird until the player steers, flaps or picks a spot.
+        if let Some(i) = self.escort {
+            let own = input.pitch.abs() > 0.15
+                || input.turn.abs() > 0.15
+                || input.flap_taps > 0
+                || input.brake
+                || input.tuck
+                || self.land_request.is_some();
+            if own {
+                self.escort = None;
+            } else {
+                input = self.escort_input(i, input);
+            }
+        }
         input.land_at = self.land_request.take();
         let player = self.player;
+        let dark = self.sim.lit.iter().filter(|l| !**l).count();
         crate::prof::time("step", || self.sim.step(&[(player, input)]));
+        if self.sim.lit.iter().filter(|l| !**l).count() < dark {
+            let all = self.sim.lit.len();
+            let lit = all - self.sim.lit.iter().filter(|l| !**l).count();
+            self.calls.borrow_mut().push(crate::audio::Call::Whoosh);
+            self.toast(
+                "Beacon lit!",
+                &format!("It burns bright for all to see. {lit} of {all} lit."),
+            );
+        }
         crate::prof::time("fx", || self.fx.tick(&self.sim, DT));
         crate::prof::time("kin", || self.kin_step());
         let night = self.sky_night();
         if let Some(play) = &mut self.play {
             crate::play::set_night(play, night);
+            // The whale postcard is for seeing a whale up close, wherever it swims.
+            if let Some(w) = self.near_whale.get() {
+                crate::play::whale_seen_at(play, w);
+            }
             let me = self.sim.dragon(self.player).expect("player dragon exists");
             let time = self.sim.tick as f32 * DT;
             let breath = self.sim.flight.breath_range;
@@ -1901,7 +2392,40 @@ impl Game {
         self.look_hold = 1.0;
     }
 
+    /// Standing still, the dragon turns round to face whoever it is talking to, even while
+    /// their card holds the world still, so the camera ends up behind it looking at them.
+    fn face_listener(&mut self, dt: f32) {
+        let Some(at) = self.face else { return };
+        let player = self.player;
+        let Some(d) = self.sim.dragon_mut(player) else {
+            return;
+        };
+        let to = Vec2::new(at.x - d.pos.x, at.z - d.pos.z);
+        if d.mode != zawnabout_sim::Mode::Ground || d.vel.length() > 0.5 || to.length() < 1.5 {
+            self.face = None;
+            return;
+        }
+        let pi = std::f32::consts::PI;
+        let want = to.x.atan2(to.y);
+        let off = (want - d.heading + pi).rem_euclid(2.0 * pi) - pi;
+        let step = 3.5 * dt;
+        if off.abs() <= step {
+            d.heading = want;
+            self.face = None;
+        } else {
+            d.heading += step * off.signum();
+        }
+        let d = d.clone();
+        if let Some((_, v)) = self.visuals.iter_mut().find(|(v, _)| *v == player) {
+            v.face(&d);
+        }
+    }
+
     fn update_camera(&mut self, dt: f32) {
+        if self.pad_look != Vec2::ZERO {
+            let l = self.pad_look;
+            self.look_drag(l.x * 380.0 * dt, l.y * 300.0 * dt);
+        }
         let [up, down, left, right] = self.look_keys;
         if up || down || left || right {
             let axis = |a: bool, b: bool| (a as i8 - b as i8) as f32;
@@ -1918,6 +2442,37 @@ impl Game {
         } else if !still {
             self.camera.free_look *= (-2.5 * dt).exp();
         }
+        // Standing by someone to talk to, with them hidden from the camera right behind
+        // the dragon or behind a mast or wall, swing round as little as shows them. A look
+        // round already further out is left alone.
+        let mut nudge = 0.0;
+        if still
+            && self.camera.free_look.x.abs() < TALK_SWING
+            && let Some(who) = self.listener()
+        {
+            let d = self.player_dragon();
+            let at = who.bubble();
+            let to = Vec2::new(at.x - d.pos.x, at.z - d.pos.z);
+            let fwd = Vec2::new(d.heading.sin(), d.heading.cos());
+            let (ahead, side) = (fwd.dot(to), fwd.perp_dot(to));
+            let want = if side > 0.0 { TALK_SWING } else { -TALK_SWING };
+            let behind_me = (0.5..12.0).contains(&ahead) && side.abs() < 3.0;
+            let world = &self.sim.world;
+            let base = Quat::from_rotation_y(-self.camera.nudge) * (self.camera.pos - d.pos);
+            let clear = |a: f32| {
+                let cam = d.pos + Quat::from_rotation_y(a) * base;
+                !(1..12).any(|k| world.within_still(cam.lerp(at, k as f32 / 12.0), 0.3))
+            };
+            let tries = [0.0, want, -want, want * 2.0, -want * 2.0];
+            let skip = if behind_me { 1 } else { 0 };
+            nudge = tries[skip..]
+                .iter()
+                .copied()
+                .find(|a| clear(*a))
+                .unwrap_or(tries[skip]);
+        }
+        let n = self.camera.nudge;
+        self.camera.nudge = n + (nudge - n) * (1.0 - (-3.0 * dt).exp());
         let d = self.player_dragon();
         // Follow the pose as drawn this frame, not the last tick, so turns stay smooth
         // whatever the frame rate.
@@ -1957,6 +2512,16 @@ impl Game {
     /// The first surface along a ray, water included.
     fn surface_hit(&self, near: Vec3, dir: Vec3) -> Option<Vec3> {
         let world = &self.sim.world;
+        // Riding, a tap means somewhere off the vehicle, so it and its carriages are
+        // looked past.
+        let aboard = self.player_dragon().riding.is_some();
+        let support = |x: f32, z: f32, below: f32| {
+            if aboard {
+                world.support_still(x, z, below)
+            } else {
+                world.support(x, z, below)
+            }
+        };
         let mut t = 0.0;
         let mut above = near.y;
         while t < 9000.0 {
@@ -1986,13 +2551,21 @@ impl Game {
                             }
                             up
                         };
-                        let top = world.support(q.x, q.z, q.y + reach);
+                        let top = support(q.x, q.z, q.y + reach);
                         return Some(Vec3::new(q.x, top, q.z));
                     }
                     k += 0.2;
                 }
             }
-            let floor = world.support(at.x, at.z, above.max(at.y));
+            let mut floor = support(at.x, at.z, above.max(at.y));
+            // In open air inside a cave mouth the hill over the roof is no floor: look
+            // for the cave's own, under the ray.
+            if floor > at.y
+                && world.terrain.height(at.x, at.z) > at.y
+                && world.terrain.sdf(at) > 1.0
+            {
+                floor = support(at.x, at.z, at.y);
+            }
             if at.y <= floor {
                 // Well below the top means the ray went in through a side: find the face and
                 // cling to it if it is a wall.
@@ -2001,7 +2574,7 @@ impl Game {
                     let mut k = (t - back).max(0.0);
                     while k < t {
                         let q = near + dir * k;
-                        if world.support(q.x, q.z, q.y + 300.0) > q.y + 0.5 {
+                        if support(q.x, q.z, q.y + 300.0) > q.y + 0.5 {
                             if world.wall_normal(q).is_some() {
                                 return Some(q);
                             }
@@ -2023,6 +2596,11 @@ impl Game {
         let t = &self.sim.world.traffic;
         let v = t.vehicles.get(i)?;
         let pose = t.poses[i];
+        // Up on a parasail's canopy.
+        if let Some(at) = t.parasail(i, &pose) {
+            let top = self.sim.world.support(at.x, at.z, at.y + 12.0);
+            return Some(Vec3::new(at.x, top, at.z));
+        }
         let a = pose.axis();
         let (along, across) = match v.kind {
             zawnabout_sim::town::Kind::Ferry => (0.36, 0.0),
@@ -2065,8 +2643,17 @@ impl Game {
         let world = &self.sim.world;
         let ground = self.surface_hit(near, dir);
         let ground_t = ground.map_or(f32::MAX, |g| (g - near).length());
+        if let Some(spot) = self.pick_asker(near, dir, ground_t) {
+            return Some((spot, 2.0));
+        }
         let traffic = &world.traffic;
+        // Riding one, a tap means somewhere off it and its carriages: a platform, a street.
+        let aboard = self
+            .player_dragon()
+            .riding
+            .map(|i| traffic.vehicles[i].path);
         let vehicle = (0..traffic.vehicles.len())
+            .filter(|i| aboard != Some(traffic.vehicles[*i].path))
             .filter_map(|i| {
                 let v = &traffic.vehicles[i];
                 // Aim at where it stands, which for chairs and cabins is under the cable.
@@ -2076,7 +2663,8 @@ impl Game {
                 // Generous, since they move: half their length plus a bit with distance,
                 // and never less than a couple of meters, so small chairs are easy to hit.
                 let reach = (v.size.x * 0.5).max(2.5) + t * 0.025;
-                (t > 0.0 && t < ground_t + 5.0 && miss < reach).then_some((t, i))
+                (t > 0.0 && t < ground_t + 5.0 && miss < reach && self.in_sight(near, c))
+                    .then_some((t, i))
             })
             .min_by(|a, b| a.0.total_cmp(&b.0));
         if let Some((t, i)) = vehicle {
@@ -2109,7 +2697,87 @@ impl Game {
         if let Some((_, p)) = perch {
             return Some((p.pos, p.radius));
         }
-        ground.map(|p| (p, 2.0))
+        ground.map(|p| (self.just_inside(near, dir, p), 2.0))
+    }
+
+    /// Whether `to` can be seen from `from` past the rock between: a train in a tunnel
+    /// under the street cannot, so a tap on the street is not taken for it.
+    fn in_sight(&self, from: Vec3, to: Vec3) -> bool {
+        let t = &self.sim.world.terrain;
+        let len = from.distance(to) - 3.0;
+        let dir = (to - from).normalize_or(Vec3::Y);
+        let mut s = 0.0;
+        while s < len {
+            let d = t.sdf(from + dir * s);
+            if d < 0.0 {
+                return false;
+            }
+            s += d.max(0.5);
+        }
+        true
+    }
+
+    /// A tap on someone's "!" bubble, drawn over their head from afar, lands beside them
+    /// on the dragon's side, not wherever the ray ends up past the bubble.
+    fn pick_asker(&self, near: Vec3, dir: Vec3, ground_t: f32) -> Option<Vec3> {
+        let play = self.play.as_ref()?;
+        let world = &self.sim.world;
+        let lit = |id: &str| self.sim.beacon(id).is_some_and(|(_, lit)| lit);
+        let (mut locals, mut lost) = (Vec::new(), Vec::new());
+        crate::play::people(play, &lit, &mut locals, &mut lost);
+        let cam = self.camera.pos;
+        let (_, p) = locals
+            .iter()
+            .filter(|l| l.ask)
+            .filter_map(|l| {
+                // Where and how big the bubble is drawn.
+                let far = l.pos.distance(cam);
+                let at = l.pos + Vec3::Y * (3.0 + far * 0.012);
+                let t = (at - near).dot(dir);
+                let miss = (near + dir * t - at).length();
+                // Bubbles float high, so one peeking over a deck or roof edge still counts.
+                let hit = (12.0..300.0).contains(&far)
+                    && t > 0.0
+                    && t < ground_t + 20.0
+                    && miss < 1.3 + far * 0.015;
+                hit.then_some((t, l.pos))
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        // Beside them on their own level, on the dragon's side if there is room there: a
+        // step off a bridge or a quay would drop to whatever is below.
+        let me = self.player_dragon().pos;
+        let toward = (me.x - p.x).atan2(me.z - p.z);
+        (0..8)
+            .map(|k| {
+                let a = toward + [0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, std::f32::consts::PI][k];
+                let q = p + Vec3::new(a.sin(), 0.0, a.cos()) * 3.0;
+                Vec3::new(q.x, world.support_still(q.x, q.z, p.y + 2.0), q.z)
+            })
+            .find(|q| (q.y - p.y).abs() < 1.0 && !world.within_still(*q + Vec3::Y, 0.5))
+            .or(Some(p))
+    }
+
+    /// A tap through a cave mouth from out in the open lands just inside it, not wherever
+    /// the ray ends deep in the mountain, which a flight cannot see its way to.
+    fn just_inside(&self, near: Vec3, dir: Vec3, hit: Vec3) -> Vec3 {
+        let world = &self.sim.world;
+        let covered =
+            |p: Vec3| (1..=60).any(|k| world.terrain.sdf(p + Vec3::Y * (k as f32 * 5.0)) < 0.0);
+        if covered(near) {
+            return hit;
+        }
+        let end = (hit - near).length();
+        let mut t = 0.0;
+        while t < end - 30.0 {
+            let p = near + dir * t;
+            if world.terrain.sdf(p) > 4.0 && covered(p) {
+                let inside = near + dir * (t + 18.0).min(end);
+                let floor = world.support(inside.x, inside.z, inside.y);
+                return Vec3::new(inside.x, floor, inside.z);
+            }
+            t += 4.0;
+        }
+        hit
     }
 
     /// Enters or leaves notes mode. Entering freezes everything and starts the free
@@ -2236,8 +2904,19 @@ impl Game {
             .collect();
     }
 
-    /// Taps or clicks the screen: flies to and lands on whatever is there.
+    /// Taps or clicks the screen: flies to and lands on whatever is there, or up beside a
+    /// big bird to fly along with it.
     pub fn tap(&mut self, nx: f32, ny: f32, aspect: f32) -> bool {
+        self.escort = None;
+        if let Some(i) = self.bird_at(nx, ny, aspect) {
+            self.escort = Some(i);
+            let who = match self.sim.world.traffic.vehicles[i].kind {
+                zawnabout_sim::town::Kind::Geese => "The geese",
+                _ => "The albatross",
+            };
+            self.toast(who, "Flying alongside. Steer any way to break off.");
+            return true;
+        }
         match self.pick(nx, ny, aspect) {
             Some((target, _)) => {
                 self.land_request = Some(target);
@@ -2329,6 +3008,9 @@ impl Game {
                     v.kind == zawnabout_sim::town::Kind::Train
                         && v.variant == zawnabout_sim::traffic::TOUR_ENGINE
                 }
+                // A speedboat towing a parasail, or a water skier.
+                "parasail" => v.kind == zawnabout_sim::town::Kind::Speedboat && v.variant % 3 == 1,
+                "waterski" => v.kind == zawnabout_sim::town::Kind::Speedboat && v.variant % 3 == 0,
                 _ => format!("{:?}", v.kind).eq_ignore_ascii_case(kind),
             })
             .nth(n)
@@ -2566,6 +3248,10 @@ impl Game {
                 Ok("all tunables back to defaults".into())
             }
             ["state"] => Ok(self.state()),
+            // whale: where the whale in sight is swimming.
+            ["whale"] => Ok(format!("{:?}", self.near_whale.get())),
+            // check COND: whether a script condition holds now.
+            ["check", rest @ ..] => Ok(self.check(rest)?.to_string()),
             // land-at x z: fly to the top surface at (x, z) and land.
             ["land-at", _, _] => {
                 let (x, z) = (num(1)?, num(2)?);
@@ -2688,10 +3374,25 @@ impl Game {
                 self.land_request = Some(self.deck(i).ok_or("no such vehicle")?);
                 Ok(String::new())
             }
+            // escort WHICH: flies alongside a bird, as a tap on it does.
+            ["escort", which] => {
+                self.escort = Some(self.vehicle(which)?);
+                Ok(String::new())
+            }
             ["ride", which] => {
                 let i = self.vehicle(which)?;
                 self.refresh_vehicle(i);
-                let Vec3 { x, y: top, z } = self.deck(i).ok_or("no such vehicle")?;
+                // On the skis behind the boat, when asked for them by name.
+                let skis = (*which == "waterski")
+                    .then(|| {
+                        let t = &self.sim.world.traffic;
+                        let at = t.skier(i, &t.poses[i])?;
+                        let top = self.sim.world.support(at.x, at.z, at.y + 3.0);
+                        Some(Vec3::new(at.x, top, at.z))
+                    })
+                    .flatten();
+                let Vec3 { x, y: top, z } =
+                    skis.or_else(|| self.deck(i)).ok_or("no such vehicle")?;
                 let p = Vec3::new(x, top, z);
                 let stand = self.sim.flight.stand_height;
                 let d = self
@@ -2835,6 +3536,16 @@ impl Game {
                     "gameplay is compiled out".into()
                 })
             }
+            // parcel ID: carries a parcel for postcard spot ID.
+            ["parcel", id] => {
+                let me = self.player_dragon().pos;
+                let play = self.play.as_mut().ok_or("gameplay is off")?;
+                if crate::play::take_parcel(play, id, me) {
+                    Ok(String::new())
+                } else {
+                    Err("no such postcard".into())
+                }
+            }
             ["play", "reset"] => {
                 let play = self.play.as_mut().ok_or("gameplay is off")?;
                 crate::play::reset(play);
@@ -2855,11 +3566,11 @@ impl Game {
             }
             // goto-folk: stands the dragon right by the townsperson found.
             ["goto-folk"] => {
-                let (p, _) = self.near_folk.get().ok_or("nobody found nearby")?;
+                let (p, seed) = self.near_folk.get().ok_or("nobody found nearby")?;
                 let d = self.player_dragon().pos;
                 let away = Vec3::new(d.x - p.x, 0.0, d.z - p.z).normalize_or(Vec3::X) * 4.0;
                 self.stand_at(p + away);
-                Ok(format!("folk at ({:.1},{:.1},{:.1})", p.x, p.y, p.z))
+                Ok(format!("folk {seed} at ({:.1},{:.1},{:.1})", p.x, p.y, p.z))
             }
             ["rider-bits"] => Ok(format!(
                 "at {:?} say {:?} point {:?} screen {:?} folk {:?} drawn {:?}",
@@ -2876,7 +3587,8 @@ impl Game {
                 let i = crate::play::card_index(play, id).ok_or("no such postcard")?;
                 let (at, r) = crate::play::card_spot(play, i).ok_or("no spot")?;
                 let low = crate::play::card_low(play, i);
-                Ok(format!("{:?}", self.best_view(at, r, low)))
+                let face = crate::play::card_face(play, i);
+                Ok(format!("{:?}", self.best_view(at, r, low, face)))
             }
             ["ask-rider"] => {
                 if self.ask_rider() {
@@ -2888,6 +3600,74 @@ impl Game {
             ["bubble"] => {
                 let (at, _) = self.bubble_on_screen().ok_or("no bubble")?;
                 Ok(format!("bubble {:.4} {:.4}", at.x, at.y))
+            }
+            // stations N: the N nearest railway stations, center and distance.
+            ["stations", n] => {
+                let n: usize = n.parse().map_err(|_| "bad count")?;
+                let at = self.player_dragon().pos;
+                let mut list: Vec<Vec3> = self
+                    .sim
+                    .world
+                    .buildings
+                    .iter()
+                    .filter(|b| b.kind == zawnabout_sim::town::Kind::Station)
+                    .map(|b| b.pos)
+                    .collect();
+                list.sort_by(|a, b| a.distance(at).total_cmp(&b.distance(at)));
+                Ok(list
+                    .iter()
+                    .take(n)
+                    .map(|p| format!("{:.1} {:.1} {:.1} {:.0}", p.x, p.y, p.z, p.distance(at)))
+                    .collect::<Vec<_>>()
+                    .join(
+                        "
+",
+                    ))
+            }
+            // screen x y z: where that point shows on screen, 0..1 across and down.
+            ["screen", _, _, _] => {
+                let at = Vec3::new(num(1)?, num(2)?, num(3)?);
+                // As tap-screen sees it, when nothing has been drawn yet.
+                let size = self.hud.book.screen();
+                let aspect = if size.y > 1.0 {
+                    size.x / size.y
+                } else {
+                    16.0 / 9.0
+                };
+                let clip = self.camera.view_proj(aspect) * at.extend(1.0);
+                if clip.w <= 0.0 {
+                    return Err("behind the camera".into());
+                }
+                let (x, y) = (clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+                Ok(format!("{x:.4} {y:.4}"))
+            }
+            // bubbles: where each "!" over a named local shows on screen, 0..1 across and
+            // down, for tapping one.
+            ["bubbles"] => {
+                let play = self.play.as_ref().ok_or("gameplay is off")?;
+                let lit = |id: &str| self.sim.beacon(id).is_some_and(|(_, lit)| lit);
+                let (mut locals, mut lost) = (Vec::new(), Vec::new());
+                crate::play::people(play, &lit, &mut locals, &mut lost);
+                let size = self.hud.book.screen();
+                let aspect = size.x / size.y.max(1.0);
+                let cam = self.camera.pos;
+                let mut out = String::new();
+                for l in locals.iter().filter(|l| l.ask) {
+                    let far = l.pos.distance(cam);
+                    let at = l.pos + Vec3::Y * (3.0 + far * 0.012);
+                    let clip = self.camera.view_proj(aspect) * at.extend(1.0);
+                    if clip.w > 0.0 && (12.0..300.0).contains(&far) {
+                        let x = clip.x / clip.w * 0.5 + 0.5;
+                        let y = 0.5 - clip.y / clip.w * 0.5;
+                        let p = l.pos;
+                        out += &format!(
+                            "{x:.4} {y:.4} {far:.0} {:.1} {:.1} {:.1}
+",
+                            p.x, p.y, p.z
+                        );
+                    }
+                }
+                Ok(out)
             }
             ["play-save"] => self
                 .save_text()
@@ -3090,6 +3870,79 @@ impl Game {
                 self.camera.reset();
                 Ok(String::new())
             }
+            // voids x y z: the cave spaces near that point, how far it is from each, and
+            // the bounds each is meshed within.
+            ["voids", _, _, _] => {
+                let p = Vec3::new(num(1)?, num(2)?, num(3)?);
+                let t = &self.sim.world.terrain;
+                let mut out = String::new();
+                for (i, v) in t.def.voids.iter().enumerate() {
+                    let d = zawnabout_sim::terrain::void_sdf(v, p);
+                    if d < 40.0 {
+                        let b = zawnabout_sim::terrain::void_bounds(v);
+                        out += &format!(
+                            "void {i} {:?} sdf {d:.1} bounds {} {}
+",
+                            v.shape, b.min, b.max
+                        );
+                    }
+                }
+                Ok(out)
+            }
+            // car-overlaps: pairs of cars within 2 km sitting inside each other, going the
+            // same way, and how many cars wait in queues.
+            ["car-overlaps"] => {
+                use zawnabout_sim::town::Kind;
+                let at = self.player_dragon().pos;
+                let t = &self.sim.world.traffic;
+                let cars: Vec<usize> = (0..t.vehicles.len())
+                    .filter(|&i| {
+                        t.vehicles[i].kind == Kind::Car && t.poses[i].pos.distance(at) < 2000.0
+                    })
+                    .collect();
+                let mut pairs = 0;
+                for (k, &i) in cars.iter().enumerate() {
+                    for &j in &cars[k + 1..] {
+                        let (a, b) = (t.poses[i], t.poses[j]);
+                        if a.pos.distance(b.pos) < 3.0 && a.axis().dot(b.axis()) > 0.3 {
+                            pairs += 1;
+                        }
+                    }
+                }
+                let waiting = cars
+                    .iter()
+                    .filter(|&&i| t.rate.get(i).is_some_and(|r| *r < 0.2))
+                    .count();
+                Ok(format!(
+                    "cars {} overlaps {pairs} waiting {waiting}",
+                    cars.len()
+                ))
+            }
+            // cave-landmarks: each landmark under the ground, and how far it sits over (or
+            // under) the cave floor beneath it.
+            ["cave-landmarks"] => {
+                let w = &self.sim.world;
+                let mut out = String::new();
+                for b in &w.buildings {
+                    if w.terrain.height(b.pos.x, b.pos.z) < b.pos.y + 20.0 {
+                        continue;
+                    }
+                    // Down from a little above, to the first rock.
+                    let top = b.pos.y + 40.0;
+                    let floor = (0..800)
+                        .map(|k| top - k as f32 * 0.25)
+                        .find(|y| w.terrain.sdf(Vec3::new(b.pos.x, *y, b.pos.z)) < 0.0)
+                        .unwrap_or(f32::MIN);
+                    let gap = b.pos.y - floor;
+                    if gap.abs() > 1.0 {
+                        out += &format!(
+                            "{:?} {:?} at {:.0} {:.1} {:.0} floor {floor:.1} gap {gap:.1}\n",
+                            b.kind, b.site, b.pos.x, b.pos.y, b.pos.z
+                        );
+                    }
+                }
+                Ok(out)
+            }
             // sdf x y z: how far that point is from rock, negative inside it.
             ["sdf", _, _, _] => {
                 let p = Vec3::new(num(1)?, num(2)?, num(3)?);
@@ -3141,6 +3994,15 @@ impl Game {
                 Ok(self.state())
             }
             // ground x z: the height of the top surface there.
+            // support x z [y]: the top surface at (x, z), below y if given.
+            ["support", _, _, ..] => {
+                let (x, z) = (num(1)?, num(2)?);
+                let y = if words.len() > 3 { num(3)? } else { 5000.0 };
+                Ok(format!(
+                    "support {x} {z} {:.1}",
+                    self.sim.world.support_still(x, z, y)
+                ))
+            }
             ["ground", _, _] => {
                 let (x, z) = (num(1)?, num(2)?);
                 Ok(format!(

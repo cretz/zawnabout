@@ -115,8 +115,7 @@ fn vs_lit(v: VertIn) -> VertOut {
         let rock = sin(t * 1.7 + world.x * 0.13 - world.z * 0.09) * 0.07;
         world = vec4f(world.x, world.y + swell + rock, world.z, 1.0);
     }
-    var o: VertOut;
-    o.clip = g.view_proj * world;
+    var o = vert_out(v, m, world);
     // Roads (flag 30) draw nearer the camera along the line of sight, more so far off,
     // so they stay put on screen but coarse distant ground never pokes through them.
     if abs(v.normal.w - 0.236) < 0.02 {
@@ -125,12 +124,26 @@ fn vs_lit(v: VertIn) -> VertOut {
         let pull = to / max(d, 0.001) * min(d * 0.004, 3.0);
         o.clip = g.view_proj * vec4f(world.xyz + pull, 1.0);
     }
+    return o;
+}
+
+fn vert_out(v: VertIn, m: mat4x4f, world: vec4f) -> VertOut {
+    var o: VertOut;
+    o.clip = g.view_proj * world;
     o.world = world.xyz;
     o.normal = (m * vec4f(v.normal.xyz, 0.0)).xyz;
     o.color = vec4f(to_linear(v.color.rgb) * v.tint.rgb, v.color.a * v.tint.a);
     o.thin = v.normal.w;
     o.local = v.pos;
     return o;
+}
+
+// The ground keeps its height over the water in normal w, which must never be taken
+// for one of the flags above (a bank 10 m over a lake once leaned like grass).
+@vertex
+fn vs_ground(v: VertIn) -> VertOut {
+    let m = mat4x4f(v.m0, v.m1, v.m2, v.m3);
+    return vert_out(v, m, m * vec4f(v.pos, 1.0));
 }
 
 // Warm light from fires, crystals and breath, soft and wrapping so it reads as a glow.

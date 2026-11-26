@@ -134,6 +134,10 @@ const STONE: Rgb = Rgb(0xB8AE9C);
 const WHITE: Rgb = Rgb(0xF6F1E7);
 const RED: Rgb = Rgb(0xE0564A);
 const STEEL: Rgb = Rgb(0x8E9AA6);
+/// A chalk moon's outer radius, its widest band, and how far round its horns reach.
+const CHALK_R: f32 = 115.0;
+const CHALK_W: f32 = 42.0;
+const CHALK_SPAN: f32 = 1.3;
 const LAMP: Rgb = Rgb(0xFFE59A);
 const SAIL: Rgb = Rgb(0xFFFDF7);
 const ASPHALT: Rgb = Rgb(0x6F6E73);
@@ -276,6 +280,12 @@ struct Parts {
     night: Vec<usize>,
     /// Painted letters, for the letters pipeline (see `fs_letter`).
     letters: Vec<Vertex>,
+    /// Where the ground meets the walls above the base, on a slope: windows start
+    /// above it.
+    lift: f32,
+    /// A door to keep windows off: its wall, its middle across the wall, half its width
+    /// and its top.
+    door: Option<(u8, f32, f32, f32)>,
 }
 
 impl Parts {
@@ -285,7 +295,18 @@ impl Parts {
             glow: Vec::new(),
             night: Vec::new(),
             letters: Vec::new(),
+            lift: 0.0,
+            door: None,
         }
+    }
+
+    /// A door at the foot of wall `face`, on the ground where the ground is, with no
+    /// window over it.
+    #[allow(clippy::too_many_arguments)]
+    fn door(&mut self, face: u8, w: f32, d: f32, u: f32, dw: f32, dh: f32, col: Rgb) {
+        let y = self.lift;
+        self.door = Some((face, u, dw * 0.5, y + dh));
+        self.panel(face, w, d, u, y, dw, dh, col);
     }
 
     fn quad(&mut self, a: Vec3, b: Vec3, c: Vec3, d: Vec3, col: Rgb) {
@@ -517,6 +538,7 @@ impl Parts {
         glow: bool,
     ) {
         let from = self.m.verts.len();
+        let y0 = y0 + self.lift;
         let floors = ((h - y0) / floor).floor().clamp(1.0, 14.0) as u32;
         for f in 0..floors {
             let y = y0 + f as f32 * floor + floor * 0.35;
@@ -528,7 +550,12 @@ impl Parts {
                 let n = (len / 3.6).floor() as i32;
                 for k in 0..n {
                     let u = (k as f32 - (n - 1) as f32 * 0.5) * (len / n as f32);
-                    self.panel(face, w, d, u, y, 1.1, floor * 0.42, col);
+                    let on_door = self.door.is_some_and(|(df, du, dw, top)| {
+                        df == face && (u - du).abs() < dw + 0.85 && y < top + 0.3
+                    });
+                    if !on_door {
+                        self.panel(face, w, d, u, y, 1.1, floor * 0.42, col);
+                    }
                 }
             }
         }
@@ -610,6 +637,110 @@ impl Parts {
     }
 }
 
+/// Bits round a house that make it someone's: one or two of a washing line out the back,
+/// a woodpile by the side, a bench and flower tubs by the door, a mailbox at the front, a
+/// rain barrel at a corner. Picked by `v`, so no two streets look the same.
+fn house_yard(n: &mut Parts, w: f32, d: f32, v: u32) {
+    let pick = |k: u32| (v / 7 + k * 13) % 6;
+    let wood = Rgb(0x8B5E3C);
+    let colors = [
+        Rgb(0xE0564A),
+        Rgb(0x4A90C8),
+        Rgb(0xF2C14E),
+        Rgb(0xF6F1E7),
+        Rgb(0xE88AB0),
+    ];
+    for k in 0..1 + (v % 2) {
+        let y = n.lift;
+        match pick(k) {
+            0 => {
+                // A washing line out the back, two posts and the day's washing.
+                let z = -d * 0.5 - 4.0;
+                for x in [-w * 0.35, w * 0.35] {
+                    n.post(Vec3::new(x, y + 2.0, z), 2.0, 0.06, wood);
+                }
+                n.cube(
+                    Vec3::new(0.0, y + 1.95, z),
+                    Vec3::new(w * 0.35, 0.015, 0.015),
+                    Rgb(0xDDDDDD),
+                );
+                for (i, x) in [-0.45f32, -0.1, 0.25].iter().enumerate() {
+                    n.cube(
+                        Vec3::new(x * w, y + 1.55, z),
+                        Vec3::new(0.35, 0.38, 0.02),
+                        colors[(v as usize + i) % colors.len()],
+                    );
+                }
+            }
+            1 => {
+                // A stacked woodpile against the side wall.
+                n.cube(
+                    Vec3::new(w * 0.5 + 0.5, y + 0.45, -d * 0.15),
+                    Vec3::new(0.45, 0.45, 1.2),
+                    wood,
+                );
+                n.cube(
+                    Vec3::new(w * 0.5 + 0.5, y + 0.95, -d * 0.15),
+                    Vec3::new(0.55, 0.06, 1.3),
+                    Rgb(0x5A4A3A),
+                );
+            }
+            2 => {
+                // A bench by the door, a tub of flowers either side.
+                n.cube(
+                    Vec3::new(-w * 0.15, y + 0.45, d * 0.5 + 0.6),
+                    Vec3::new(0.8, 0.05, 0.22),
+                    wood,
+                );
+                for x in [-w * 0.15 - 1.2, -w * 0.15 + 1.2] {
+                    n.cube(
+                        Vec3::new(x, y + 0.25, d * 0.5 + 0.6),
+                        Vec3::new(0.25, 0.25, 0.25),
+                        Rgb(0x9C6B5A),
+                    );
+                    n.cube(
+                        Vec3::new(x, y + 0.6, d * 0.5 + 0.6),
+                        Vec3::new(0.3, 0.12, 0.3),
+                        colors[(v as usize) % colors.len()],
+                    );
+                }
+            }
+            3 => {
+                // A mailbox on a post at the front.
+                n.post(Vec3::new(w * 0.4, y + 1.0, d * 0.5 + 3.0), 1.0, 0.05, wood);
+                n.cube(
+                    Vec3::new(w * 0.4, y + 1.12, d * 0.5 + 3.0),
+                    Vec3::new(0.18, 0.14, 0.26),
+                    colors[(v as usize + 2) % colors.len()],
+                );
+            }
+            4 => {
+                // A rain barrel at a back corner.
+                n.cube(
+                    Vec3::new(w * 0.5 + 0.5, y + 0.5, -d * 0.5 + 0.6),
+                    Vec3::new(0.4, 0.5, 0.4),
+                    Rgb(0x6B8E5A),
+                );
+            }
+            _ => {
+                // Flower boxes under the front windows.
+                for x in [-w * 0.3, w * 0.3] {
+                    n.cube(
+                        Vec3::new(x, y + 1.0, d * 0.5 + 0.2),
+                        Vec3::new(0.6, 0.12, 0.18),
+                        wood,
+                    );
+                    n.cube(
+                        Vec3::new(x, y + 1.18, d * 0.5 + 0.2),
+                        Vec3::new(0.55, 0.08, 0.14),
+                        colors[(v as usize + 4) % colors.len()],
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// The top of a house's chimney in its own frame, if it has one.
 pub fn chimney(b: &Building) -> Option<Vec3> {
     let v = b.seed >> 5;
@@ -630,6 +761,18 @@ fn building(
     let (w, h, d) = (b.size.x, b.size.y, b.size.z);
     let mut n = Parts::new();
     let mut f = Parts::new();
+    // On a slope the walls reach down to the lowest corner, so the ground climbs the
+    // rest. Windows and doors start where it meets the walls, not under the grass.
+    if b.style != Style::Cavern && b.stilts == 0.0 {
+        let ground = [(0.0, 0.5), (0.0, -0.5), (0.5, 0.0), (-0.5, 0.0)]
+            .iter()
+            .map(|(x, z)| {
+                let p = b.at(x * w, 0.0, z * d);
+                terrain.height(p.x, p.z)
+            })
+            .fold(f32::MIN, f32::max);
+        n.lift = (ground - b.pos.y - 0.2).clamp(0.0, (h - 3.0).max(0.0));
+    }
     let floor = 3.4;
     let glow_windows = b.style == Style::Cavern || b.tech == Tech::Simple;
     match b.kind {
@@ -703,6 +846,9 @@ fn building(
                 // A darker stone plinth.
                 n.walls(w + 0.1, d + 0.1, 0.0, 0.9, wall.mix(Rgb(0x3A3030), 0.3));
             }
+            if house && b.stilts == 0.0 {
+                house_yard(&mut n, w, d, v);
+            }
             if detached && v.is_multiple_of(3) {
                 // A little porch roof over the door.
                 n.cube(
@@ -747,8 +893,8 @@ fn building(
                 }
                 Kind::Row => {
                     // Gable to the street: a tall front of windows and a door.
+                    n.door(2, w, d, 0.0, 1.4, 2.4, c.door);
                     n.windows(&[2], w, d, 0.6, h, floor, c.window, glow_windows);
-                    n.panel(2, w, d, 0.0, 0.0, 1.4, 2.4, c.door);
                     n.cube(
                         Vec3::new(w * 0.5 + 0.1, h + b.roof * 0.35, 0.0),
                         Vec3::new(0.12, 0.6, d * 0.32),
@@ -756,8 +902,8 @@ fn building(
                     );
                 }
                 _ => {
+                    n.door(0, w, d, w * 0.18, 1.3, 2.3, c.door);
                     n.windows(&[0, 1], w, d, 0.6, h, floor, c.window, glow_windows);
-                    n.panel(0, w, d, w * 0.18, 0.0, 1.3, 2.3, c.door);
                     if let Some(top) = chimney(b) {
                         n.cube(
                             top - Vec3::Y * b.roof * 0.5,
@@ -775,8 +921,8 @@ fn building(
             }
             n.walls(w + 0.3, d + 0.3, h - 0.2, h + 0.5, c.trim);
             // Windows all round, so no side is a blank wall.
+            n.door(0, w, d, -w * 0.2, 1.4, 2.3, c.door);
             n.windows(&[0, 1, 2, 3], w, d, 0.6, h, floor, c.window, glow_windows);
-            n.panel(0, w, d, -w * 0.2, 0.0, 1.4, 2.3, c.door);
             if h > 15.0 {
                 // Tall blocks: a trim band every few floors, and a stair hut and water
                 // tank on the roof.
@@ -832,6 +978,7 @@ fn building(
                     STEEL,
                 );
             }
+            rooftop(&mut n, b, w, d, h);
             // From afar: one glass block with every other band and a few frames, cheap
             // but still read as rows of windows.
             f.walls(w - 0.2, d - 0.2, 0.0, h, glass);
@@ -930,9 +1077,21 @@ fn building(
             for p in [&mut n, &mut f] {
                 p.ring(10, pod - 5.0, r * 0.5, pod, w * 1.4, STEEL);
                 p.ring(10, pod, w * 1.4, pod + 6.0, w * 1.3, DARK_GLASS);
-                p.ring(10, pod + 6.0, w * 1.3, pod + 9.0, r * 0.4, WHITE);
+                // A flat white deck on top, railed, to land on.
+                let deck = pod + zawnabout_sim::town::MAST_DECK;
+                p.ring(10, pod + 6.0, w * 1.3, deck, w * 1.25, WHITE);
+                p.ring(10, deck, w * 1.25, deck + 0.01, 0.0, WHITE);
+                p.ring(10, deck, w * 1.27, deck + 1.0, w * 1.27, STEEL);
             }
-            n.cube(Vec3::new(0.0, h + 8.0, 0.0), Vec3::new(0.3, 8.0, 0.3), RED);
+            let aerial = zawnabout_sim::town::MAST_AERIAL;
+            n.cube(
+                Vec3::new(0.0, h + aerial * 0.5, 0.0),
+                Vec3::new(0.3, aerial * 0.5, 0.3),
+                RED,
+            );
+            // A little cap on the tip to stand on.
+            n.ring(8, h + aerial - 0.4, 2.0, h + aerial, 2.0, WHITE);
+            n.ring(8, h + aerial, 2.0, h + aerial + 0.01, 0.0, WHITE);
         }
         Kind::ControlTower => {
             for p in [&mut n, &mut f] {
@@ -2022,6 +2181,129 @@ fn building(
             n.m.append(&wreck.m, tilt);
             f.m.append(&wreck.m, tilt);
         }
+        // Laid over the ground as it lies, so the figure follows the hill crisply rather
+        // than in the ground's own coarse triangles. Horns toward +x.
+        Kind::ChalkMoon => {
+            for (p, segs, rows) in [(&mut n, 56u32, 4u32), (&mut f, 24, 1)] {
+                let at = |i: u32, k: u32| {
+                    let a = (i as f32 / segs as f32 - 0.5) * 2.0 * CHALK_SPAN;
+                    let taper = (a / CHALK_SPAN * std::f32::consts::FRAC_PI_2).cos();
+                    let r = CHALK_R - CHALK_W * taper * k as f32 / rows as f32;
+                    let (x, z) = (-a.cos() * r, a.sin() * r);
+                    let g = b.at(x, 0.0, z);
+                    Vec3::new(x, terrain.height(g.x, g.z) - b.pos.y + 1.2, z)
+                };
+                for i in 0..segs {
+                    for k in 0..rows {
+                        let (a, b2, c2, d2) =
+                            (at(i, k), at(i + 1, k), at(i + 1, k + 1), at(i, k + 1));
+                        let col =
+                            Rgb(0xF4F1E8).mix(Rgb(0xDCD6C8), ((i * 7 + k * 3) % 5) as f32 * 0.12);
+                        p.m.thin_tri(a, b2, c2, col);
+                        p.m.thin_tri(a, c2, d2, col);
+                    }
+                }
+            }
+        }
+        // Drawn flapping with the rest of the island's life: only a speck here, hidden
+        // inside the lead bird, as a mesh is never empty.
+        Kind::Geese | Kind::Albatross => {
+            for p in [&mut n, &mut f] {
+                p.cube(Vec3::ZERO, Vec3::splat(0.01), WHITE);
+            }
+        }
+        Kind::Galleon => {
+            // A great old sailing ship aground on a reef, listing a little: high stern,
+            // three masts (the aft one snapped), patched sails, a lantern up the main.
+            let mut g = Parts::new();
+            let v = Vec3::new;
+            let hull = Rgb(0x6B4A32);
+            g.hull(w, d, h, hull, Rgb(0xA27C55));
+            // A stripe of faded paint along the gunwale, and the raised stern castle.
+            g.cube(
+                v(-w * 0.05, h * 0.86, 0.0),
+                v(w * 0.4, h * 0.06, d * 0.5 + 0.05),
+                Rgb(0xB8893A),
+            );
+            g.cube(v(-w * 0.39, h + 2.6, 0.0), v(w * 0.11, 2.6, d * 0.42), hull);
+            g.cube(
+                v(-w * 0.39, h + 5.3, 0.0),
+                v(w * 0.12, 0.15, d * 0.45),
+                WOOD,
+            );
+            // A bowsprit reaching out over the bow.
+            g.cube(v(w * 0.56, h + 1.4, 0.0), v(w * 0.1, 0.3, 0.3), DARK_WOOD);
+            let masts = [
+                (0.22, 26.0, true),
+                (-0.02, 32.0, true),
+                (-0.24, 10.0, false),
+            ];
+            for (x, tall, whole) in masts {
+                let x = x * w;
+                g.cube(
+                    v(x, h + tall * 0.5, 0.0),
+                    v(0.45, tall * 0.5, 0.45),
+                    DARK_WOOD,
+                );
+                if !whole {
+                    continue;
+                }
+                // Two yards, each with a sail hanging in tatters below it.
+                for (k, up) in [0.92, 0.6].into_iter().enumerate() {
+                    let y = h + tall * up;
+                    let span = d * if k == 0 { 0.62 } else { 0.85 };
+                    g.cube(v(x, y, 0.0), v(0.25, 0.25, span), DARK_WOOD);
+                    let drop = tall * 0.28;
+                    let sail = SAIL.mix(Rgb(0xC9B48F), 0.55);
+                    let (a, b2) = (v(x + 0.3, y - 0.3, span), v(x + 0.3, y - 0.3, -span));
+                    let (c, e) = (
+                        v(x + 1.2, y - drop, -span * 0.9),
+                        v(x + 1.2, y - drop * 0.7, span * 0.85),
+                    );
+                    g.m.thin_tri(a, b2, c, sail);
+                    // A ragged hole where the lower half has torn away.
+                    g.m.thin_tri(a, c, v(x + 1.0, y - drop * 0.55, 0.0), sail);
+                    g.m.thin_tri(a, v(x + 1.0, y - drop * 0.55, 0.0), e, sail);
+                }
+            }
+            // The crow's nest, and the lantern hung just below it.
+            let main = -0.02 * w;
+            g.cube(v(main, h + 27.5, 0.0), v(1.3, 0.7, 1.3), WOOD);
+            let from = g.m.verts.len();
+            g.cube(
+                v(main + 1.0, h + 25.6, 0.0),
+                v(0.45, 0.6, 0.45),
+                Rgb(0xFFD27A),
+            );
+            // Stern windows that still catch the light.
+            for z in [-0.25, 0.0, 0.25] {
+                g.cube(
+                    v(-w * 0.5 - 0.02, h + 2.6, z * d),
+                    v(0.05, 0.7, 0.6),
+                    Rgb(0xFFD27A),
+                );
+            }
+            g.night_from(from);
+            // The snapped top of the aft mast lies across the deck.
+            g.cube(v(-w * 0.15, h + 0.6, d * 0.1), v(7.0, 0.4, 0.4), DARK_WOOD);
+            let list = Mat4::from_rotation_x(0.13) * Mat4::from_rotation_z(-0.05);
+            n.m.append(&g.m, list);
+            let mut far = Parts::new();
+            far.hull(w, d, h, hull, Rgb(0xA27C55));
+            for (x, tall, _) in masts {
+                far.cube(
+                    v(x * w, h + tall * 0.5, 0.0),
+                    v(0.7, tall * 0.5, 0.7),
+                    DARK_WOOD,
+                );
+            }
+            far.cube(
+                v(-0.02 * w, h + 19.0, 0.0),
+                v(1.5, 4.0, d * 0.6),
+                SAIL.mix(Rgb(0xC9B48F), 0.55),
+            );
+            f.m.append(&far.m, list);
+        }
         Kind::Boat | Kind::Canoe => {
             let hull_col = pick(
                 &[RED, Rgb(0x3F6E8C), WHITE, Rgb(0x5E8C4E), Rgb(0xF2C14E)],
@@ -2112,6 +2394,43 @@ fn building(
                 v(0.2, 0.5, 0.25),
                 Rgb(0x3A3A40),
             );
+        }
+        Kind::Dolphins => {
+            // A pod of dolphins, heading +x: a big one in the middle to ride, its back
+            // just out of the water, and four more round it, fins up.
+            let grey = Rgb(0x6C8796);
+            let fin = Rgb(0x5A7484);
+            for (x, z, k) in [
+                (0.0f32, 0.0f32, 1.0f32),
+                (2.6, -2.0, 0.7),
+                (-2.4, 2.1, 0.7),
+                (-3.4, -1.9, 0.6),
+                (3.4, 1.8, 0.6),
+            ] {
+                let y = if k > 0.9 { 0.15 } else { -0.05 };
+                for (p, detail) in [(&mut n, 9), (&mut f, 5)] {
+                    p.m.blob(
+                        Vec3::new(x, y, z),
+                        Vec3::new(2.0 * k, 0.45 * k, 0.6 * k),
+                        false,
+                        0.05,
+                        detail,
+                        grey,
+                    );
+                }
+                n.m.thin_tri(
+                    Vec3::new(x + 0.3 * k, y + 0.35 * k, z),
+                    Vec3::new(x - 0.5 * k, y + 0.35 * k, z),
+                    Vec3::new(x - 0.6 * k, y + 0.95 * k, z),
+                    fin,
+                );
+                n.m.thin_tri(
+                    Vec3::new(x - 1.8 * k, y, z),
+                    Vec3::new(x - 2.5 * k, y + 0.05, z + 0.7 * k),
+                    Vec3::new(x - 2.5 * k, y + 0.05, z - 0.7 * k),
+                    fin,
+                );
+            }
         }
         Kind::MotorYacht => {
             // A white motor yacht, bow toward +x: a navy stripe, a saloon with dark
@@ -2483,7 +2802,17 @@ fn building(
         | Kind::Farm
         | Kind::Port
         | Kind::SeaDoors
-        | Kind::BasaltGate => {
+        | Kind::BasaltGate
+        | Kind::Mansion
+        | Kind::Crag
+        | Kind::Goats
+        | Kind::CarPark
+        | Kind::Vineyard
+        | Kind::Orchard
+        | Kind::Temple
+        | Kind::Shrine
+        | Kind::LaunchPad
+        | Kind::IceCream => {
             landmark(b, &mut n, &mut f);
         }
         Kind::Lantern => {
@@ -2800,6 +3129,7 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
             M::Rock => Rgb(0xB4A08A),
             M::Pale => Rgb(0xE4DCCB),
             M::Basalt => Rgb(0x4B4A52),
+            M::Grape => Rgb(0x6A3D7A),
             M::Hidden => continue,
         };
         // Water is not lit like windows: their lights come on in patches, which on a
@@ -2840,6 +3170,17 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
                 corner(x0, top, 0, 127),
             );
             n.letters.extend([a, bb, cc, a, cc, d]);
+            continue;
+        }
+        // A broad lawn at the foot of a park, fair or zoo is left to the island's own
+        // grass, which has tufts and flowers and follows the ground. Drawn, it was one
+        // flat green square. Pitches and fairways are mown, so they keep theirs.
+        let lawn = match piece.form {
+            Form::Box { at, half, .. } => at.y <= 0.3 && half.y <= 0.6 && half.x.min(half.z) >= 5.0,
+            Form::Round { at, h, r0, .. } => at.y <= 0.3 && h <= 0.6 && r0 >= 5.0,
+            _ => false,
+        };
+        if lawn && piece.mat == M::Grass && !matches!(b.kind, Kind::Stadium | Kind::Golf) {
             continue;
         }
         let mut one = Parts::new();
@@ -2897,7 +3238,11 @@ fn landmark(b: &Building, n: &mut Parts, f: &mut Parts) {
         // Broad flat ground, like a park's lawn, a pool or a pen, shows from afar too, so
         // a place never appears as loose pieces floating on the bare hillside.
         let ground = match piece.form {
-            Form::Box { half, .. } => half.y <= 0.6 && half.x.min(half.z) >= 5.0,
+            // Long rows of crops or vines too, so fields read as fields from the air.
+            Form::Box { half, .. } => {
+                (half.y <= 0.6 && half.x.min(half.z) >= 5.0)
+                    || (half.y <= 1.5 && half.x.max(half.z) >= 20.0 && half.x.min(half.z) >= 0.5)
+            }
             Form::Round { h, r0, .. } => h <= 0.6 && r0 >= 5.0,
             _ => false,
         };
@@ -3344,7 +3689,7 @@ fn roads(
                 }
             }
             if ba && bb {
-                // Deck sides, rails and a pier at every other step.
+                // Deck sides and rails.
                 let (dl, dr) = (corners[0] - Vec3::Y * 1.6, corners[1] - Vec3::Y * 1.6);
                 let (el, er) = (corners[3] - Vec3::Y * 1.6, corners[2] - Vec3::Y * 1.6);
                 let deck = if r.w > 12.0 { Rgb(0xC9C2B8) } else { STONE };
@@ -3373,27 +3718,6 @@ fn roads(
                         );
                     }
                     tile.near.glow_from(from);
-                }
-                let held = spans
-                    .iter()
-                    .any(|s| along > s[0] + 5.0 && along < s[1] - 5.0);
-                if (along / 10.0) as i32 % 4 == 0 && !held {
-                    let mid = (a + b) * 0.5;
-                    let top = (ya + yb) * 0.5 - 1.6;
-                    // Down to the cavern floor under a trestle, else the ground.
-                    let ground = if tun[k] {
-                        terrain.support(mid.x, mid.y, top)
-                    } else {
-                        terrain.height(mid.x, mid.y).min(top)
-                    };
-                    let floor = ground.min(-4.0).max(ground);
-                    let c = Vec3::new(mid.x, (top + floor) * 0.5, mid.y);
-                    let half_h = (top - floor) * 0.5;
-                    if half_h > 0.5 {
-                        for out in [&mut tile.near, &mut tile.far] {
-                            out.cube(c, Vec3::new(1.6, half_h, 1.6), deck);
-                        }
-                    }
                 }
             }
             // Near a mouth it is also drawn with the cave insides, which are what is drawn
@@ -3532,23 +3856,25 @@ fn roads(
                 }
             }
         }
+        // A pier under every fourth piece of deck not hung from cables.
+        let deck = if r.w > 12.0 { Rgb(0xC9C2B8) } else { STONE };
+        for (mid, floor, top) in terrain.piers(ri, &spans) {
+            let tile = open_tile(tiles, mid);
+            let half_h = (top - floor) * 0.5;
+            let c = Vec3::new(mid.x, floor + half_h, mid.y);
+            for out in [&mut tile.near, &mut tile.far] {
+                out.cube(c, Vec3::new(1.6, half_h, 1.6), deck);
+            }
+        }
         // Stone abutments where each bridge meets the bank, so no deck ends in the air.
         let mut unit = MeshBuilder::new();
         unit.cube(Vec3::Y, Vec3::ONE, STONE);
-        for j in 0..pts.len() {
-            let (p, y, bridge, s) = pts[j];
-            let first = j == 0 || !pts[j - 1].2;
-            let last = j + 1 == pts.len() || !pts[j + 1].2;
-            if !bridge || !(first || last) {
-                continue;
-            }
-            let top = y - 0.15;
-            let bottom = terrain.height(p.x, p.y).min(top - 1.6) - 3.0;
-            let along = Vec2::new(s.y, -s.x);
+        for ab in terrain.abutments(ri) {
+            let (p, along) = (ab.at, ab.along);
             let m = Mat4::from_scale_rotation_translation(
-                Vec3::new(4.0, (top - bottom) * 0.5, half + 0.9),
+                Vec3::new(ab.half_len, (ab.top - ab.bottom) * 0.5, ab.half_w),
                 Quat::from_rotation_y((-along.y).atan2(along.x)),
-                Vec3::new(p.x, bottom, p.y),
+                Vec3::new(p.x, ab.bottom, p.y),
             );
             let tile = tiles.entry(tile_key(p)).or_insert_with(|| Tile {
                 near: MeshBuilder::new(),
@@ -3604,7 +3930,9 @@ pub fn build(
     let mut blocks: HashMap<(i32, i32), Block> = HashMap::new();
     for b in buildings {
         let key = tile_key(Vec2::new(b.pos.x, b.pos.z));
-        let under = b.style == Style::Cavern;
+        // A wreck run aground in a cave pool is seen only from inside, with the caves.
+        let under = b.style == Style::Cavern
+            || b.kind == Kind::Wreck && terrain.height(b.pos.x, b.pos.z) > b.pos.y + 40.0;
         let map = if under { &mut caves } else { &mut tiles };
         let tile = map.entry(key).or_insert_with(|| Tile {
             cave: under,
@@ -3694,4 +4022,98 @@ pub fn build(
     let mut out: Vec<((i32, i32), Tile)> = tiles.into_iter().chain(caves).collect();
     out.sort_by_key(|(k, t)| (t.cave, *k));
     out
+}
+
+/// What is up on a skyscraper's roof, by its seed: a restaurant, a garden or a pool.
+pub fn rooftop_kind(seed: u32) -> u32 {
+    (seed / 7) % 4
+}
+
+/// A restaurant's tables on a skyscraper roof, in the building's frame: where each table
+/// stands, beside the plant room in the middle.
+pub fn rooftop_tables(w: f32, d: f32) -> [(f32, f32); 4] {
+    let (x, z) = (w * 0.34, d * 0.22);
+    [(x, -z), (x, z), (-x, -z), (-x, z)]
+}
+
+fn rooftop(n: &mut Parts, b: &Building, w: f32, d: f32, h: f32) {
+    let top = h + 0.12;
+    match rooftop_kind(b.seed) {
+        // Tables under umbrellas, planters, and strings of bulbs round the edge.
+        0 => {
+            n.cube(
+                Vec3::new(0.0, top, 0.0),
+                Vec3::new(w * 0.48, 0.06, d * 0.48),
+                Rgb(0xB8895A),
+            );
+            for (k, (x, z)) in rooftop_tables(w, d).into_iter().enumerate() {
+                n.cube(
+                    Vec3::new(x, top + 0.45, z),
+                    Vec3::new(0.6, 0.05, 0.6),
+                    WHITE,
+                );
+                n.cube(
+                    Vec3::new(x, top + 0.2, z),
+                    Vec3::new(0.06, 0.25, 0.06),
+                    STEEL,
+                );
+                n.cube(
+                    Vec3::new(x, top + 1.2, z),
+                    Vec3::new(0.05, 0.75, 0.05),
+                    STEEL,
+                );
+                let shade = [RED, Rgb(0xF2C14E), Rgb(0x2E6FB8), Rgb(0x6BBF7A)][k];
+                n.cube(Vec3::new(x, top + 2.0, z), Vec3::new(1.3, 0.08, 1.3), shade);
+            }
+            for x in [-1.0f32, 1.0] {
+                n.cube(
+                    Vec3::new(x * w * 0.45, top + 0.4, 0.0),
+                    Vec3::new(0.4, 0.4, d * 0.3),
+                    Rgb(0x5FA046),
+                );
+            }
+            let from = n.m.verts.len();
+            for k in 0..16 {
+                let u = k as f32 / 16.0 * std::f32::consts::TAU;
+                let (x, z) = (u.cos() * w * 0.47, u.sin() * d * 0.47);
+                n.cube(Vec3::new(x, top + 2.3, z), Vec3::splat(0.12), LAMP);
+            }
+            n.glow_from(from);
+        }
+        // A roof garden: lawn, little trees in tubs.
+        1 => {
+            n.cube(
+                Vec3::new(0.0, top, 0.0),
+                Vec3::new(w * 0.46, 0.08, d * 0.46),
+                Rgb(0x6BBF5A),
+            );
+            for (x, z) in [(0.32f32, 0.3f32), (-0.32, 0.3), (0.32, -0.3), (-0.32, -0.3)] {
+                let at = Vec3::new(x * w, top, z * d);
+                n.cube(at + Vec3::Y * 0.3, Vec3::new(0.5, 0.3, 0.5), Rgb(0x8B5E3C));
+                n.cube(at + Vec3::Y * 1.0, Vec3::new(0.1, 0.5, 0.1), Rgb(0x6E4A33));
+                n.cube(at + Vec3::Y * 2.0, Vec3::new(0.9, 0.7, 0.9), Rgb(0x3F7A3A));
+            }
+        }
+        // A pool with its loungers.
+        2 => {
+            n.cube(
+                Vec3::new(w * 0.12, top, 0.0),
+                Vec3::new(w * 0.3, 0.1, d * 0.38),
+                WHITE,
+            );
+            n.cube(
+                Vec3::new(w * 0.12, top + 0.04, 0.0),
+                Vec3::new(w * 0.26, 0.1, d * 0.32),
+                Rgb(0x7FD6E0),
+            );
+            for z in [-0.25f32, 0.0, 0.25] {
+                n.cube(
+                    Vec3::new(-w * 0.36, top + 0.25, z * d),
+                    Vec3::new(0.9, 0.15, 0.35),
+                    WHITE,
+                );
+            }
+        }
+        _ => {}
+    }
 }

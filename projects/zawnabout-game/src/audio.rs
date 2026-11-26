@@ -39,6 +39,118 @@ pub enum Event {
     Thunder { delay: f32, loud: f32, crack: bool },
     /// A church bell striking `count` times.
     Bell { count: u32, loud: f32 },
+    /// Something talked to answers: one of [`Call`].
+    Call { call: Call, loud: f32 },
+}
+
+/// What an animal or a car says when the dragon talks to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Call {
+    Moo,
+    Roar,
+    Trumpet,
+    Squawk,
+    Baa,
+    Neigh,
+    Bark,
+    Honk,
+    /// A beacon catching: a rush of flame and a bright chime.
+    Whoosh,
+    /// Pigeons clattering up off the pavement.
+    Flutter,
+    /// A big sleepy yawn with a puff of flame at the end.
+    Yawn,
+}
+
+impl Call {
+    /// How long it lasts (s).
+    fn length(self) -> f32 {
+        match self {
+            Call::Moo => 1.4,
+            Call::Roar => 1.5,
+            Call::Trumpet => 1.0,
+            Call::Squawk => 0.6,
+            Call::Baa => 0.9,
+            Call::Neigh => 1.1,
+            Call::Bark => 0.7,
+            Call::Honk => 0.7,
+            Call::Whoosh => 1.6,
+            Call::Flutter => 0.9,
+            Call::Yawn => 2.2,
+        }
+    }
+
+    /// One sample, `p` seconds in.
+    fn sample(self, p: f32) -> f32 {
+        use std::f32::consts::TAU;
+        let len = self.length();
+        // A tone sliding from `f0` to `f1` over the call, as a soft sawtooth.
+        let slide = |f0: f32, f1: f32, h: &[f32]| {
+            let ph = f0 * p + (f1 - f0) * p * p / (2.0 * len);
+            h.iter()
+                .enumerate()
+                .map(|(k, a)| (TAU * ph * (k + 1) as f32).sin() * a)
+                .sum::<f32>()
+        };
+        let noise = ((p * 12_345.679).sin() * 43_758.547).fract() * 2.0 - 1.0;
+        let fade = |a: f32, r: f32| (p / a).min(1.0) * ((len - p) / r).clamp(0.0, 1.0);
+        match self {
+            Call::Moo => slide(150.0, 105.0, &[0.6, 0.5, 0.35, 0.2, 0.1]) * fade(0.15, 0.4),
+            Call::Roar => {
+                let growl = 0.6 + 0.4 * (TAU * 28.0 * p).sin();
+                (slide(110.0, 80.0, &[0.5, 0.4, 0.3, 0.2]) * 0.7 + noise * 0.35)
+                    * growl
+                    * fade(0.08, 0.6)
+            }
+            Call::Trumpet => {
+                let wob = 1.0 + 0.03 * (TAU * 7.0 * p).sin();
+                slide(420.0 * wob, 560.0, &[0.5, 0.35, 0.25, 0.15]) * fade(0.05, 0.3)
+            }
+            Call::Squawk => {
+                let burst = ((p / 0.2).fract() < 0.6) as u8 as f32;
+                slide(950.0, 700.0, &[0.4, 0.3, 0.2]) * burst * fade(0.01, 0.1)
+            }
+            Call::Baa => {
+                let wob = 0.5 + 0.5 * (TAU * 9.0 * p).sin();
+                slide(330.0, 290.0, &[0.5, 0.35, 0.2]) * (0.4 + 0.6 * wob) * fade(0.05, 0.3)
+            }
+            Call::Neigh => {
+                let wob = 1.0 + 0.06 * (TAU * 11.0 * p).sin();
+                slide(800.0 * wob, 380.0, &[0.45, 0.3, 0.15]) * fade(0.04, 0.4)
+            }
+            Call::Bark => {
+                let burst = ((p / 0.33).fract() < 0.45) as u8 as f32;
+                slide(260.0, 200.0, &[0.6, 0.4, 0.25]) * burst * fade(0.01, 0.1)
+            }
+            Call::Honk => {
+                let on = (p < 0.25 || p > 0.35) as u8 as f32;
+                let sq = |f: f32| (TAU * f * p).sin().signum() * 0.25;
+                (sq(370.0) + sq(466.0)) * on * fade(0.01, 0.05)
+            }
+            Call::Whoosh => {
+                let rush = noise * (1.0 - p / len).powi(2) * 0.6;
+                let chime = slide(660.0, 660.0, &[0.3, 0.0, 0.15]) * (-p * 2.5).exp();
+                (rush + chime * (p > 0.15) as u8 as f32) * fade(0.08, 0.3)
+            }
+            Call::Flutter => {
+                // Wingbeats: soft bursts of air, quick at first then trailing off.
+                let beat = (TAU * (17.0 - p * 6.0) * p).sin().max(0.0).powi(2);
+                noise * beat * (1.0 - p / len).powf(1.5) * 0.35 * fade(0.01, 0.2)
+            }
+            Call::Yawn => {
+                // A long low rising and falling groan, then a little huff of flame.
+                let wob = 1.0 + 0.04 * (TAU * 5.0 * p).sin();
+                let groan = slide(70.0 * wob, 120.0, &[0.5, 0.4, 0.25, 0.1])
+                    * (p * 1.6).min(1.0)
+                    * ((1.7 - p) / 0.4).clamp(0.0, 1.0);
+                let huff = noise
+                    * ((p - 1.7) / 0.5).clamp(0.0, 1.0).sqrt()
+                    * ((len - p) / 0.5).clamp(0.0, 1.0)
+                    * 0.4;
+                (groan * 0.6 + huff) * fade(0.2, 0.1)
+            }
+        }
+    }
 }
 
 /// The speed of sound (m/s), for thunder.
@@ -182,6 +294,11 @@ impl Listener {
             }
         }
         self.heard = time;
+
+        // Anything talked to answers.
+        for call in game.calls.borrow_mut().drain(..) {
+            mix.events.push(Event::Call { call, loud: 1.0 });
+        }
 
         // Bells ring out the hour, heard only close to a tower.
         if sky.hour.floor() != self.hour.floor() && (sky.hour - self.hour).rem_euclid(24.0) < 1.0 {
@@ -468,6 +585,10 @@ impl Synth {
                                 p > 8.0,
                             )
                         }
+                    }
+                    Event::Call { call, loud } => {
+                        let p = v.at;
+                        (call.sample(p) * loud * 0.35, p > call.length())
                     }
                     Event::Bell { count, loud } => {
                         let k = (v.at / 1.8) as u32;

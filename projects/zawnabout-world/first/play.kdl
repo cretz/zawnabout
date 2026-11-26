@@ -83,7 +83,7 @@ coins coins-motu x=-4600 z=-3120 n=20
 
 postcard summit name="Top of Home" island=home x=-1560 z=-380 r=40 line="The highest point of the home island. On a clear day you can see every island from here."
 postcard summit-snowman name="The Summit Snowman" island=home x=-1710 z=-420 r=30 line="Somebody built a snowman at the top of the world. He never melts."
-postcard summit-restaurant name="Cloud Cafe" island=home x=-1432 y=640 z=-212 r=40 line="The highest cup of cocoa on the islands, with the clouds below."
+postcard summit-restaurant name="Cloud Cafe" island=home x=-1432 y=640 z=-212 r=40 face=75 line="The highest cup of cocoa on the islands, with the clouds below."
 postcard high-falls name="High Falls" island=home x=-2635 z=610 r=70 aim=-60 line="The tallest falls on the home island, roaring and misty and always rainbowy."
 postcard tarn-falls name="Tarn Falls" island=home x=-2605 z=20 r=70 aim=-60 line="Water from the hidden tarn tumbling all the way to the sea."
 postcard sky-ear name="The Sky Ear" island=home x=-2450 z=-20 r=50 line="A great dish that listens to the stars. It hears them hum at night."
@@ -94,12 +94,12 @@ postcard bay-statue name="Bay Statue" island=home x=-900 z=2500 r=35 line="A sto
 postcard ferris name="The Big Wheel" island=home x=-1035 z=884 r=40 line="Round and round over Terrace Hill. The best view is from the very top."
 postcard spiral name="The Serpent of the Spine" island=home x=-960 y=100 z=-745 r=60 line="The islands' old serpent god, carved deep into the sea cliff, a pearl glowing in its jaws."
 postcard glass-lake name="Crystal Lake" island=home x=-3050 y=-660 z=1420 r=80 line="Deep underground, crystals glow over water as still as glass."
-postcard moon-tower name="Moon Tower" island=crescent x=1550 z=-1350 r=40 line="The tallest tower in Moonharbor. Its top glows silver at night."
+postcard moon-tower name="Moon Tower" island=crescent x=1550 y=157 z=-1350 r=40 line="The tallest tower in Moonharbor. Its top glows silver at night."
 postcard chess-board name="The Moon Chess Board" island=crescent x=1478 z=-1438 r=40 line="A chess board as big as a garden, waiting for its pieces to come home."
 postcard key-bridge name="Key Bridge" island=crescent x=4100 z=-2120 r=60 line="The long bridge across the channel, busy with cars all day."
 postcard circus name="The Big Top" island=crescent x=2200 z=-3000 r=60 line="Striped tents and a ringmaster's hat. There is always a show tonight."
 postcard sandcastle name="The Great Sandcastle" island=crescent x=3020 z=-3500 r=35 line="The biggest sandcastle ever built. The tide is too polite to knock it over."
-postcard elder-faces name="The Elder Faces" island=twins x=-1900 z=-5045 r=90 line="Great stone faces carved by the old stone folk, watching the sea."
+postcard elder-faces name="The Elder Faces" island=twins x=-1900 z=-5045 r=90 face=180 high=40 line="Great stone faces carved by the old stone folk, watching the sea."
 postcard elder-summit name="Elder Summit" island=twins x=-1950 z=-4660 r=40 line="The cold top of the old stone island, where the harp music once played."
 postcard tidewater-light name="Tidewater Light" island=twins x=-50 z=-5200 r=45 line="The light at the end of the twins, guiding the fishing boats in."
 postcard twin-maze name="The Hedge Maze" island=twins x=-2100 z=-4150 r=50 line="A maze is much easier from above. Do not tell the people inside."
@@ -109,7 +109,7 @@ postcard hot-spring name="The Hot Spring" island=fang x=3450 z=3150 r=40 line="A
 postcard observatory name="The Observatory" island=fang x=3640 z=3020 r=35 line="A white dome on the volcano, its telescope always looking up."
 postcard great-needle name="The Great Needle" island=needles x=-4300 z=3600 r=25 line="The tallest needle of all, standing straight up out of the sea."
 postcard rope-bridge name="The Rope Bridge" island=needles x=-4579 y=190 z=3878 r=35 line="A wobbly rope bridge strung between two needles. Very brave people use it."
-postcard warden name="The Oar Warden" island=needles x=-4608 z=3420 r=90 line="A giant carved into a needle, holding an oar, keeping the sea calm."
+postcard warden name="The Oar Warden" island=needles x=-4608 z=3420 r=90 face=270 high=70 line="A giant carved into a needle, holding an oar, keeping the sea calm."
 postcard bandstand name="Heart Islet Bandstand" island=atoll x=-4260 z=-2736 r=40 line="A little bandstand on the rocky islet in the middle of the lagoon."
 postcard hidden-grotto name="The Hidden Grotto" island=atoll x=-4250 y=-60 z=-2700 r=90 line="A sunlit pool deep under the heart of the atoll. Hardly anyone knows."
 postcard lighthouse-rock name="Lighthouse Rock" island=sea x=1500 z=-3800 r=35 line="A lighthouse on a lonely rock, halfway between the twins and the crescent."
@@ -144,12 +144,13 @@ coins coins-maze x=-2110 z=-4140 n=20
 coins coins-vault x=-2060 y=-1290 z=-1460 n=30
 
 postcard reef-wreck name="The Reef Wreck" island=atoll x=-3220 z=-2500 r=45 line="A trading ship sleeping on the outer reef, turtles swimming round it."
+postcard sunken-ship name="The Ship Under the Sea" island=sea x=600 y=-585 z=4330 r=60 line="A little ship sitting in a pool in a cave under the sea. Crystals for stars."
 postcard needle-wreck name="The Needle Wreck" island=needles x=-3700 z=4050 r=45 line="A schooner that tried to slip between the needles. It is still trying."
 
 // Named locals: they stand at their spots in town, say a few things, and some ask a small
 // favor. Kinds: return a find, light a beacon, bring a postcard, fetch a lost item.
 
-local fen name="Fen the Farmer" town="Home Village" x=-1955 z=1150 facing=200 look=0 {
+local fen name="Fen the Farmer" town="Home Village" x=-1945 z=1141 facing=200 look=0 {
     line "Morning! Or is it afternoon? Up here the day just floats by."
     line "The beacons used to be lit every night, my granny said. Back when dragons were about."
     request kind=light target="home/home-beacon" ask="Could you light the beacon here for me? Just breathe fire on it. My lantern blew out and the beacon is so much brighter." hint="Fen wants the beacon by the start meadow lit. Breathe fire on it." thanks="Look at it glow! You're a natural. Here, a few coins from the jar." gold=10
@@ -253,8 +254,11 @@ stunt under-rope-bridge name="Under the Rope Bridge" line="Beneath the swaying r
 stunt goal name="Goal!" line="Straight through the goal at Moonharbor's stadium. The crowd goes wild!" kind=gap x1=1121.4 z1=-1646.8 x2=1120.2 z2=-1654.0 lo=12 hi=17.3
 stunt own-goal name="Own Goal" line="Through the other goal at Moonharbor's stadium. Well, it still counts!" kind=gap x1=1229.8 z1=-1666.0 x2=1228.6 z2=-1673.2 lo=12 hi=17.3
 stunt through-the-eye name="Through the Eye" line="All the way through the eye, the great shaft between the sky and the lagoon vault." kind=near x=2895 z=-1845 lo=-400 hi=-260 r=30
+stunt statue-hat name="A Hat for the Statue" line="Perched right on top of the bay statue's head. She doesn't seem to mind." kind=perch x=-909 z=2502 r=5 lo=40 hi=52
+stunt clock-top name="Top of the Clock" line="Sitting on the very top of Kettle Harbor's clock tower. Tick, tock." kind=perch x=-1743 z=1499 r=4 lo=27 hi=36
 
 stunt falling-star name="Falling Star" line="A long, steep dive, wings tucked tight. Whoosh!" kind=dive
+stunt shaft-diver name="Down the Well" line="A long drop straight down a shaft into the dark, wings tight to your sides." kind=shaft
 stunt dragon-comet name="Dragon Comet" line="Diving and breathing fire at the same time. Like a comet!" kind=comet
 stunt wave-skimmer name="Wave Skimmer" line="Fast and low over the water, close enough to touch the waves." kind=skim
 stunt long-glide name="The Long Glide" line="Half a minute on still wings, not a single flap." kind=glide
@@ -280,6 +284,9 @@ stunt wing-walker name="Wing Walker" line="A ride on the seaplane. Hold on tight
 stunt sail-away name="Sail Away" line="A ride on a yacht, with the wind in its sails." kind=ride vehicle=sailboat
 stunt going-down name="Going Down!" line="A ride on the drop tower at the fair. Whee!" kind=ride vehicle=dropring
 stunt speedboat-surfer name="Speedboat Surfer" line="A bumpy, splashy ride on a speedboat." kind=ride vehicle=speedboat
+stunt dolphin-rider name="Dolphin Rider" line="A ride on a dolphin's back, the rest of the pod leaping alongside. Squeak!" kind=ride vehicle=dolphins
+stunt parasail-perch name="Sky Sail" line="Stood on top of a parasail, towed along high over the sea." kind=ride vehicle=parasail
+stunt water-skier name="Water Skier" line="Rode the skis behind a speedboat, carving across the wake." kind=ride vehicle=waterski
 stunt jet-setter name="Jet Setter" line="A ride on top of an airliner. Nobody saw. Probably." kind=ride vehicle=airliner
 stunt chopper-hopper name="Chopper Hopper" line="A ride on a helicopter, with the blades going whup whup whup." kind=ride vehicle=helicopter
 stunt life-of-luxury name="Life of Luxury" line="A ride on a gleaming motor yacht. Very posh." kind=ride vehicle=motoryacht
@@ -319,10 +326,10 @@ course lighthouse-run name="The Lighthouse Run" line="Three lighthouses keep wat
 course falls-chaser name="The Falls Chaser" line="Four great waterfalls, one of them deep under the home island. Feel the spray of every one." rumor="My uncle says there's a waterfall so deep underground that nobody's ever seen the bottom." gold=15 prize-kind=ribbon prize-name="The Waterfall Ribbon" prize-story="A ribbon the color of spray in the sun. It still smells a little of waterfalls." {
     gate x=-2605 z=20 r=60 lo=0 hi=800
     gate x=-2635 z=610 r=60 lo=0 hi=800
-    gate x=3615 z=3665 r=60 lo=0 hi=800
+    gate x=3625 z=3770 r=60 lo=0 hi=800
     gate x=-375 z=1925 r=60 lo=-1600 hi=-200
 }
-course gull-nooks name="The Gull Nooks" line="Five little caves in the home island's north cliffs. Peek into every one." rumor="The gulls nest in little caves along the north cliffs. Five of them, I think. Or six." gold=10 prize-kind=ribbon prize-name="The Gull Ribbon" prize-story="A slightly feathery ribbon. The gulls made it themselves, and they are very proud." {
+course gull-nooks name="The Gull Nooks" line="Five little caves in the home island's north cliffs. Peek into every one." rumor="The gulls nest in little caves along the north cliffs. Five of them, I think. Or six." gold=10 prize-kind=ribbon prize-name="The Gull Ribbon" prize-story="A slightly feathery ribbon. The gulls made it themselves, and they are very proud." nest=gull {
     gate x=-2750 z=-680 r=25 lo=40 hi=100
     gate x=-2400 z=-730 r=25 lo=80 hi=140
     gate x=-2000 z=-855 r=25 lo=30 hi=90
@@ -429,7 +436,7 @@ set deep-gems name="Gems of the deep" done="All five deep gems are found! Home V
 }
 
 find toy-boat-kettle kind=toy-boat set=toy-boats name="The Red Racer" x=-1411 z=1838 hint="A red boat, last seen racing the fishing boats at Kettle Harbor's docks." story="The fastest toy boat in Kettle Harbor. It chased a fishing boat all the way to the docks."
-find toy-boat-marina kind=toy-boat set=toy-boats name="The Blue Breeze" x=1992 z=-1062 hint="It sailed off to the big marina in Moonharbor, with all the real yachts." story="It thought it was a real yacht, so it moored at the marina with all the others."
+find toy-boat-marina kind=toy-boat set=toy-boats name="The Blue Breeze" x=2102 z=-1082 hint="It sailed off to the big marina in Moonharbor, with all the real yachts." story="It thought it was a real yacht, so it moored at the marina with all the others."
 find toy-boat-yacht kind=toy-boat set=toy-boats name="The Little Dipper" x=3890 z=-1488 hint="Somewhere fancy, where the yachts of the crescent's east side tie up." story="The yacht club let it stay as an honorary member. It had very good manners."
 find toy-boat-tidewater kind=toy-boat set=toy-boats name="The Brave Biscuit" x=12 z=-4062 hint="It washed up at the docks of the seafaring town on the twin islands." story="Named after a biscuit, and just as crumbly. It floated all the way to Tidewater."
 find toy-boat-cove kind=toy-boat set=toy-boats name="The Sleepy Sloop" x=4386 z=2488 hint="It drifted all the way to a warm little cove on the volcano island." story="It found the warm cove on Fang and decided to have a nap there. A long nap."
@@ -437,7 +444,7 @@ find toy-boat-cove kind=toy-boat set=toy-boats name="The Sleepy Sloop" x=4386 z=
 find fossil-seals kind=fossil set=fossils name="The Curly Shell" x=-596 z=2291 hint="On the rocks where the seals lie about, off the home island's south shore." story="A curly shell turned to stone. The seals have been sitting on it for years."
 find fossil-nook kind=fossil set=fossils name="The Gull Nook Bone" x=-1994 y=62 z=-840 hint="In one of the little gull caves along the home island's north cliffs." story="The gulls thought it was a very old fish. They were nearly right."
 find fossil-rim kind=fossil set=fossils name="The Volcano Fern" x=3720 z=3060 hint="Up on the rim of the old volcano, where it's warm under your feet." story="A fern pressed into stone by the volcano, a long, long time ago."
-find fossil-elder kind=fossil set=fossils name="The Elder Tooth" x=-1925 z=-4680 hint="On the cold summit of the old stone island." story="A tooth as big as a dragon's foot. Nobody wants to meet whoever it belonged to."
+find fossil-elder kind=fossil set=fossils name="The Elder Tooth" x=-1840 z=-4560 hint="On the elder ridge, a way down from the cold summit." story="A tooth as big as a dragon's foot. Nobody wants to meet whoever it belonged to."
 find fossil-strait kind=fossil set=fossils name="The Strait Starfish" x=-900 y=16 z=-4618 hint="On the beach just above the waves, on the younger twin's north shore by the strait." story="A stone starfish, waving one arm. It has been waving for a million years."
 find fossil-gullrock kind=fossil set=fossils name="The Feathered Stone" x=-5345 z=-3046 hint="On a lonely gull rock far west of the atoll." story="Feathers in the stone! Maybe there were dragons long before you."
 
@@ -513,11 +520,13 @@ find gullrock-egg kind=egg name="The Gull Rock Egg" x=-5355 z=-3055 story="A smo
 find castaway-book kind=book name="The Castaway's Diary" x=-1495 z=4610 story="Day one: stranded. Day two: it's lovely here. Day three: not going home."
 find rig-medal kind=medal name="The Rig Worker's Medal" x=-1592 z=3110 story="For a hundred days out on the rig. The worker who earned it misses the sea."
 find sunken-chest kind=chest name="The Sunken Hall Chest" x=871 y=-470 z=4426 gold=40 story="Found in the sunken hall far under the sea. The coins inside are still dry."
+find sunken-spyglass kind=spyglass name="The Drowned Captain's Spyglass" x=360 y=-580 z=4400 story="Found on the shore by the little ship stuck in the sunken hall's pool. Nobody knows how it got down there. The captain must have taken a very wrong turn."
+find wanderer-compass kind=compass name="The Old Wanderer's Compass" x=2042 z=1094 story="Still in its brass box on the deck of the old ship. Its needle points home, wherever home is."
 find roadhall-map kind=map name="The Map of the Deep Road" x=1006 y=-990 z=-440 story="Every turn of the deep road, drawn by someone who got lost on it. Twice."
 find drophall-bell kind=bell name="The Drop Hall Bell" x=-94 y=-1040 z=1956 story="Its ring goes all the way up the shaft. Ding... ding... ding."
 find museum-vase kind=vase name="The Museum Vase" x=-440 z=938 story="The museum's oldest vase. It's older than the museum, which is quite old."
 find kettle-pot kind=pot name="The Fish Pie Pot" x=-1840 z=1612 story="Kettle Harbor's famous fish pie is made in this pot. It still smells delicious."
-find zoo-egg kind=egg name="The Penguin Egg" x=-314 z=570 story="A stone egg the penguins found. They take turns sitting on it."
+find zoo-egg kind=egg name="The Penguin Egg" x=-286 z=618 story="A stone egg the penguins found. They take turns sitting on it."
 find skate-medal kind=medal name="The Skater's Medal" x=1418 z=-1630 story="For the best trick at the skate park: a dragon-flip. Nobody has managed it yet."
 find stadium-trophy kind=trophy name="The Little League Cup" x=1180 z=-1650 story="The Moonharbor little league won it last season. They lent it to you."
 
@@ -525,7 +534,7 @@ coins coins-zoo x=-310 z=600 n=15
 coins coins-golf x=-760 z=1940 n=15
 coins coins-gnomes x=-2290 z=1545 n=10
 coins coins-tiers x=-3930 z=690 n=20
-coins coins-marina x=2010 z=-1040 n=20
+coins coins-marina x=2070 z=-1055 n=20
 coins coins-mall x=2550 z=-800 n=15
 coins coins-airport x=2690 z=-3260 n=20
 coins coins-key x=4030 z=-1695 n=15
@@ -560,7 +569,9 @@ postcard tiers name="Sunset Tiers" island=home x=-3925 z=700 r=60 line="A town s
 postcard kettle-market name="Kettle Market" island=home x=-1822 z=1603 r=40 line="Fish, flowers and fish pie, under striped awnings by the harbor."
 postcard harbor-park name="Harbor Park" island=home x=-1300 z=1900 r=45 line="A green park by Kettle Harbor, with a pond for toy boats."
 postcard lantern-hollow name="Lantern Hollow" island=home x=-1800 y=-920 z=1130 r=80 line="A town in a cave, lit by a thousand lanterns. It's never dark here."
-postcard marina name="Moonharbor Marina" island=crescent x=2000 z=-1050 r=60 line="Sailboats bobbing in rows, their ropes tinkling in the wind."
+postcard marina name="Moonharbor Marina" island=crescent x=2095 z=-1080 r=60 line="Sailboats bobbing in rows, their ropes tinkling in the wind."
+postcard chalk-moon name="The Chalk Moon" island=crescent x=1215 z=-2445 r=90 line="A crescent moon cut white into the hillside, older than anyone can remember."
+postcard old-wanderer name="The Old Wanderer" island=sea x=2050 z=1100 r=90 line="A great old ship stuck fast on a reef in the middle of nowhere, her lantern still lit."
 postcard aquarium name="The Aquarium" island=crescent x=2250 z=-680 r=50 line="Fish in tanks as tall as houses, and an octopus who waves."
 postcard university name="Moonharbor University" island=crescent x=1230 z=-1290 r=50 line="Towers and lawns and very clever people, thinking very hard."
 postcard stadium name="The Moon Stadium" island=crescent x=1175 z=-1660 r=70 line="The home of the Moonharbor Moonbeams. They win sometimes."
@@ -585,7 +596,7 @@ postcard fang-lookout name="The Fire Lookout" island=fang x=3300 z=2600 r=35 lin
 postcard igloo name="The Igloo" island=fang x=3900 z=3264 r=30 line="An igloo, on a volcano. Somebody has a sense of humor."
 postcard palm-ring name="Palm Ring" island=atoll x=-4229 z=-3088 r=60 line="A village of huts in the palms, with the lagoon on one side and the sea on the other."
 postcard surf-shack name="The Surf Shack" island=atoll x=-4430 z=-2245 r=40 line="Boards, bikes and the best waves on the islands."
-postcard gull-rock name="Gull Rock" island=atoll x=-5350 z=-3050 r=30 line="A tall rock out west of the atoll, home to a very noisy gull family."
+postcard gull-rock name="Gull Rock" island=atoll x=-5350 z=-3050 r=30 line="A tall rock out west of the atoll, home to a very noisy gull family." nest=gull
 postcard oil-rig name="The Oil Rig" island=sea x=-1600 z=3100 r=50 line="A tall rig out to sea, with a helipad on top and gulls on every rail."
 postcard turtle-camp name="Turtle Back" island=sea x=-1500 z=4605 r=50 line="A long low reef rock, where a castaway camps and the turtles come ashore."
 postcard atoll-seals name="The Atoll Seals" island=atoll x=-4300 z=-2825 r=40 line="Seals lazing on the warm rocks inside the atoll, barking at the boats."
@@ -735,17 +746,17 @@ local ollie name="Ollie" town="Moonharbor" x=1488 z=-1470 facing=180 look=0 {
 }
 
 // Other dragons, one on each outer island. Each leads the way to a secret of its own.
-find cinder-scale kind=gem name="Cinder's Old Scale" x=-1888 z=-5035 story="A scale as big as a dinner plate, shed by Grandmother Cinder long ago. It still feels warm."
-find blaze-ribbon kind=ribbon name="Blaze's First Ribbon" x=3603 z=3665 story="The very first ribbon Blaze ever won, hidden by the falls so nobody could win it back."
+find cinder-scale kind=gem name="Cinder's Old Scale" x=-1833 y=78 z=-5039 story="A scale as big as a dinner plate, shed by Grandmother Cinder long ago, up on the stone dragon's head. It still feels warm."
+find blaze-ribbon kind=ribbon name="Blaze's First Ribbon" x=3655 z=3735 story="The very first ribbon Blaze ever won, hidden by the falls so nobody could win it back."
 find wisp-shell kind=shell name="Wisp's Wishing Shell" x=-3700 z=4050 story="Wisp kept this by the old wreck. Hold it to your ear and it hums a little dragon song."
 find tinker-key kind=key name="Tinker's Spare Key" x=3108 z=-3470 story="It opens nothing at all, Tinker says. That's what makes it so special."
 
 dragon cinder name="Grandmother Cinder" kind=wise island=twins x=-1950 z=-4660 tint="9AB4F2" size=1.35 meet="Hrrm? Oh! Another dragon! I haven't seen one of us in a hundred years. Come and sit, little one. I'm Cinder." rumor="My grandad swears an old blue dragon sits up on the Elder Summit on the Twins, watching the sea. Nobody's been brave enough to say hello." about="The oldest dragon on the islands. She knows every story, and where most things are hidden." secret=cinder-scale gift-kind=book gift-name="Cinder's Book of Old Tales" gift-story="Stories of the dragons who flew here long ago, in Cinder's own big, curly writing." {
-    perch x=-1900 z=-5045
+    perch x=-1834 z=-5042
     perch x=-2100 z=-4150
     way x=-2100 z=-4150
     way x=-1092 z=-4220
-    way x=-1900 z=-5045
+    way x=-1834 z=-5042
     line "When I was young, the islands had a dragon on every peak. Now there's you. That's a fine start."
     line "The people here are kind. They still leave their lamps lit for us, you know. Just in case."
     line "Sit a while. The view from up here never gets old. Neither do I, apparently."
@@ -768,7 +779,7 @@ dragon wisp name="Wisp" kind=shy island=needles x=-4300 y=330 z=3600 tint="C8A8F
     line "Sometimes I watch the ships from up here and pretend they're all going somewhere nice."
     line "Do you want to see my favorite place? I don't show anybody. Well, there's nobody to show."
 }
-dragon tinker name="Tinker" kind=collector island=crescent x=1550 z=-1350 tint="7FD6B0" size=1.0 meet="Hello hello! A dragon! Do you collect things too? Of course you do. I'm Tinker. I collect everything, but spyglasses most of all." rumor="There's a green dragon who sits on top of Moon Tower in Moonharbor. Collects shiny things, they say. Spyglasses most of all." about="A collector of shiny and curious things, spyglasses most of all. Always happy to trade, never sad if you say no." secret=tinker-key gift-kind=clock gift-name="Tinker's Ticking Clock" gift-story="It ticks backwards on Tuesdays. Tinker says that's a feature." want=spyglass trade-kind=compass trade-name="Tinker's Golden Compass" trade-story="It always points to something interesting. Tinker swapped it for a spyglass, and you both think you got the better deal." {
+dragon tinker name="Tinker" kind=collector island=crescent x=1559 y=156 z=-1350 tint="7FD6B0" size=1.0 meet="Hello hello! A dragon! Do you collect things too? Of course you do. I'm Tinker. I collect everything, but spyglasses most of all." rumor="There's a green dragon who sits up on Moon Tower in Moonharbor. Collects shiny things, they say. Spyglasses most of all." about="A collector of shiny and curious things, spyglasses most of all. Always happy to trade, never sad if you say no." secret=tinker-key gift-kind=clock gift-name="Tinker's Ticking Clock" gift-story="It ticks backwards on Tuesdays. Tinker says that's a feature." want=spyglass trade-kind=compass trade-name="Tinker's Golden Compass" trade-story="It always points to something interesting. Tinker swapped it for a spyglass, and you both think you got the better deal." {
     perch x=2200 z=-3000
     perch x=2320 z=-3400
     way x=2200 z=-3000
@@ -905,3 +916,64 @@ find star-candle kind=candle set=night-lights when="night" name="The Star Candle
 find owl-flute kind=flute set=night-lights when="night" name="The Owl's Flute" x=-2094 z=-4140 hint="In the hedge maze on the Twins, an owl's flute plays only after dark." story="Blow it softly and every owl on the islands hoots back."
 find glow-shell kind=shell set=night-lights when="night" name="The Glow Shell" x=3030 z=-3490 hint="By the great sandcastle on the Crescent, a shell glows on the sand once the sun is down." story="It glows blue in the dark, like a piece of the sea at night."
 find night-pearl kind=pearl set=night-lights when="night" name="The Night Pearl" x=-4250 z=3610 hint="At the foot of the Great Needle, a pearl shines up from the rocks at night." story="A pearl as dark as the night sky, with a little star twinkling inside."
+
+// From the 2026-11-14 notes: the new places get postcards, and people with favors at the
+// beach, the camps, the villa, the zoo and down in Glimmer Deep.
+postcard plateau-villa name="The Plateau Villa" island=home x=-3000 z=150 r=50 line="A grand villa on the plateau's edge, its pool looking out to sea."
+postcard spine-lookout name="The Spine Lookout" island=home x=-496 z=-229 r=40 line="A lookout high on the spine. Paragliders float down from here all day."
+postcard kettle-beach name="Kettle Beach" island=home x=-760 z=2265 r=50 line="Umbrellas, sandcastles and surfers below Kettle Light."
+postcard glimmer-deep name="Glimmer Deep" island=home x=-950 y=-1410 z=-1500 r=80 line="A little town at the far end of the north vault, under the sea."
+postcard twins-manor name="The Twins Manor" island=twins x=-500 z=-4600 r=50 line="A big old house high on the twins, with a pool and a gazebo."
+
+local lou name="Lifeguard Lou" town="Kettle Harbor" x=-700 z=2282 facing=180 look=5 {
+    line "Swim between the flags! Well, there aren't any flags. Swim nicely, then."
+    line "Best job in the world. I get paid to look at the sea."
+    request kind=fetch ask="My sun hat blew right off my head and up onto the clifftop behind the beach! Could you fetch it? I burn like toast." hint="Lifeguard Lou's sun hat blew up onto the clifftop behind Kettle beach." thanks="My hat! You've saved my nose. Here, my old lifeguard medal. You've earned it." gold=10 gift-kind="medal" gift-name="Lou's Lifeguard Medal" gift-story="Lou won this for swimming round Kettle Light in a storm. Twice." item-kind="hat" item-name="Lou's sun hat" item-x=-630 item-z=2120
+}
+local wyn name="Wyn the Hiker" town="Sunset Tiers" x=-3515 z=806 facing=90 look=3 {
+    line "I've walked every path on this plateau. My boots have walked even more."
+    line "Camping's the best. You wake up and the sky's right there."
+    request kind=ride target="spine-lookout" ask="My legs have given up for today. Could you fly me up to the Spine Lookout? I want to watch the paragliders." hint="Wyn the Hiker would love a ride from the plateau camp up to the Spine Lookout." thanks="Look at them float! Thank you, dragon. Have my old compass, it always points somewhere nice." gold=10 gift-kind="compass" gift-name="Wyn's Hiking Compass" gift-story="Scratched, dented and still perfectly right."
+}
+local marigold name="Lady Marigold" town="Sunset Tiers" x=-2990 z=178 facing=200 look=8 {
+    line "Do come in. Well, you won't fit. Do stay out, then, and admire the pool."
+    line "I had the gazebo built for the sunsets. And for the cake."
+    request kind=postcard target="glimmer-deep" ask="My butler swears there's a whole town at the bottom of the sea. Nonsense, surely? Bring me a postcard of it and I'll believe it." hint="Lady Marigold wants a postcard of Glimmer Deep, the town at the far end of the north vault under the sea." thanks="Good heavens, it's real! How marvelous. Take this teapot. It's far too fancy for me anyway." gold=20 gift-kind="teapot" gift-name="Lady Marigold's Silver Teapot" gift-story="Very shiny, very fancy, and it has never once made a good cup of tea."
+}
+local bryn name="Bryn the Lampmaker" town="Glimmer Deep" x=-950 y=-1420 z=-1490 facing=90 look=6 {
+    line "Down here every light is one somebody made. I've made a lot of them."
+    line "We're under the sea, you know. You can hear the whales if you're very quiet."
+    request kind=light target="home/north-vault-beacon" ask="The old beacon out by the ruins went dark before I was born. Would you light it? Then travelers can find their way to Glimmer Deep." hint="Bryn wants the old beacon by the north vault ruins lit, across the vault from Glimmer Deep." thanks="Look at it shine across the vault! Take this candle, the first I ever made. It's a bit wonky." gold=15 gift-kind="candle" gift-name="Bryn's First Candle" gift-story="Lumpy and lopsided, and Bryn's proudest work."
+}
+local marlo name="Little Marlo" town="Glimmer Deep" x=-905 y=-1420 z=-1522 facing=270 look=0 {
+    line "Gran says I'm not to go near the ruins. I went near the ruins."
+    line "Have you ever seen the sun? What's it like? Is it like a big lantern?"
+    request kind=fetch ask="I took Gran's picnic basket to the old ruins and left it there! Could you get it back before she notices? Please?" hint="Little Marlo left Gran's picnic basket at the explorers' camp by the north vault ruins." thanks="You're the best! Gran will never know. Here, my toy boat. It's for the sea up top." gold=5 gift-kind="toy-boat" gift-name="Marlo's Toy Boat" gift-story="Marlo made it to sail on the sea up top, someday." item-kind="basket" item-name="Gran's picnic basket" item-x=-1640 item-y=-1290 item-z=-1370
+}
+local tansy name="Tansy the Bandleader" town="Lantern Hollow" x=-1915 y=-935 z=1228 facing=180 look=2 {
+    line "One, two, one two three four! Sorry. Habit."
+    line "The bandstand never closes down here. We play the morning song at night sometimes."
+    request kind=postcard target="bandstand" ask="We dream of playing on the bandstand on Heart Islet, up in the sunshine. Would you bring us a postcard of it?" hint="Tansy's band wants a postcard of the Heart Islet bandstand." thanks="Look, everyone! That's where we'll play one day! Take my old flute. It plays better for a dragon, I bet." gold=15 gift-kind="flute" gift-name="Tansy's Old Flute" gift-story="It only plays one tune, but it plays it beautifully."
+}
+local zara name="Zara" town="Terrace Hill" x=-300 z=560 facing=20 look=1 {
+    line "The penguins waved at me. Well, they flapped. Same thing."
+    line "When I grow up I'm going to be a zookeeper. Or a lion."
+    request kind=fetch ask="The wind took my picnic basket right off the zoo wall and down the hill! Can you find it?" hint="Zara's picnic basket blew down the hill below the Hill Zoo." thanks="My basket! And the sandwiches are still in it! Here, my best ribbon." gold=5 gift-kind="ribbon" gift-name="Zara's Best Ribbon" gift-story="A bright red ribbon Zara won for drawing a penguin." item-kind="basket" item-name="Zara's picnic basket" item-x=-180 item-z=300
+}
+course river-run name="The River Run" line="Under Kettle Harbor runs a river through the dark. Follow it all the way, and ride the great falls down at its end." rumor="There's a river under the harbor, they say, and glowworms on the roof. It ends in a falls so tall you can't hear the bottom." gold=15 prize-kind=ribbon prize-name="The River Run Ribbon" prize-story="A ribbon as green as glowworm light, from the cavers of Lantern Hollow." {
+    gate x=-2700 z=1750 r=70 lo=-840 hi=-700
+    gate x=-1800 z=1800 r=70 lo=-840 hi=-700
+    gate x=-1000 z=1850 r=70 lo=-840 hi=-700
+    gate x=-500 z=1898 r=70 lo=-840 hi=-700
+    gate x=-300 z=1950 r=90 lo=-1450 hi=-900
+}
+find mist-pearl kind=pearl name="The Mist Pearl" x=3628 y=352 z=3755 hint="Something gleams in a cave you can only reach by flying through Mist Falls." story="Polished by a thousand years of spray, in a cave behind the falls."
+postcard mist-cave name="Behind Mist Falls" island=fang x=3628 y=350 z=3762 r=30 line="A cave hidden behind the falls, the light coming through the water."
+postcard whales name="Whale Watching" island=home x=-1480 z=-3100 r=90 line="Right up close to a whale as it comes up to blow. It's bigger than a house, and it winked."
+course canyon-run name="The Canyon Run" line="Down the steep canyon under the spine, wingtip to wingtip with the walls, all the way to the sea." rumor="There's a deep canyon below the spine. The bold ones fly it from top to bottom without climbing out once." gold=15 prize-kind=ribbon prize-name="The Canyon Run Ribbon" prize-story="A ribbon the color of canyon stone, for flying it end to end." {
+    gate x=-1080 z=-150 r=45 lo=265 hi=340
+    gate x=-1000 z=-50 r=45 lo=230 hi=300
+    gate x=-905 z=50 r=45 lo=195 hi=265
+    gate x=-800 z=150 r=45 lo=170 hi=245
+    gate x=-680 z=235 r=50 lo=105 hi=185
+}

@@ -14,6 +14,20 @@ const CAVE_RIVER_DEPTH: f32 = 3.0;
 /// Banks stand this far above the water.
 const BANK: f32 = 0.3;
 
+/// A stone block where a bridge deck meets the bank, from deep in the ground up to the
+/// deck.
+#[derive(Clone, Copy, Debug)]
+pub struct Abutment {
+    pub at: Vec2,
+    /// Along the road, unit length.
+    pub along: Vec2,
+    /// Half its length along the road, and half its width across.
+    pub half_len: f32,
+    pub half_w: f32,
+    pub bottom: f32,
+    pub top: f32,
+}
+
 /// One point of a road's profile.
 #[derive(Clone, Copy, Debug)]
 pub struct RoadPoint {
@@ -194,6 +208,100 @@ impl Terrain {
     /// Profile of road `i`, one per point.
     pub fn road_points(&self, i: usize) -> &[RoadPoint] {
         &self.roads[i]
+    }
+
+    /// Road `i` cut into pieces no longer than 10 m, as it is drawn: each point with its
+    /// height, whether the deck of a bridge runs on from it, the way along the road, and
+    /// whether it runs on through a tunnel.
+    pub fn road_pieces(&self, i: usize) -> Vec<(Vec2, f32, bool, Vec2, bool)> {
+        let r = &self.def.roads[i];
+        let prof = &self.roads[i];
+        let n = r.pts.len();
+        if n < 2 {
+            return Vec::new();
+        }
+        let at = |k: usize| Vec2::new(r.pts[k][0], r.pts[k][1]);
+        let dir = |k: usize| (at((k + 1).min(n - 1)) - at(k.saturating_sub(1))).normalize_or_zero();
+        let mut pts = Vec::new();
+        for k in 0..n - 1 {
+            let (a, b) = (at(k), at(k + 1));
+            let steps = ((b - a).length() / 10.0).ceil().max(1.0) as usize;
+            for j in 0..steps {
+                let t = j as f32 / steps as f32;
+                pts.push((
+                    a.lerp(b, t),
+                    prof[k].y + (prof[k + 1].y - prof[k].y) * t,
+                    prof[k].bridge && prof[k + 1].bridge,
+                    dir(k).lerp(dir(k + 1), t).normalize_or_zero(),
+                    prof[k].tunnel && prof[k + 1].tunnel,
+                ));
+            }
+        }
+        pts.push((
+            at(n - 1),
+            prof[n - 1].y,
+            prof[n - 1].bridge,
+            dir(n - 1),
+            false,
+        ));
+        pts
+    }
+
+    /// The abutments at each end of road `i`'s bridges: a block stands at the first and
+    /// last piece of each run of deck.
+    pub fn abutments(&self, i: usize) -> Vec<Abutment> {
+        let w = self.def.roads[i].w;
+        let pts = self.road_pieces(i);
+        let mut out = Vec::new();
+        for j in 0..pts.len() {
+            let (p, y, bridge, along, _) = pts[j];
+            let first = j == 0 || !pts[j - 1].2;
+            let last = j + 1 == pts.len() || !pts[j + 1].2;
+            if !bridge || !(first || last) {
+                continue;
+            }
+            let top = y - 0.15;
+            out.push(Abutment {
+                at: p,
+                along,
+                half_len: 4.0,
+                half_w: w * 0.5 + 0.9,
+                bottom: self.height(p.x, p.y).min(top - 1.6) - 3.0,
+                top,
+            });
+        }
+        out
+    }
+
+    /// The square piers under road `i`'s bridges, one every fourth piece, as center, bottom
+    /// and top. None where a suspension bridge's cables hold the deck: `hung` are those
+    /// stretches, as distances along the road.
+    pub fn piers(&self, i: usize, hung: &[[f32; 2]]) -> Vec<(Vec2, f32, f32)> {
+        let pts = self.road_pieces(i);
+        let mut out = Vec::new();
+        let mut along = 0.0;
+        for w in pts.windows(2) {
+            let ((a, ya, ba, _, tun), (b, yb, bb, _, _)) = (w[0], w[1]);
+            let seg = a.distance(b);
+            let held = hung
+                .iter()
+                .any(|s| along > s[0] + 5.0 && along < s[1] - 5.0);
+            if ba && bb && (along / 10.0) as i32 % 4 == 0 && !held {
+                let mid = (a + b) * 0.5;
+                let top = (ya + yb) * 0.5 - 1.6;
+                // Down to the cavern floor under a trestle, else the ground.
+                let ground = if tun {
+                    self.support(mid.x, mid.y, top)
+                } else {
+                    self.height(mid.x, mid.y).min(top)
+                };
+                if top - ground > 1.0 {
+                    out.push((mid, ground, top));
+                }
+            }
+            along += seg;
+        }
+        out
     }
 
     /// The road at `(x, z)`, if any is within its width plus `margin`.
@@ -497,8 +605,9 @@ impl Terrain {
                 }
             }
             if changed {
-                // The profile already spans the dip, so the deck only gets a gentle hump.
-                arch_bridges(&mut out[ri], r.pts, 4.0);
+                // The profile already spans the dip, so the deck only climbs enough to
+                // fly or paddle under.
+                arch_bridges(&mut out[ri], r.pts, 6.0);
             }
         }
         out
@@ -714,8 +823,9 @@ fn plunge(levels: &mut [f32], pts: &[[f32; 3]]) {
     }
 }
 
-/// Spans of bridge points get a gentle arch between their ends, adding at most half a
-/// road's steepest grade at the ends, and at most `rise` meters at the middle. One extra point at
+/// Spans of bridge points climb from their ends and run level over the middle, high
+/// enough to fly under on a short span, at most `rise` meters up. The climbs take a
+/// third of the span each at a little over a road's steepest grade. One extra point at
 /// each end becomes the abutment.
 fn arch_bridges(pts: &mut [RoadPoint], line: &[[f32; 3]], rise: f32) {
     let n = pts.len();
@@ -738,11 +848,16 @@ fn arch_bridges(pts: &mut [RoadPoint], line: &[[f32; 3]], rise: f32) {
             along[k] = along[k - 1] + flat(start + k - 1, start + k);
         }
         let len = along[along.len() - 1].max(1.0);
-        let top = rise.min(len * ROAD_GRADE * 0.125);
+        const CLIMB: f32 = 0.33;
+        let top = rise.min(len * CLIMB * ROAD_GRADE * 1.4);
         let base: Vec<f32> = pts[start..=end].iter().map(|p| p.y).collect();
+        let ease = |t: f32| {
+            let t = t.clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
         for (k, p) in pts[start..=end].iter_mut().enumerate() {
             let u = along[k] / len;
-            p.y = base[k] + top * 4.0 * u * (1.0 - u);
+            p.y = base[k] + top * ease(u / CLIMB) * ease((1.0 - u) / CLIMB);
             p.bridge = true;
         }
         i = end + 1;

@@ -34,7 +34,7 @@ const METRO_DWELL: f32 = 9.0;
 /// of a trip.
 const CAR_SPEED: f32 = 15.0;
 const CAR_ACCEL: f32 = 2.2;
-const CAR_DWELL: f32 = 8.0;
+const CAR_DWELL: f32 = 6.0;
 
 impl Path {
     pub fn new(pts: Vec<Vec3>, looped: bool) -> Self {
@@ -217,7 +217,18 @@ pub struct Traffic {
     /// When a coaster train reaches each point round its track, shared by every theme
     /// park.
     pub coaster: crate::landmark::Coaster,
+    /// How many seconds each car runs behind its timetable, from queueing behind others.
+    pub lag: Vec<f32>,
+    /// How fast each car's timetable runs now: 0 waiting in a queue, 1 on time, a little
+    /// over while it makes up time.
+    pub rate: Vec<f32>,
+    /// The time of the last update, for how far queues move each tick.
+    last: f32,
 }
+
+/// How long a car waits in a jam before it gives up being polite (s), so a knot of cars
+/// at a junction never sits there for good.
+const QUEUE_PATIENCE: f32 = 10.0;
 
 /// Car body sizes, picked by variant.
 pub const CAR_KINDS: u8 = 6;
@@ -248,6 +259,12 @@ pub struct LiftSpec {
 }
 
 /// The lift kinds a route can be.
+/// How far astern of its speedboat a parasail flies, and how high (m).
+pub const PARASAIL_BACK: f32 = 48.0;
+pub const PARASAIL_UP: f32 = 30.0;
+/// How far astern of its speedboat a water skier rides (m).
+pub const SKI_BACK: f32 = 20.0;
+
 pub fn lift_spec(kind: &str) -> Option<LiftSpec> {
     match kind {
         "chairlift" => Some(LiftSpec {
@@ -623,6 +640,9 @@ impl Traffic {
                     "motoryacht" => (Kind::MotorYacht, 6.0, Vec3::new(26.0, 6.0, 6.5), 1),
                     "heli" => (Kind::Helicopter, 32.0, Vec3::new(12.0, 3.2, 3.0), 1),
                     "supply" => (Kind::Supply, 7.0, Vec3::new(34.0, 3.0, 9.0), 1),
+                    "dolphins" => (Kind::Dolphins, 8.0, Vec3::new(13.0, 0.8, 8.0), 1),
+                    "geese" => (Kind::Geese, 15.0, Vec3::new(12.0, 2.0, 12.0), 1),
+                    "albatross" => (Kind::Albatross, 13.0, Vec3::new(6.0, 1.0, 6.0), 1),
                     _ => (Kind::Ferry, 14.0, Vec3::new(42.0, 6.0, 12.0), 1),
                 };
                 for k in 0..count {
@@ -681,26 +701,42 @@ impl Traffic {
                 p.stops.sort_by(f32::total_cmp);
             }
             let lap = t.paths[path].lap_time(CAR_SPEED);
-            push(
-                &mut t,
-                Vehicle {
-                    id: 0,
-                    kind: Kind::Car,
-                    path,
-                    speed: CAR_SPEED,
-                    // Spread over the trip, a time into its timetable.
-                    offset: crate::shape::hash(k * 977 + 11) * lap * CAR_SPEED,
-                    size: match variant {
-                        BUS => Vec3::new(10.5, 3.0, 2.5),
-                        TRUCK => Vec3::new(7.0, 2.8, 2.3),
-                        VAN => Vec3::new(5.4, 2.4, 2.0),
-                        _ => Vec3::new(4.2, 1.5, 1.9),
+            // A long trip carries two, half a lap apart, so the roads stay busy and the
+            // two never wait at the same spot at once.
+            let copies = if trip.stops[0] > 1500.0 && variant != BUS {
+                2
+            } else {
+                1
+            };
+            for c in 0..copies {
+                push(
+                    &mut t,
+                    Vehicle {
+                        id: 0,
+                        kind: Kind::Car,
+                        path,
+                        speed: CAR_SPEED,
+                        // Spread over the trip, a time into its timetable.
+                        offset: (crate::shape::hash(k * 977 + 11) + c as f32 / copies as f32)
+                            .fract()
+                            * lap
+                            * CAR_SPEED,
+                        size: match variant {
+                            BUS => Vec3::new(10.5, 3.0, 2.5),
+                            TRUCK => Vec3::new(7.0, 2.8, 2.3),
+                            VAN => Vec3::new(5.4, 2.4, 2.0),
+                            _ => Vec3::new(4.2, 1.5, 1.9),
+                        },
+                        lane: 0.0,
+                        lead: 0.0,
+                        variant: if c == 0 {
+                            variant
+                        } else {
+                            (variant + 1) % CAR_KINDS
+                        },
                     },
-                    lane: 0.0,
-                    lead: 0.0,
-                    variant,
-                },
-            );
+                );
+            }
         }
         // Trains on every railway, going round and round and halting at its stations: three
         // on a main line (an engine and six carriages), four on a subway (four metro cars each)
@@ -737,6 +773,9 @@ impl Traffic {
                 let stops = station_stops(def, i, &t.paths[path], cars, gap);
                 t.paths[path].stops = stops;
             }
+            // A line that is not a loop runs back and forth on one track, so it has one
+            // train: two would meet head on and pass through each other.
+            let trains = if looped { trains } else { 1 };
             let p = &t.paths[path];
             let len = p.len();
             let lap = if p.stops.is_empty() {
@@ -1064,6 +1103,24 @@ impl Traffic {
         self.paths[v.path].halted_for(time + v.offset / v.speed, v.speed)
     }
 
+    /// Where vehicle `i` stops next, for a vehicle on a line with stops, such as a car
+    /// on its trip.
+    pub fn next_stop(&self, i: usize, time: f32) -> Option<Vec3> {
+        let v = &self.vehicles[i];
+        let path = &self.paths[v.path];
+        if path.stops.is_empty() {
+            return None;
+        }
+        let (s, _) = path.timetable(time + v.offset / v.speed, v.speed);
+        let next = path
+            .stops
+            .iter()
+            .copied()
+            .find(|&stop| stop > s + 1.0)
+            .unwrap_or(path.stops[0]);
+        Some(path.at(next).0)
+    }
+
     pub fn pose(&self, v: &Vehicle, time: f32) -> Pose {
         if v.kind == Kind::CoasterCar {
             return self.coaster_pose(v, time);
@@ -1116,8 +1173,13 @@ impl Traffic {
         let look = reach.min(len * 0.25).max(0.5);
         let at = |k: f32| self.spot(v, u + k * look);
         let (back2, back, here, ahead, ahead2) = (at(-2.0), at(-1.0), at(0.0), at(1.0), at(2.0));
-        let pos = (back + here * 2.0 + ahead) * 0.25;
+        let mut pos = (back + here * 2.0 + ahead) * 0.25;
         let dir = (ahead - back).normalize_or(Vec3::Z);
+        // A car stopping pulls in to the curb, out of the way, rather than wait in its lane.
+        if v.kind == Kind::Car && !path.stops.is_empty() {
+            let pull = 1.0 - smooth(0.0, v.speed * 0.6, speed);
+            pos += right(dir) * pull * 2.2;
+        }
         let turn = wrap(heading_of(ahead2 - here) - heading_of(here - back2));
         let yaw_rate = turn / (2.0 * look) * speed;
         let flying = matches!(v.kind, Kind::Seaplane | Kind::Airliner | Kind::Helicopter);
@@ -1143,6 +1205,74 @@ impl Traffic {
         }
     }
 
+    /// Where vehicle `i` is at `time`, held back by any queue it waits in.
+    pub fn pose_of(&self, i: usize, time: f32) -> Pose {
+        let v = &self.vehicles[i];
+        let lag = self.lag.get(i).copied().unwrap_or(0.0);
+        let mut p = self.pose(v, time - lag);
+        if let Some(&r) = self.rate.get(i) {
+            p.vel *= r;
+            p.yaw_rate *= r;
+        }
+        p
+    }
+
+    /// Cars near a dragon slow and wait behind any car stopped or slower just ahead in
+    /// their lane, then make up the time once the way is clear.
+    fn queue(&mut self, time: f32, moved: &[usize]) {
+        let n = self.vehicles.len();
+        if self.lag.len() != n {
+            self.lag = vec![0.0; n];
+            self.rate = vec![1.0; n];
+        }
+        let dt = (time - self.last).clamp(0.0, 0.25);
+        self.last = time;
+        if dt <= 0.0 {
+            return;
+        }
+        let cars: Vec<usize> = moved
+            .iter()
+            .copied()
+            .filter(|&i| self.vehicles[i].kind == Kind::Car)
+            .collect();
+        for &i in &cars {
+            let (p, v) = (self.poses[i], self.vehicles[i]);
+            let fwd = Vec3::new(p.heading.sin(), 0.0, p.heading.cos());
+            let side = Vec3::new(fwd.z, 0.0, -fwd.x);
+            let speed = v.speed * self.rate[i];
+            let blocked = cars.iter().any(|&j| {
+                if j == i {
+                    return false;
+                }
+                let q = self.poses[j];
+                let d = q.pos - p.pos;
+                let along = d.dot(fwd);
+                let room = (v.size.x + self.vehicles[j].size.x) * 0.5 + 2.5 + speed * 0.6;
+                along > 0.0
+                    && along < room
+                    && d.dot(side).abs() < 1.6
+                    && (d.y).abs() < 3.0
+                    && Vec3::new(q.heading.sin(), 0.0, q.heading.cos()).dot(fwd) > 0.3
+            });
+            // Waited long enough: squeeze on by anyway.
+            let stuck = self.lag[i] > QUEUE_PATIENCE;
+            let want = if blocked && !stuck {
+                0.0
+            } else if self.lag[i] > 0.0 {
+                1.25
+            } else {
+                1.0
+            };
+            let r = &mut self.rate[i];
+            *r += (want - *r).clamp(-dt * 1.6, dt * 0.6);
+            self.lag[i] = (self.lag[i] + (1.0 - *r) * dt).max(0.0);
+            if stuck && !blocked {
+                self.lag[i] = self.lag[i].min(QUEUE_PATIENCE);
+            }
+            self.poses[i] = self.pose_of(i, time);
+        }
+    }
+
     /// Moves every vehicle to `time`.
     pub fn update(&mut self, time: f32) {
         self.update_near(time, &[], 0, 1);
@@ -1151,8 +1281,8 @@ impl Traffic {
     /// Brings vehicle `i` up to `time` at once, still, as when a dragon is put straight
     /// onto it from far off.
     pub fn refresh(&mut self, i: usize, time: f32) {
-        if let Some(v) = self.vehicles.get(i) {
-            let p = self.pose(v, time);
+        if i < self.vehicles.len() {
+            let p = self.pose_of(i, time);
             self.poses[i] = p;
             self.prev[i] = p;
         }
@@ -1170,15 +1300,21 @@ impl Traffic {
         }
         self.poses.clone_from(&self.prev);
         let turn = tick as usize % every.max(1);
+        let mut close_cars = Vec::new();
         for i in 0..self.vehicles.len() {
             let close = || {
                 let at = self.prev[i].pos;
                 near.iter().any(|p| p.distance_squared(at) < STIR * STIR)
             };
-            if i % every.max(1) == turn || close() {
-                self.poses[i] = self.pose(&self.vehicles[i], time);
+            let near_one = !near.is_empty() && close();
+            if i % every.max(1) == turn || near_one {
+                self.poses[i] = self.pose_of(i, time);
+            }
+            if near_one {
+                close_cars.push(i);
             }
         }
+        self.queue(time, &close_cars);
     }
 
     /// The two runs of cable on every lift, as points along them.
@@ -1282,13 +1418,91 @@ impl Traffic {
                     spin: 0.0,
                 }),
             ],
+            // Birds are flown beside, never stood on.
+            Kind::Geese | Kind::Albatross => Vec::new(),
+            // A parasail's canopy can be landed on, and ridden.
+            Kind::Speedboat => {
+                let mut out: Vec<Shape> = self.shape(i).into_iter().collect();
+                if let Some(at) = self.parasail(i, p) {
+                    out.push(Shape::Block(Block {
+                        base: at + Vec3::Y * 7.6,
+                        half: Vec3::new(1.2, 0.6, 4.4),
+                        axis: p.axis(),
+                        roof: 0.0,
+                    }));
+                }
+                // The skis, just wide enough to stand on behind the skier.
+                if let Some(at) = self.skier(i, p) {
+                    out.push(Shape::Block(Block {
+                        base: at + Vec3::Y * 0.1,
+                        half: Vec3::new(1.6, 0.3, 1.2),
+                        axis: p.axis(),
+                        roof: 0.0,
+                    }));
+                }
+                out
+            }
             _ => self.shape(i).into_iter().collect(),
+        }
+    }
+
+    /// Where a speedboat's parasail flies, high astern, if this one tows one.
+    pub fn parasail(&self, i: usize, pose: &Pose) -> Option<Vec3> {
+        let v = &self.vehicles[i];
+        (v.kind == Kind::Speedboat && v.variant % 3 == 1).then(|| {
+            let fwd = Vec3::new(pose.heading.sin(), 0.0, pose.heading.cos());
+            pose.pos - fwd * PARASAIL_BACK + Vec3::Y * PARASAIL_UP
+        })
+    }
+
+    /// Where a speedboat's water skier is, carving from side to side across the wake, if
+    /// this one tows one. The swing follows the boat along its way.
+    pub fn skier(&self, i: usize, pose: &Pose) -> Option<Vec3> {
+        let v = &self.vehicles[i];
+        (v.kind == Kind::Speedboat && v.variant.is_multiple_of(3)).then(|| {
+            let fwd = Vec3::new(pose.heading.sin(), 0.0, pose.heading.cos());
+            let side = Vec3::new(fwd.z, 0.0, -fwd.x);
+            let swing = self.ski_swing(pose);
+            pose.pos - fwd * SKI_BACK + side * swing * 7.0
+        })
+    }
+
+    /// Where this tick's move of vehicle `i` takes someone riding it at `p`. Up on a
+    /// water skier's skis, they swing out with the skis.
+    pub fn carry(&self, i: usize, p: Vec3) -> Vec3 {
+        let (was, now) = (&self.prev[i], &self.poses[i]);
+        if let (Some(a), Some(b)) = (self.skier(i, was), self.skier(i, now))
+            && Vec2::new(p.x - a.x, p.z - a.z).length() < 4.0
+        {
+            return p + (b - a);
+        }
+        now.to_world(was.to_local(p))
+    }
+
+    /// How far out to one side a skier has swung, -1 to 1.
+    pub fn ski_swing(&self, pose: &Pose) -> f32 {
+        ((pose.pos.x + pose.pos.z) * 0.035).sin()
+    }
+
+    /// How far from vehicle `i`'s middle anything solid of it can reach, flat.
+    pub fn reach(&self, i: usize) -> f32 {
+        let v = &self.vehicles[i];
+        let p = &self.poses[i];
+        if self.parasail(i, p).is_some() {
+            PARASAIL_BACK + 6.0
+        } else if self.skier(i, p).is_some() {
+            SKI_BACK + 10.0
+        } else {
+            v.size.x
         }
     }
 
     /// The main solid box of vehicle `i` where it is now.
     pub fn shape(&self, i: usize) -> Option<Shape> {
         let v = &self.vehicles[i];
+        if matches!(v.kind, Kind::Geese | Kind::Albatross) {
+            return None;
+        }
         let p = &self.poses[i];
         // Planes are solid around the body only, wings aside. The body's middle sits at
         // the height the plane meshes put it.

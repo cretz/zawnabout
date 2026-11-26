@@ -247,11 +247,46 @@ pub enum Kind {
     SeaDoors,
     /// Basalt Gate: a grand railway station built into a mountain, through to a cavern.
     BasaltGate,
+    /// A grand house up on the high ground: wings, a columned porch, a pool and gardens.
+    Mansion,
+    /// A climbing crag: anchors at a cliff's top, climbers on ropes down its face.
+    Crag,
+    /// Where mountain goats graze on the steep ground: a salt lick stone.
+    Goats,
+    /// A little car park at a road's end, with painted bays and a few parked cars.
+    CarPark,
+    /// A pod of dolphins swimming a long loop round the islands, backs wide enough to
+    /// ride on.
+    Dolphins,
+    /// A great old sailing ship run aground on a reef far out at sea.
+    Galleon,
+    /// Rows of vines and a little winery.
+    Vineyard,
+    /// Fruit trees in rows.
+    Orchard,
+    /// A pagoda on a hilltop terrace, prayer flags strung out from its spire.
+    Temple,
+    /// A tiny roadside shrine.
+    Shrine,
+    /// A rocket on its launch pad, far from town.
+    LaunchPad,
+    /// An ice cream van parked up for business.
+    IceCream,
+    /// A great crescent moon cut white into a hillside's turf, draped over the ground.
+    ChalkMoon,
+    /// A skein of geese in a V, flying a long way round the islands.
+    Geese,
+    /// A lone albatross gliding over the empty sea.
+    Albatross,
 }
 
 /// A bridge tower leg's width across the deck and depth along it.
 pub const TOWER_LEG: Vec2 = Vec2::new(3.2, 4.4);
 
+/// How high the mast's deck sits over the middle of its pod.
+pub const MAST_DECK: f32 = 7.0;
+/// How tall the aerial on top of a mast stands.
+pub const MAST_AERIAL: f32 = 16.0;
 /// Height of a lighthouse's lamp room over its tower. Its flat cap is a perch.
 pub const LAMP_ROOM: f32 = 3.4;
 
@@ -393,10 +428,27 @@ impl Building {
             }
             Kind::Mast => vec![
                 round(self.pos, s.y, s.x * 0.5, s.x * 0.2),
-                Shape::Sphere {
-                    center: self.at(0.0, s.y * 0.72, 0.0),
-                    radius: s.x * 1.4,
-                },
+                // The pod: a flat deck on top to land on, as drawn.
+                round(
+                    self.at(0.0, s.y * 0.72 - 5.0, 0.0),
+                    12.0,
+                    s.x * 0.5,
+                    s.x * 1.4,
+                ),
+                round(
+                    self.at(0.0, s.y * 0.72, 0.0),
+                    MAST_DECK,
+                    s.x * 1.4,
+                    s.x * 1.25,
+                ),
+                // The aerial on top, its tip a perch.
+                round(self.at(0.0, s.y, 0.0), MAST_AERIAL, 0.4, 0.4),
+                round(self.at(0.0, s.y + MAST_AERIAL - 0.4, 0.0), 0.4, 2.0, 2.0),
+            ],
+            // The stair housing on the roof is solid too, not only drawn.
+            Kind::Skyscraper => vec![
+                self.block(self.pos, s.x, s.y, s.z, self.roof),
+                self.block(self.at(0.0, s.y, 0.0), s.x * 0.5, 3.0, s.z * 0.5, 0.0),
             ],
             Kind::ControlTower => vec![
                 round(self.pos, s.y, s.x * 0.3, s.x * 0.25),
@@ -653,8 +705,29 @@ impl<'a> Planner<'a> {
                 })
             })
         };
+        // Out in the open, trains need room: a house a step off the rails looks like
+        // it stands on them.
+        let by_rails = |p: Vec2, g: f32| {
+            let def = self.terrain.def;
+            def.roads
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.rail && !r.subway)
+                .any(|(i, r)| {
+                    let prof = self.terrain.road_points(i);
+                    r.pts.windows(2).zip(prof.windows(2)).any(|(w, y)| {
+                        let (a, b) = (Vec2::new(w[0][0], w[0][1]), Vec2::new(w[1][0], w[1][1]));
+                        let ab = b - a;
+                        let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+                        (a + ab * t).distance(p) < r.w * 0.5 + 6.0 && (y[0].y - g).abs() < 10.0
+                    })
+                })
+        };
         for p in corners.iter().chain([&c]) {
             let g = self.ground(*p);
+            if !under && by_rails(*p, g) {
+                return false;
+            }
             lo = lo.min(g);
             hi = hi.max(g);
             if under && cave_line(*p, g) {
@@ -1273,7 +1346,15 @@ impl<'a> Planner<'a> {
                 let mut t = 0.0;
                 while t < len {
                     let p = w[0] + dir * t;
-                    if along <= 0.0 {
+                    // Only where the banks are low: down in a deep cutting a footbridge
+                    // would sit in the water, its ends lost in the walls.
+                    let n = Vec2::new(-dir.y, dir.x) * (c.w * 0.5 + 4.0);
+                    let low = [p + n, p - n]
+                        .iter()
+                        .all(|b| self.terrain.height(b.x, b.y) < c.level + 4.0);
+                    if along <= 0.0 && !low {
+                        along = 10.0;
+                    } else if along <= 0.0 {
                         along = self.rng.range(110.0, 170.0);
                         self.push(
                             Kind::Footbridge,
@@ -1677,11 +1758,36 @@ fn sites(terrain: &Terrain, rng: &mut Rng, out: &mut Vec<Building>) {
                 }
             }
             "airport" => airport(terrain, m, &mut push, out, rng),
+            "galleon" => {
+                // Aground on the reef, its keel well down and its deck high and dry.
+                let y = terrain.height(at.x, at.y).max(sea - 4.0);
+                push(
+                    out,
+                    Kind::Galleon,
+                    Vec3::new(at.x, y, at.y),
+                    Vec2::new(0.6, 0.8),
+                    Vec3::new(64.0, 10.0, 16.0),
+                    0.0,
+                    0.0,
+                    rng,
+                );
+            }
             "wreck" => {
+                // Given a height deep under the ground, it rests on that cave's floor.
+                let deep = !m.ground && terrain.height(at.x, at.y) > m.pos[1] + 20.0;
+                let y = if deep {
+                    // Run aground in a cave pool, its deck out of the water.
+                    let floor = terrain.support(at.x, at.y, m.pos[1] + 12.0);
+                    terrain
+                        .cave_water(at.x, at.y, floor)
+                        .map_or(floor, |l| floor.max(l - 3.0))
+                } else {
+                    terrain.height(at.x, at.y).max(sea - 3.0)
+                };
                 push(
                     out,
                     Kind::Wreck,
-                    Vec3::new(at.x, terrain.height(at.x, at.y).max(sea - 3.0), at.y),
+                    Vec3::new(at.x, y, at.y),
                     Vec2::new(0.8, 0.6),
                     Vec3::new(30.0, 6.0, 9.0),
                     0.0,

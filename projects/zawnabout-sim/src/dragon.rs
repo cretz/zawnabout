@@ -9,12 +9,15 @@ use glam::{Mat3, Quat, Vec2, Vec3};
 use crate::swoop::Swoop;
 use crate::world::World;
 
-/// How deep a swimming dragon sits in the water (m), and how fast it paddles next to its
-/// walk.
+/// How deep a swimming dragon sits in the water (m), and how fast it swims next to its
+/// walk and run.
 pub const SWIM_SINK: f32 = 0.85;
-const SWIM_PACE: f32 = 1.3;
+const SWIM_PACE: f32 = 0.8;
 /// How high a step the dragon walks straight up onto (m).
 const STEP_UP: f32 = 1.5;
+/// Ground falling away whose slope's up-facing part (its normal's y) is under this is a
+/// cliff, stepped off rather than walked down with the body sunk in the rock.
+const CLIFF_DOWN: f32 = 0.45;
 
 crate::params! {
     /// Flight and ground movement tunables.
@@ -39,6 +42,11 @@ crate::params! {
         path_up: f32 = 0.85, [0.1, 1.5],
         /// Dive angle (rad) at full pitch down.
         path_down: f32 = 1.1, [0.1, 1.5],
+        /// Dive angle (rad) at full pitch down with wings tucked: near straight down, for
+        /// shafts.
+        steep_down: f32 = 1.5, [0.1, 1.56],
+        /// Climb angle (rad) at full pitch up while flapping: near straight up.
+        steep_up: f32 = 1.35, [0.1, 1.56],
         /// Hands-off glide angle (rad, negative sinks).
         glide_path: f32 = -0.08, [-0.5, 0.2],
         /// Speed (m/s) a hands-off glide settles to.
@@ -91,6 +99,8 @@ crate::params! {
         hover_damping: f32 = 1.6, [0, 6],
         /// Top speed of a tap-to-land swoop (m/s).
         swoop_speed: f32 = 90.0, [10, 200],
+        /// How much faster a long swoop may go than its top speed, per meter (1/s).
+        swoop_rush: f32 = 0.06, [0, 0.2],
         /// Body radius for bumping into things (m).
         body_radius: f32 = 1.1, [0.3, 3],
         /// Speed change (m/s) one flap stroke delivers.
@@ -391,7 +401,7 @@ impl Dragon {
         let Some(swoop) = &mut self.swoop else { return };
         self.yaw_rate = 0.0;
         self.yaw_accel = 0.0;
-        let (pos, vel, arrived) = swoop.step(dt, p.swoop_speed);
+        let (pos, vel, arrived) = swoop.step(dt, p.swoop_speed, p.swoop_rush);
         // Landing on something that moves: follow it.
         let bend = swoop.bend(world);
         let (pos, vel) = (pos + bend, vel + (bend - swoop.shift) / dt);
@@ -559,9 +569,11 @@ impl Dragon {
         let ride = match carrier {
             Some(i) => {
                 let (was, now) = (world.traffic.prev[i], world.traffic.poses[i]);
-                self.pos = now.to_world(was.to_local(self.pos));
+                let to = world.traffic.carry(i, self.pos);
+                let moved = to - self.pos;
+                self.pos = to;
                 self.heading += now.heading_since(&was);
-                (now.pos - was.pos) / dt
+                moved / dt
             }
             None => Vec3::ZERO,
         };
@@ -605,13 +617,14 @@ impl Dragon {
             } else {
                 self.run
             };
-            // No running in the water, only a steady paddle.
-            if self.swimming {
-                self.run = 0.0;
-            }
+            // In the water, holding forward builds from a paddle to a strong swim, a
+            // little slower than a run.
             let running = smoothstep(0.0, 1.0, self.run);
-            let top = (p.walk_speed + (p.run_speed - p.walk_speed) * running)
-                * if self.swimming { SWIM_PACE } else { 1.0 };
+            let top = if self.swimming {
+                (p.walk_speed * 1.3).max(p.run_speed * SWIM_PACE * running)
+            } else {
+                p.walk_speed + (p.run_speed - p.walk_speed) * running
+            };
             let target = input.pitch.max(-0.4) * top;
             // Faster than walking, and not running, means a run-out from a landing: slide
             // down gently, but stop short on a roof or a rock.
@@ -642,19 +655,42 @@ impl Dragon {
         let riding = carrier.is_some();
         // Under an overhang (in a nook or a cave) the open ground far overhead says
         // nothing about this floor, so only the rock beside the body stops you there.
-        let under = world.ground_height(old_x, old_z) > self.pos.y - p.stand_height + 4.0;
+        // Walking into one, as into a tunnel's mouth, the open ground ahead is the hill far
+        // overhead, not a slope to climb: the rock check below stops a real cliff.
+        let feet_now = self.pos.y - p.stand_height;
+        let step = Vec3::new(self.pos.x, feet_now + STEP_UP, self.pos.z);
+        let floor = world.support(self.pos.x, self.pos.z, step.y);
+        let overhead = world.terrain.sdf(step) > 0.3
+            && world.ground_height(self.pos.x, self.pos.z) > floor + 0.1;
+        let under = world.ground_height(old_x, old_z) > feet_now + 4.0 || overhead;
         if !riding
             && !under
             && world.ground_normal(self.pos.x, self.pos.z).y < p.walk_slope
-            && world.ground_height(self.pos.x, self.pos.z) > self.pos.y - p.stand_height + 0.3
+            && world.ground_height(self.pos.x, self.pos.z) > feet_now + 0.3
         {
             (self.pos.x, self.pos.z) = (old_x, old_z);
             flat = Vec2::ZERO;
         }
+        // On a vehicle, its own cabins and rails are walls: step up a low one, stop at a
+        // tall one instead of walking into the ship.
+        if let Some(i) = carrier
+            && let Some(top) = world.deck_of(i, self.pos.x, self.pos.z)
+        {
+            if top > feet_now + STEP_UP {
+                (self.pos.x, self.pos.z) = (old_x, old_z);
+                flat = Vec2::ZERO;
+            } else if top > feet_now + 0.05 {
+                self.pos.y = top + p.stand_height;
+            }
+        }
         // Cave walls and overhangs are rock beside the body, which the ground below
-        // knows nothing of: slide along them instead of walking in.
+        // knows nothing of: slide along them instead of walking in. Felt for above step
+        // height, so the lip of a cave mouth's floor is stepped over, not a wall.
+        let feel = p.stand_height + STEP_UP + p.body_radius + 0.1;
         if !riding
-            && let Some((n, _)) = world.terrain.push_out(self.pos + Vec3::Y, p.body_radius)
+            && let Some((n, _)) = world
+                .terrain
+                .push_out(self.pos + Vec3::Y * (feel - p.stand_height), p.body_radius)
             && n.y < 0.6
         {
             let n = Vec2::new(n.x, n.z).normalize_or_zero();
@@ -694,7 +730,13 @@ impl Dragon {
         let sunk = if self.swimming { SWIM_SINK } else { 0.0 };
         let support =
             deck.unwrap_or_else(|| world.support(self.pos.x, self.pos.z, feet + 0.6 + sunk));
-        if support < feet + sunk - 0.6 {
+        // Down a steep hill the ground falls away a little more each step: follow it
+        // down rather than hop off it, which looked like shaking. Only a real drop is a
+        // ledge. A step down off a kerb or between a bridge's deck pieces is walked down.
+        let fall = feet + sunk - support;
+        let cliff = fall > 0.05 && world.floor_normal(self.pos.x, self.pos.z, feet).y < CLIFF_DOWN;
+        // Anything it could step up onto, it steps down off too.
+        if cliff || fall > (STEP_UP + 0.1).max(flat.length() * dt * 4.0) {
             // Walked off a ledge.
             self.swimming = false;
             self.set_mode(Mode::Air);
@@ -786,10 +828,12 @@ impl Dragon {
         let glide = (p.glide_path + p.speed_stability * (speed - p.trim_speed) / p.trim_speed)
             .clamp(-0.4, 0.3);
         let mut path_cmd = glide * (1.0 - self.flapping);
+        // Tucked, a full dive goes near straight down. Flapping, a full climb goes near
+        // straight up. Either way the wings say so, and ordinary flight stays the same.
         path_cmd += if pitch > 0.0 {
-            pitch * p.path_up
+            pitch * (p.path_up + (p.steep_up - p.path_up) * self.flapping)
         } else {
-            pitch * p.path_down
+            pitch * (p.path_down + (p.steep_down - p.path_down) * self.tuck)
         };
         let wings = 1.0 - self.tuck * (1.0 - p.tuck_lift) + self.brake * p.brake_lift;
         let q = p.lift_k * speed * speed;

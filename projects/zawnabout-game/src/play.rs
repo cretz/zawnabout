@@ -2,7 +2,7 @@
 //! the `play` feature). The game holds an `Option<Play>`: none when gameplay is compiled
 //! out or switched off, and then the islands are exactly as they are without it.
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use zawnabout_sim::Dragon;
 use zawnabout_sim::world::World;
 
@@ -21,6 +21,16 @@ pub enum Play {}
 #[cfg(not(feature = "play"))]
 #[derive(Clone, Debug)]
 pub enum Chore {}
+
+/// Where birds roost: a middle on the ground, how wide, how low and high, and whether it
+/// is a cave they nest inside or open ground on top.
+pub struct Nesting {
+    pub mid: Vec2,
+    pub r: f32,
+    pub lo: f32,
+    pub hi: f32,
+    pub cave: bool,
+}
 
 /// What came of finding a dragon: met, with its card, or the shy one flying off.
 pub enum Meet {
@@ -130,7 +140,12 @@ mod on {
     use zawnabout_play::Event;
 
     pub fn start(world: &World) -> Option<Play> {
-        Some(Play::new(world))
+        let mut play = Play::new(world);
+        let all = crate::stranded::all(world);
+        let at = |s: &crate::stranded::Stranded| glam::Vec2::new(s.driver.x, s.driver.z);
+        play.stranded = all.iter().map(at).collect();
+        play.adrift = all.iter().filter(|s| s.boat).map(at).collect();
+        Some(play)
     }
 
     /// What a vehicle is called in a race.
@@ -350,13 +365,13 @@ mod on {
                 }
                 Event::ChoreArrived => Card {
                     title: "Here we are!".into(),
-                    body: "Thank you, dragon! What a ride. I'll remember that one for ever.".into(),
+                    body: crate::talk::arrived(play.helped.len()).into(),
                     foot: String::new(),
                     kind: CardKind::Say,
                 },
                 Event::ChoreDelivered => Card {
                     title: "Delivered!".into(),
-                    body: "Somebody here was waiting for that, and now they're beaming. Special delivery, by dragon.".into(),
+                    body: crate::talk::delivered(play.helped.len()).into(),
                     foot: String::new(),
                     kind: CardKind::Say,
                 },
@@ -430,6 +445,15 @@ mod on {
         play.def.postcards.get(i).is_some_and(|c| c.aim < 0.0)
     }
 
+    /// Which way postcard `i`'s place looks, in radians, and how high above the sea its
+    /// picture aims, for a carving on a cliff.
+    pub fn card_face(play: &Play, i: usize) -> (Option<f32>, Option<f32>) {
+        play.def
+            .postcards
+            .get(i)
+            .map_or((None, None), |c| (c.face.map(f32::to_radians), c.high))
+    }
+
     /// Where postcard `i`'s place is, and how big round.
     pub fn card_spot(play: &Play, i: usize) -> Option<(Vec3, f32)> {
         Some((*play.cards.get(i)?, play.def.postcards[i].r))
@@ -474,12 +498,22 @@ mod on {
 
     /// The named local within `reach` of `at`, nearest first.
     pub fn nearest_local(play: &Play, at: Vec3, reach: f32) -> Option<(usize, Vec3)> {
+        // Whoever the favor under way is for comes first, so a neighbor never gets in
+        // the way of handing it over. A rider is on the dragon's back, not here.
+        let key = |i: usize, d: f32| {
+            if play.errands[i] == Errand::Accepted {
+                d * 0.3
+            } else {
+                d
+            }
+        };
         play.folk
             .iter()
             .enumerate()
+            .filter(|(i, _)| play.riding != Some(*i))
             .map(|(i, p)| (i, *p, (p.x - at.x).hypot(p.z - at.z)))
             .filter(|(_, p, d)| *d < reach && (p.y - at.y).abs() < 5.0)
-            .min_by(|a, b| a.2.total_cmp(&b.2))
+            .min_by(|a, b| key(a.0, a.2).total_cmp(&key(b.0, b.2)))
             .map(|(i, p, _)| (i, p))
     }
 
@@ -504,7 +538,7 @@ mod on {
                 .iter()
                 .position(|f| f.id == r.target)
                 .is_some_and(|f| play.found[f]),
-            zawnabout_play::Errand::New => true,
+            zawnabout_play::Errand::New => !play.busy(),
             zawnabout_play::Errand::Accepted => play.ready(i, lit),
             zawnabout_play::Errand::Done => false,
         }
@@ -569,6 +603,11 @@ mod on {
             Talk::Reminder => (
                 r.map_or("", |r| r.hint).into(),
                 "Still to do".into(),
+                CardKind::Reminder(i),
+            ),
+            Talk::Later => (
+                crate::talk::later(i as u32).into(),
+                l.town.into(),
                 CardKind::Say,
             ),
             Talk::Thanks => {
@@ -695,7 +734,7 @@ mod on {
             };
             return Some(match (ch.kind, ch.accepted, ch.aboard) {
                 (ChoreKind::Fetch { kind, .. }, true, true) => {
-                    play.chore = None;
+                    play.finish_chore();
                     (
                         card(
                             format!(
@@ -735,8 +774,11 @@ mod on {
                     ),
                     None,
                 ),
-                _ => (card(chore_ask(play, ch.kind), CardKind::Chore), Some(ch)),
+                _ => (card(chore_ask(play, &ch), CardKind::Chore), Some(ch)),
             });
+        }
+        if play.busy() {
+            return None;
         }
         let kind = play.chore_for(seed, home, rest)?;
         if matches!(kind, ChoreKind::Ride { .. }) && !play.back_free() {
@@ -755,7 +797,7 @@ mod on {
         Some((
             Card {
                 title: name.into(),
-                body: chore_ask(play, kind),
+                body: chore_ask(play, &ch),
                 foot: String::new(),
                 kind: CardKind::Chore,
             },
@@ -763,15 +805,22 @@ mod on {
         ))
     }
 
-    fn chore_ask(play: &Play, kind: ChoreKind) -> String {
-        match kind {
+    fn chore_ask(play: &Play, ch: &Chore) -> String {
+        match ch.kind {
             ChoreKind::Fetch { kind, .. } => format!(
                 "Oh dear, I've dropped my {} somewhere around here. Could you have a look?",
                 thing_name(kind)
             ),
-            ChoreKind::Ride { card } => format!(
-                "I've always wanted to see {}. Could you fly me there?",
-                play.def.postcards[card].name
+            ChoreKind::Ride { card } if play.is_adrift(ch.home) => {
+                crate::talk::adrift_ask(ch.seed, play.def.postcards[card].name)
+            }
+            ChoreKind::Ride { card } if play.is_stranded(ch.home) => {
+                crate::talk::stranded_ask(ch.seed, play.def.postcards[card].name)
+            }
+            ChoreKind::Ride { card } => crate::talk::ride_ask(
+                ch.seed,
+                play.def.postcards[card].name,
+                play.cards[card].distance(ch.home) > 700.0,
             ),
             ChoreKind::Deliver { card, kind } => format!(
                 "Could you take this {} to {} for me? Somebody there is waiting for it. Just land there and they'll find you.",
@@ -791,10 +840,19 @@ mod on {
     /// Whether townsperson `seed` has something to ask or be thanked for.
     pub fn folk_asks(play: &Play, seed: u32, home: Vec3) -> bool {
         match &play.chore {
-            Some(ch) => ch.seed == seed && (!ch.accepted || ch.aboard),
-            None => play
-                .chore_for(seed, home, &|x, z| Vec3::new(x, home.y, z))
-                .is_some(),
+            // Someone riding along is on the dragon's back, not waiting to be talked to.
+            Some(ch) if matches!(ch.kind, ChoreKind::Ride { .. }) && ch.aboard => false,
+            Some(ch) => {
+                ch.seed == seed
+                    && (!ch.accepted || matches!(ch.kind, ChoreKind::Fetch { .. }) && ch.aboard)
+            }
+            None if play.busy() => false,
+            None => match play.chore_for(seed, home, &|x, z| Vec3::new(x, home.y, z)) {
+                Some(ChoreKind::Ride { .. }) => play.back_free(),
+                Some(ChoreKind::Deliver { .. }) => play.arms_free(),
+                Some(ChoreKind::Fetch { .. }) => true,
+                None => false,
+            },
         }
     }
 
@@ -864,6 +922,54 @@ mod on {
                 r: 8.0,
             },
         })
+    }
+
+    /// Where a race being run finishes, with `ground` for its height.
+    pub fn race_goal(play: &Play, ground: &dyn Fn(f32, f32) -> f32) -> Option<Goal> {
+        let run = play.flying.race?;
+        let r = &play.def.races[run.race];
+        let [x, z] = r.to_at;
+        Some(Goal {
+            name: format!("Race to {}", r.to),
+            at: Vec3::new(x, ground(x, z), z),
+            r: 0.0,
+        })
+    }
+
+    /// Moves the whale postcard's spot to the whale in sight, so getting close to any
+    /// whale takes it.
+    pub fn whale_seen_at(play: &mut Play, at: Vec3) {
+        if let Some(i) = play.def.postcards.iter().position(|c| c.id == "whales") {
+            play.cards[i] = at;
+        }
+    }
+
+    /// Whether townsperson `seed` is away: riding on the dragon's back, or already flown
+    /// where they wanted to go.
+    pub fn folk_gone(play: &Play, seed: u32) -> bool {
+        play.helped.contains(&seed) || riding_folk(play) == Some(seed)
+    }
+
+    /// Takes on a parcel for postcard spot `id`, as from a townsperson at `home`, for
+    /// checking the way there.
+    pub fn take_parcel(play: &mut Play, id: &str, home: Vec3) -> bool {
+        let Some(card) = play.def.postcards.iter().position(|c| c.id == id) else {
+            return false;
+        };
+        play.chore = Some(Chore {
+            seed: 1,
+            home,
+            kind: ChoreKind::Deliver { card, kind: "box" },
+            accepted: true,
+            aboard: true,
+        });
+        true
+    }
+
+    /// The townsperson waiting for their lost thing, and where: they asked there.
+    pub fn waiting_folk(play: &Play) -> Option<(u32, Vec3)> {
+        let ch = play.chore.as_ref()?;
+        (ch.accepted && matches!(ch.kind, ChoreKind::Fetch { .. })).then_some((ch.seed, ch.home))
     }
 
     /// The townsperson riding along, so the town does not also draw them walking.
@@ -1097,6 +1203,38 @@ mod on {
         Some(f.won[i])
     }
 
+    /// Where birds roost: each spot's middle on the ground, how wide, how low and high it
+    /// reaches, and whether it is a cave they nest inside.
+    pub fn nests(play: &Play) -> Vec<Nesting> {
+        let caves = play
+            .def
+            .courses
+            .iter()
+            .filter(|c| c.nest == "gull")
+            .flat_map(|c| c.gates.iter())
+            .filter(|g| g.r > 0.0)
+            .map(|g| Nesting {
+                mid: Vec2::from(g.a),
+                r: g.r,
+                lo: g.lo,
+                hi: g.hi,
+                cave: true,
+            });
+        let rocks = play
+            .def
+            .postcards
+            .iter()
+            .filter(|c| c.nest == "gull")
+            .map(|c| Nesting {
+                mid: Vec2::new(c.x, c.z),
+                r: c.r,
+                lo: -10.0,
+                hi: 600.0,
+                cave: false,
+            });
+        caves.chain(rocks).collect()
+    }
+
     /// Whether gate `n` of course `id` is passed, for scripts.
     pub fn gate_passed(play: &Play, id: &str, n: usize) -> Option<bool> {
         let c = play.def.courses.iter().position(|c| c.id == id)?;
@@ -1189,15 +1327,15 @@ mod on {
 
     /// Everything the journal's map can show, group by group. `beacon` says where a
     /// beacon's flame is.
-    fn marks(play: &Play, beacon: &dyn Fn(&str) -> Option<Vec3>) -> Vec<MarkGroup> {
+    /// Where to go for each favor under way: what to go and get, and who it goes back
+    /// to. `beacon` says where a beacon's flame is.
+    pub fn favors(play: &Play, beacon: &dyn Fn(&str) -> Option<Vec3>) -> Vec<Goal> {
         let def = play.def;
-        let mut out = Vec::new();
-        let mark = |at: Vec3, done: bool, label: &str| Mark {
-            at: flat(at),
-            done,
-            label: label.into(),
+        let mark = |at: Vec3, _: bool, label: &str| Goal {
+            name: label.into(),
+            at,
+            r: 8.0,
         };
-        // Favors under way: what to go and get, and who it goes back to.
         let mut favors = Vec::new();
         for (i, l) in def.locals.iter().enumerate() {
             let Some(r) = &l.request else { continue };
@@ -1211,11 +1349,11 @@ mod on {
                             favors.push(mark(at, false, item.name));
                         }
                     }
-                    "light" => {
-                        if let Some(at) = beacon(r.target) {
-                            favors.push(mark(at, false, "The beacon"));
-                        }
-                    }
+                    // `beacon` knows only beacons still dark: one lit means back to them.
+                    "light" => match beacon(r.target) {
+                        Some(at) => favors.push(mark(at, false, "The beacon")),
+                        None => favors.push(mark(home, false, &format!("Back to {}", l.name))),
+                    },
                     "postcard" | "ride" => {
                         if let Some(c) = def.postcards.iter().position(|c| c.id == r.target) {
                             if play.taken[c] && r.kind == "postcard" {
@@ -1256,6 +1394,57 @@ mod on {
                 }
             }
         }
+        favors
+    }
+
+    /// The nearest favor under way to `me`, to point the way to.
+    pub fn favor_goal(
+        play: &Play,
+        beacon: &dyn Fn(&str) -> Option<Vec3>,
+        me: Vec3,
+    ) -> Option<Goal> {
+        favors(play, beacon)
+            .into_iter()
+            .min_by(|a, b| a.at.distance(me).total_cmp(&b.at.distance(me)))
+    }
+
+    /// Lets local `i`'s favor go.
+    pub fn drop_errand(play: &mut Play, i: usize) {
+        play.drop_errand(i);
+    }
+
+    /// Stops looking for the nearest favor under way: a townsperson's small ask, or the
+    /// nearest local's favor.
+    pub fn stop_looking(play: &mut Play, beacon: &dyn Fn(&str) -> Option<Vec3>, me: Vec3) {
+        if play.chore.as_ref().is_some_and(|c| c.accepted) {
+            play.chore = None;
+            return;
+        }
+        let near = (0..play.def.locals.len())
+            .filter(|i| play.errands[*i] == Errand::Accepted && play.riding != Some(*i))
+            .min_by(|a, b| {
+                play.folk[*a]
+                    .distance(me)
+                    .total_cmp(&play.folk[*b].distance(me))
+            });
+        let _ = beacon;
+        if let Some(i) = near {
+            play.drop_errand(i);
+        }
+    }
+
+    fn marks(play: &Play, beacon: &dyn Fn(&str) -> Option<Vec3>) -> Vec<MarkGroup> {
+        let def = play.def;
+        let mut out = Vec::new();
+        let mark = |at: Vec3, done: bool, label: &str| Mark {
+            at: flat(at),
+            done,
+            label: label.into(),
+        };
+        let favors: Vec<Mark> = favors(play, beacon)
+            .into_iter()
+            .map(|g| mark(g.at, false, &g.name))
+            .collect();
         out.push(MarkGroup {
             key: "favors".into(),
             name: "Favors under way".into(),
@@ -2104,6 +2293,9 @@ mod on {
     pub fn gate_way(play: &Play, _: &World, _: &str, _: usize) -> Option<(Vec3, Vec3)> {
         match *play {}
     }
+    pub fn nests(play: &Play) -> Vec<Nesting> {
+        match *play {}
+    }
     pub fn flown(play: &Play, _: &str) -> Option<bool> {
         match *play {}
     }
@@ -2178,7 +2370,31 @@ mod on {
     pub fn goal(play: &Play) -> Option<Goal> {
         match *play {}
     }
+    pub fn favor_goal(play: &Play, _: &dyn Fn(&str) -> Option<Vec3>, _: Vec3) -> Option<Goal> {
+        match *play {}
+    }
+    pub fn race_goal(play: &Play, _: &dyn Fn(f32, f32) -> f32) -> Option<Goal> {
+        match *play {}
+    }
+    pub fn drop_errand(play: &mut Play, _: usize) {
+        match *play {}
+    }
+    pub fn stop_looking(play: &mut Play, _: &dyn Fn(&str) -> Option<Vec3>, _: Vec3) {
+        match *play {}
+    }
     pub fn riding_folk(play: &Play) -> Option<u32> {
+        match *play {}
+    }
+    pub fn waiting_folk(play: &Play) -> Option<(u32, Vec3)> {
+        match *play {}
+    }
+    pub fn take_parcel(play: &mut Play, _: &str, _: Vec3) -> bool {
+        match *play {}
+    }
+    pub fn folk_gone(play: &Play, _: u32) -> bool {
+        match *play {}
+    }
+    pub fn whale_seen_at(play: &mut Play, _: Vec3) {
         match *play {}
     }
     pub fn postcard_card(play: &Play, _: usize) -> Card {
@@ -2188,6 +2404,9 @@ mod on {
         match *play {}
     }
     pub fn card_low(play: &Play, _: usize) -> bool {
+        match *play {}
+    }
+    pub fn card_face(play: &Play, _: usize) -> (Option<f32>, Option<f32>) {
         match *play {}
     }
     pub fn card_index(play: &Play, _: &str) -> Option<usize> {

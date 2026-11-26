@@ -191,10 +191,14 @@ pub struct Hud {
     pub toast: Option<(String, String, f32)>,
     /// What the toast keeps clear of along the top.
     pub top: TopClear,
+    /// How much of the bottom the host's touch controls take up, in HUD pixels.
+    pub bottom: f32,
     /// What the passenger just said, in a bubble beside them, and how long it stays.
     pub say: Option<(String, f32)>,
     /// Where the passenger's head is on screen, in pixels, while one rides.
     pub rider_at: Option<Vec2>,
+    /// Where the red arrow points, x and z, for the maps.
+    pub goal_xz: Option<Vec2>,
     /// Something the passenger points at, on screen in pixels, and whether it is in view.
     pub point: Option<(Vec2, bool)>,
     /// Where what the dragon carries is going: on screen in pixels, whether it is in
@@ -421,6 +425,13 @@ impl Hud {
                 c + view * 0.5,
                 rgba(0xFFFFFF, 1.0),
             );
+            if let Some(g) = self.goal_xz {
+                let q = (to_map(g) - (c - view * 0.5)) / view;
+                if q.cmpge(Vec2::ZERO).all() && q.cmple(Vec2::ONE).all() {
+                    let m = p0 + q * side;
+                    d.rect(m - 4.0 * ui, m + 4.0 * ui, rgba(0xE0564A, 1.0));
+                }
+            }
             d.arrow(p0 + side * 0.5, dir, 7.0 * ui);
             d.text(
                 Vec2::new(p0.x + side * 0.5 - 3.0 * ui, p0.y + 4.0),
@@ -441,7 +452,13 @@ impl Hud {
                 Vec2::splat(MAP as f32),
                 rgba(0xFFFFFF, 1.0),
             );
-            d.arrow(p0 + to_map(at) / MAP as f32 * side, dir, 8.0 * ui);
+            if let Some(g) = self.goal_xz {
+                let m = p0 + to_map(g) / MAP as f32 * side;
+                d.rect(m - 5.0 * ui, m + 5.0 * ui, rgba(0xE0564A, 1.0));
+            }
+            let me = p0 + to_map(at) / MAP as f32 * side;
+            d.rect(me - 9.0 * ui, me + 9.0 * ui, rgba(0xFFF6E6, 0.5));
+            d.arrow(me, dir, 8.0 * ui);
             d.text(
                 Vec2::new(p0.x, p0.y - 14.0 * ui),
                 ui * 1.5,
@@ -468,11 +485,18 @@ impl Hud {
     }
 }
 
+/// How big the markers over the world draw: the goal pin and its tag, the passenger's
+/// button. On a phone held upright the width sets it, so the words stay readable on a
+/// sharp, narrow screen.
+fn marker_px(size: Vec2) -> f32 {
+    (size.y / 34.0).min(size.x / 20.0).clamp(11.0, 48.0)
+}
+
 impl Hud {
     /// The passenger's little round button, as a middle and radius in pixels.
     pub fn rider_button(&self, size: Vec2) -> Option<(Vec2, f32)> {
         let at = self.rider_at?;
-        let px = (size.y / 34.0).min(size.x / 34.0).clamp(11.0, 26.0);
+        let px = marker_px(size);
         let r = px * 1.1;
         let c = at + Vec2::new(px * 2.6, px * 0.4);
         let c = c.clamp(Vec2::splat(r + 4.0), size - (r + 4.0));
@@ -483,7 +507,7 @@ impl Hud {
     /// and a marker on whatever they point at.
     fn rider_onto(&self, d: &mut Draw) {
         let size = d.size;
-        let px = (size.y / 34.0).min(size.x / 34.0).clamp(11.0, 26.0);
+        let px = marker_px(size);
         if let Some((c, r)) = self.rider_button(size) {
             for (rad, col) in [(r + 2.0, rgba(0x4A3426, 0.6)), (r, rgba(0xFFF6E6, 0.95))] {
                 for k in 0..16 {
@@ -548,13 +572,27 @@ impl Hud {
             let bs = Vec2::new(tw, small * 1.15) + pad * 2.0;
             let coral = rgba(0xE0564A, 1.0);
             let dark = rgba(0x2A1E14, 0.8);
+            // Above the touch controls, so the name and the way stay readable.
+            let room = Vec2::new(size.x, (size.y - self.bottom).max(size.y * 0.5));
+            let top = self.top;
             let tag = |d: &mut Draw, p0: Vec2| {
-                let p0 = p0.clamp(Vec2::splat(6.0), size - bs - 6.0);
+                let mut p0 = p0.clamp(Vec2::splat(6.0), (room - bs - 6.0).max(Vec2::splat(6.0)));
+                // Below the page's map and buttons in the top corners, not under them.
+                let under_left = if p0.x < top.left.0 { top.left.1 } else { 0.0 };
+                let under_right = if p0.x + bs.x > top.right.0 {
+                    top.right.1
+                } else {
+                    0.0
+                };
+                p0.y = p0.y.max(under_left.max(under_right) + 6.0);
                 d.rect(p0 - 1.5, p0 + bs + 1.5, rgba(0x4A3426, 0.5));
                 d.rect(p0, p0 + bs, rgba(0xFFF6E6, 0.95));
                 d.write(p0 + pad, small, label, rgba(0x4A3426, 1.0));
             };
-            if *seen {
+            // A pin hidden under the page's map or buttons points from the edge instead.
+            let hidden = (p.x < top.left.0 && p.y < top.left.1 + px)
+                || (p.x > top.right.0 && p.y < top.right.1 + px);
+            if *seen && !hidden {
                 // A pin standing over the spot, with its name and distance on top.
                 let tip = *p;
                 let head = tip - Vec2::new(0.0, px * 1.6);
@@ -570,10 +608,17 @@ impl Hud {
                 d.rect(head - px * 0.2, head + px * 0.2, rgba(0xFFF6E6, 1.0));
                 tag(d, head - Vec2::new(bs.x * 0.5, px * 0.8 + bs.y));
             } else {
-                // Off screen: a big arrow at the edge the whole way, with the name by it.
-                let mid = size * 0.5;
+                // Off screen: a big arrow at the edge the whole way, with the name by it,
+                // below the page's map and buttons in the top corners so it never hides
+                // under them, and above the touch controls.
+                let lo = Vec2::new(
+                    px * 3.0,
+                    top.safe.max(top.left.1).max(top.right.1) + px * 3.0,
+                );
+                let hi = (room - px * 3.0).max(lo + px);
+                let mid = (lo + hi) * 0.5;
                 let dir = (*p - mid).normalize_or(Vec2::Y);
-                let reach = (mid - px * 3.0) / dir.abs().max(Vec2::splat(1e-3));
+                let reach = (hi - lo) * 0.5 / dir.abs().max(Vec2::splat(1e-3));
                 let at = mid + dir * reach.x.min(reach.y);
                 d.arrow(at, dir, px * 1.3);
                 tag(d, at - dir * px * 2.6 - bs * 0.5);

@@ -43,5 +43,21 @@ release all
 place -1800 -1050 -1500 0
 wait 0.5
 expect flown deep-down
+# Down the north stack, the shaft from the sea stack into the north vault.
+goto -1160 -1775 60 309
+hold tuck
+hold pitch -1
+wait 5
+expect flown shaft-diver
+release all
+# Perched on top of the bay statue and the Kettle clock.
+land-at -909 2502
+wait-until landed 60
+wait 1
+expect flown statue-hat
+land-at -1743 1499
+wait-until landed 60
+wait 1
+expect flown clock-top
 book flying
 shot moves.png

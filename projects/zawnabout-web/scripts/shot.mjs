@@ -1,7 +1,8 @@
 // Drives the real page in headless Chromium and takes screenshots, for checking the
 // browser build without a person at the keyboard.
 //
-// node scripts/shot.mjs SCRIPT OUT_DIR [--size WxH] [--dpr N] [--cpu N] [--touch] [--swiftshader] [--perf] [--load]
+// node scripts/shot.mjs SCRIPT OUT_DIR [--size WxH] [--dpr N] [--cpu N] [--touch] [--swiftshader] [--perf] [--load] [--fresh]
+// --fresh opens as a new player would: the welcome shows and there is no debug panel.
 //
 // --cpu N slows the page's main thread N times, to stand in for a slower device.
 // --load saves a CPU profile of the page starting, as OUT_DIR/load.cpuprofile, and a
@@ -64,7 +65,8 @@ if (opt("--cpu")) await cdp.send("Emulation.setCPUThrottlingRate", { rate: Numbe
 page.on("console", (m) => console.log(`[page] ${m.text()}`));
 page.on("pageerror", (e) => console.log(`[page error] ${e.message}`));
 
-const query = `?nowelcome&debug${flag("--touch") ? "&touch" : ""}${flag("--perf") ? "&perf" : ""}`;
+const fresh = flag("--fresh");
+const query = `?${fresh ? "" : "nowelcome&debug"}${flag("--touch") ? "&touch" : ""}${flag("--perf") ? "&perf" : ""}`;
 if (flag("--load")) {
   await cdp.send("Profiler.enable");
   await cdp.send("Profiler.setSamplingInterval", { interval: 200 });

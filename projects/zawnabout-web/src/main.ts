@@ -3,7 +3,7 @@ import { setupDebug } from "./debug.ts";
 import { setupMinimap } from "./minimap.ts";
 import { setupNotes } from "./notes.ts";
 import { setupSound } from "./sound.ts";
-import { setupTouch } from "./touch.ts";
+import { mirrorPad, setupTouch } from "./touch.ts";
 
 const query = new URLSearchParams(location.search);
 const debug = query.has("debug");
@@ -167,6 +167,13 @@ function topClear(app: App) {
     else [rx, ry] = [Math.min(rx, r.left), Math.max(ry, r.bottom)];
   }
   app.set_top_clear(safe * k, lx * k, ly * k, rx * k, ry * k);
+  // The touch stick and buttons along the bottom, when they show.
+  let top = innerHeight;
+  for (const el of document.querySelectorAll("#stick-base, #buttons .pad")) {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.top > innerHeight / 2) top = Math.min(top, r.top);
+  }
+  app.set_bottom_clear((innerHeight - top) * k);
 }
 
 /**
@@ -316,10 +323,14 @@ const FIXED: Record<string, () => number> = {
 function pollGamepad(app: App, state: { had: boolean }) {
   const pad = navigator.getGamepads?.().find((p) => p && p.connected);
   if (pad) {
-    app.gamepad(Float32Array.from(pad.axes), Float32Array.from(pad.buttons, (b) => b.value));
+    const axes = Float32Array.from(pad.axes);
+    const buttons = Float32Array.from(pad.buttons, (b) => b.value);
+    app.gamepad(axes, buttons);
+    mirrorPad(axes, buttons);
     state.had = true;
   } else if (state.had) {
     app.gamepad(new Float32Array(), new Float32Array());
+    mirrorPad([], []);
     state.had = false;
   }
 }
@@ -466,6 +477,27 @@ async function start() {
   });
   window.addEventListener("blur", leave);
 
+  // Keep the screen awake while playing: phones dim and lock on a game, since steering
+  // with the stick does not count as using the page. The lock drops whenever the tab
+  // hides, so it is taken again on coming back and on any touch.
+  let wake: { released: boolean; release(): Promise<void> } | null = null;
+  const stayAwake = async () => {
+    const nav = navigator as Navigator & {
+      wakeLock?: { request(type: "screen"): Promise<{ released: boolean; release(): Promise<void> }> };
+    };
+    if (!nav.wakeLock || document.hidden || (wake && !wake.released)) return;
+    try {
+      wake = await nav.wakeLock.request("screen");
+    } catch {
+      wake = null;
+    }
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) void stayAwake();
+  });
+  for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => void stayAwake());
+  void stayAwake();
+
   const typing = (e: Event) => e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement;
   window.addEventListener("keydown", (e) => {
     if (typing(e)) return;
@@ -605,6 +637,7 @@ async function start() {
     }
     debugPanel?.update();
     perfShow?.(now);
+    if (app.take_map_wanted()) minimap.showGoal();
     minimap.update(notes.active() ? notes.spots() : []);
     // The loading screen fades once the first frame is drawn.
     if (!loading.classList.contains("done")) {

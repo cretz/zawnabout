@@ -38,6 +38,9 @@ zawnabout_sim::params! {
     }
 }
 
+/// The least the view takes in side to side (degrees), on a tall screen.
+const WIDE_LEAST: f32 = 50.0;
+
 /// What the camera needs to know about its target, already interpolated.
 #[derive(Clone, Copy, Debug)]
 pub struct Target {
@@ -56,6 +59,9 @@ pub struct Camera {
     pub roll: f32,
     /// A look around from dragging: turn about the dragon (rad) and tilt up or down.
     pub free_look: Vec2,
+    /// A turn about the dragon the game asks for (rad), as to show someone beside it.
+    /// Unlike a look around it still swings clear of walls.
+    pub nudge: f32,
     dir: Vec3,
     fresh: bool,
     /// How far out along the way to its spot the camera may go, eased back out after a
@@ -102,7 +108,10 @@ const SWINGS_PER_FRAME: usize = 3;
 fn clear_way(world: &World, from: Vec3, to: Vec3, steps: u32) -> (f32, Vec3) {
     let margin = 1.6f32;
     let near = margin.min(world.terrain.sdf(from) - 0.1).max(0.3);
-    let in_building = |q: Vec3| world.support_still(q.x, q.z, q.y + 0.5) > q.y - 0.8;
+    // On a roof or deck just under it, or in among a wall, pier or tower.
+    let in_building = |q: Vec3| {
+        world.support_still(q.x, q.z, q.y + 0.5) > q.y - 0.8 || world.within_still(q, 0.4)
+    };
     // A dragon bumped into a building looks out of it, as it does out of rock.
     let inside = in_building(from);
     let len = (to - from).length();
@@ -133,6 +142,7 @@ impl Default for Camera {
             fov: 62.0,
             roll: 0.0,
             free_look: Vec2::ZERO,
+            nudge: 0.0,
             dir: Vec3::Z,
             fresh: true,
             reach: 1.0,
@@ -177,6 +187,20 @@ impl Camera {
             let climb = slope * p.tilt * if slope > 0.0 { 0.35 } else { 1.0 };
             want = (flat * (1.0 - climb * climb).sqrt() + Vec3::Y * climb).normalize();
         }
+        // Walking up or down a hill, look along it, so climbing shows the way up rather
+        // than a wall of grass.
+        if t.mode == Mode::Ground && speed > 0.5 {
+            let ahead = t.pos + flat * 10.0;
+            let here = world.support_still(t.pos.x, t.pos.z, t.pos.y + 1.0);
+            // Looking for the ground ahead from open air: in a cave, from under its roof.
+            let top = (0..5)
+                .map(|k| t.pos.y + 12.0 - k as f32 * 3.0)
+                .find(|y| world.terrain.sdf(Vec3::new(ahead.x, *y, ahead.z)) > 0.5)
+                .unwrap_or(t.pos.y);
+            let there = world.support_still(ahead.x, ahead.z, top);
+            let slope = ((there - here) / 10.0).clamp(-0.8, 0.8) * 0.7;
+            want = (flat + Vec3::Y * slope).normalize();
+        }
         self.dir = self.dir.lerp(want, ease(p.follow)).normalize_or(want);
 
         // Slow flight (hovering, creeping up on a spot) pulls in close and looks down.
@@ -189,7 +213,8 @@ impl Camera {
         let dist = p.ground_distance
             + (p.distance - p.ground_distance) * air
             + speed.min(p.fast_speed) * p.distance_per_speed;
-        let back = Quat::from_rotation_y(p.orbit.to_radians() + self.free_look.x) * self.dir;
+        let turn = p.orbit.to_radians() + self.free_look.x + self.nudge;
+        let back = Quat::from_rotation_y(turn) * self.dir;
         // Tilting swings the camera over or under the dragon.
         let side = Vec3::Y.cross(back).normalize_or(Vec3::X);
         // Looking up swings the camera low, then tilts the view up past that, since the
@@ -309,12 +334,14 @@ impl Camera {
         let fwd = (self.look - self.pos).normalize_or(Vec3::Z);
         let up = Quat::from_axis_angle(fwd, self.roll) * Vec3::Y;
         let view = glam::camera::rh::view::look_at_mat4(self.pos, self.look, up);
+        // On a tall screen, such as a phone held upright, the view keeps some width: the
+        // field of view opens up and down until the sides see at least `WIDE_LEAST`, so
+        // the dragon does not fill the screen and hide the way ahead.
+        let aspect = aspect.max(0.1);
+        let half = (self.fov.to_radians() * 0.5).tan();
+        let least = (WIDE_LEAST.to_radians() * 0.5).tan() / aspect;
+        let fov = 2.0 * half.max(least).atan();
         // Reversed depth (near and far swapped) keeps precision over the whole world.
-        glam::camera::rh::proj::directx::perspective(
-            self.fov.to_radians(),
-            aspect.max(0.1),
-            20000.0,
-            0.3,
-        ) * view
+        glam::camera::rh::proj::directx::perspective(fov, aspect, 20000.0, 0.3) * view
     }
 }

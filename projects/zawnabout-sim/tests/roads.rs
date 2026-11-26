@@ -346,6 +346,21 @@ fn trips() {
     ends.sort();
     ends.dedup();
     println!("{} different trips", ends.len());
+    // STOPS="x z": trips that wait within 150 m of there.
+    if let Ok(at) = std::env::var("STOPS") {
+        let v: Vec<f32> = at
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        let c = Vec2::new(v[0], v[1]);
+        for (k, t) in trips.iter().enumerate() {
+            for (end, p) in [("home", t.pts[0]), ("far", t.pts[t.pts.len() / 2])] {
+                if Vec2::new(p.x, p.z).distance(c) < 150.0 {
+                    println!("  trip {k} {end} stop at {:.0} {:.0}", p.x, p.z);
+                }
+            }
+        }
+    }
     if !lens.is_empty() {
         println!(
             "one way: min {:.0} median {:.0} max {:.0}",
@@ -637,6 +652,7 @@ fn boats_afloat() {
                 | Kind::Trawler
                 | Kind::Cruise
                 | Kind::Supply
+                | Kind::Dolphins
         ) {
             continue;
         }

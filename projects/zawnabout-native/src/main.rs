@@ -306,6 +306,43 @@ fn host_command(
             std::fs::write(&path, csv).expect("write trace");
             println!("trace {}", path.display());
         }
+        // people R: everyone drawn within R of the camera, and their feet over the ground.
+        "people" => {
+            let r = words.get(1).and_then(|w| w.parse().ok()).unwrap_or(80.0);
+            for (p, up) in gfx.people_near(game, r) {
+                println!("person {:.1} {:.1} {:.1} up {up:.2}", p.x, p.y, p.z);
+            }
+        }
+        // float-sweep: visits every few buildings at several hours and lists anyone whose
+        // feet are well off the ground under them.
+        "float-sweep" => {
+            let stride = words.get(1).and_then(|w| w.parse().ok()).unwrap_or(4usize);
+            let keep = (game.camera.pos, game.sim.tick);
+            let spots: Vec<zawnabout_game::sim::glam::Vec3> = game
+                .sim
+                .world
+                .buildings
+                .iter()
+                .step_by(stride)
+                .map(|b| b.pos)
+                .collect();
+            let mut seen = std::collections::HashSet::new();
+            for (k, hour) in [7.0, 10.0, 13.0, 16.0, 19.0, 22.0].into_iter().enumerate() {
+                game.sim.tick = keep.1 + k as u64 * 977;
+                let _ = game.command(&format!("time {hour}"));
+                for at in &spots {
+                    game.camera.pos = *at + zawnabout_game::sim::glam::Vec3::Y * 25.0;
+                    for (p, up) in gfx.people_near(game, 140.0) {
+                        let key = ((p.x / 2.0) as i32, (p.z / 2.0) as i32);
+                        if !(-0.6..0.45).contains(&up) && seen.insert(key) {
+                            println!("float {hour} {:.1} {:.1} {:.1} up {up:.2}", p.x, p.y, p.z);
+                        }
+                    }
+                }
+            }
+            (game.camera.pos, game.sim.tick) = keep;
+            println!("float-sweep {} spots, {} odd", spots.len(), seen.len());
+        }
         "hide-mesh" => {
             gfx.renderer.hide = words[1..].iter().filter_map(|w| w.parse().ok()).collect();
         }

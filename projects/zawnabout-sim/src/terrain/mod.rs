@@ -16,7 +16,7 @@ pub use def::{
     CarveKind, Cover, CoverKind, Decor, Density, FLOWER_VARIANTS, Flowers, Mark, MountShape, NO_Y,
     Road, Route, Style, Tech, Town, Trees, Void, VoidShape, WORLD, WorldDef,
 };
-pub use water::{RoadPoint, RoadSpot};
+pub use water::{Abutment, RoadPoint, RoadSpot};
 
 /// Index cell size (m).
 const CELL: f32 = 128.0;
@@ -98,7 +98,12 @@ pub fn void_bounds(v: &Void) -> Bounds {
         VoidShape::Basin => {
             let c = Vec3::from(v.center);
             let (up, wide) = basin_opening(v.half[0].min(v.half[2]));
-            let e = Vec3::new(v.half[0] + pad + wide, 0.0, v.half[2] + pad + wide);
+            // Its opening widens by `wide` in units of its smallest half size, so a long
+            // shallow basin opens much wider than `wide` (see `void_sdf`). Turned any way
+            // round its middle, so reach as far as its longest corner.
+            let k = v.half[1].min(v.half[0].min(v.half[2])).max(1.0);
+            let flat = v.half[0].max(v.half[2]) * (1.0 + wide / k) * 1.42 + pad;
+            let e = Vec3::new(flat, 0.0, flat);
             Bounds {
                 min: c - e - Vec3::Y * (v.half[1] + pad),
                 max: c + e + Vec3::Y * (up + pad),
@@ -208,7 +213,18 @@ pub fn void_sdf(v: &Void, p: Vec3) -> f32 {
                     let small = he.min_element();
                     let ell = ((q / he).length() - 1.0) * small;
                     let floor = -(q.y + he.y * 0.55);
-                    ell.max(floor) + rough(small * 0.8, small * 0.12)
+                    // The floor stays smooth, with no bumps finer than the drawn ground
+                    // could show, so feet stand on the floor that is seen.
+                    // Out by the walls they stay rough, so walls still look like rock.
+                    let up = smoothstep(1.0, 5.0, q.y + he.y * 0.55);
+                    let wall = smoothstep(-8.0, -3.0, ell);
+                    // Only small rooms: a great vault's bumps are hills, not grit.
+                    let k = if small < 30.0 {
+                        1.0 - (1.0 - up) * (1.0 - wall)
+                    } else {
+                        1.0
+                    };
+                    ell.max(floor) + rough(small * 0.8, small * 0.12) * k
                 }
                 VoidShape::Shaft => {
                     let flat = Vec2::new(q.x / he.x, q.z / he.z).length() - 1.0;
@@ -618,7 +634,11 @@ impl Terrain {
                         mix(m.floor, m.rim, smoothstep(ri * 0.7, ri, u))
                     } else {
                         let v = (u - ri) / (1.0 - ri);
-                        m.rim * (1.0 - v) * (1.0 - v) * (1.0 + v) * (1.0 + crag * 0.1)
+                        // Rugged down the flanks, but a whole wall along the crest: rough
+                        // rock up there broke into teeth and gaps thinner than the mesh,
+                        // walls to fly through and nooks to walk out of the far side of.
+                        let rough = crag * 0.1 * smoothstep(0.04, 0.25, v);
+                        m.rim * (1.0 - v) * (1.0 - v) * (1.0 + v) * (1.0 + rough)
                     }
                 }
             };

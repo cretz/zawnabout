@@ -249,13 +249,51 @@ impl World {
         for b in &world.buildings {
             let top = match b.kind {
                 Kind::Lighthouse => b.size.y + town::LAMP_ROOM,
-                Kind::Mast => b.size.y * 0.72 + b.size.x * 1.4,
+                Kind::Mast => b.size.y * 0.72 + town::MAST_DECK,
                 Kind::ControlTower => b.size.y + 5.0,
                 _ => continue,
             };
             world.perches.push(Perch {
                 id: b.site.unwrap_or("town/tower-top"),
                 pos: b.pos + Vec3::Y * top,
+                radius: 3.0,
+            });
+            // The top of a mast's aerial too, high over its deck, the bravest perch in town.
+            if b.kind == Kind::Mast {
+                world.perches.push(Perch {
+                    id: "town/mast-tip",
+                    pos: b.pos + Vec3::Y * (b.size.y + town::MAST_AERIAL),
+                    radius: 3.0,
+                });
+            }
+        }
+        // The top of a statue's head, so a tap anywhere near it lands up there.
+        for b in world.buildings.iter().filter(|b| b.kind == Kind::Statue) {
+            let top = crate::landmark::pieces(b.kind, b.seed, b.text)
+                .into_iter()
+                .filter(|p| p.solid)
+                .filter_map(|p| match p.form {
+                    crate::landmark::Form::Box { at, half, roof, .. } => {
+                        Some(at + Vec3::Y * (half.y + roof))
+                    }
+                    crate::landmark::Form::Round { at, h, .. } => Some(at + Vec3::Y * h),
+                    crate::landmark::Form::Ball { at, r } => Some(at + Vec3::Y * r),
+                    _ => None,
+                })
+                .max_by(|a, b| a.y.total_cmp(&b.y));
+            if let Some(t) = top {
+                world.perches.push(Perch {
+                    id: b.site.unwrap_or("town/statue-top"),
+                    pos: b.at(t.x, t.y, t.z),
+                    radius: 4.0,
+                });
+            }
+        }
+        // The copper ball over the pool halfway along the Sea Doors hall.
+        for b in world.buildings.iter().filter(|b| b.kind == Kind::SeaDoors) {
+            world.perches.push(Perch {
+                id: b.site.unwrap_or("town/hall-ball"),
+                pos: b.at(0.0, 16.0, crate::landmark::SEA_POOL),
                 radius: 3.0,
             });
         }
@@ -305,9 +343,59 @@ impl World {
                 placed.push((Vec3::new(at.x, h - 0.3, at.y), s, v));
             }
         }
+        // Downtown, a pair of street trees on the pavement before each tower.
+        let mut rng = Rng::new(self.seed ^ 0x51EE);
+        let clear = |at: Vec2| {
+            self.terrain.road_spot(at.x, at.y, 3.0).is_none()
+                && !self.buildings.iter().any(|o| {
+                    let d = at - Vec2::new(o.pos.x, o.pos.z);
+                    d.length() < 80.0
+                        && d.dot(o.axis).abs() < o.size.x * 0.5 + 2.0
+                        && d.dot(o.front()).abs() < o.size.z * 0.5 + 2.0
+                })
+        };
+        for b in &self.buildings {
+            if b.style != Style::Modern
+                || !matches!(b.kind, Kind::Flat | Kind::Tower | Kind::Skyscraper)
+            {
+                continue;
+            }
+            for side in [-1.0f32, 1.0] {
+                let at = Vec2::new(b.pos.x, b.pos.z)
+                    + b.front() * (b.size.z * 0.5 + 6.0)
+                    + b.axis * side * (b.size.x * 0.5 - 1.0).max(3.0);
+                let s = rng.range(0.9, 1.3);
+                let v = (rng.next_u64() % 3) as u8;
+                if wet(at) || !clear(at) {
+                    continue;
+                }
+                if let Some(h) = self.dry_spot(at.x, at.y, 0.75) {
+                    placed.push((Vec3::new(at.x, h - 0.3, at.y), s, v));
+                }
+            }
+        }
         for (pos, s, v) in placed {
             self.push(PropKind::RoundTree, pos, s, v);
         }
+    }
+
+    /// Where a flight of subway stairs `text="LEN DROP"` laid from `at` along `axis`'s
+    /// front starts, and its text, so its foot is level with the platform and its top at
+    /// the street. Worked out once, as the world is built.
+    fn fit_stairs(&self, at: Vec3, axis: Vec2, text: &str) -> Option<(f32, &'static str)> {
+        let len: f32 = text.split_whitespace().next()?.parse().ok()?;
+        let front = Vec2::new(-axis.y, axis.x);
+        // The foot is level with the platform beside the nearest subway track.
+        let def = self.terrain.def;
+        let (i, k) = nearest_rail(def, Vec2::new(at.x, at.z))?;
+        if !def.roads[i].subway {
+            return None;
+        }
+        let foot = self.terrain.road_points(i)[k].y + crate::landmark::METRO_DECK;
+        let end = Vec2::new(at.x, at.z) + front * len;
+        let top = self.terrain.height(end.x, end.y);
+        let text: &'static str = Box::leak(format!("{len} {:.2}", top - foot).into_boxed_str());
+        Some((foot, text))
     }
 
     /// Landmarks from the world files, as buildings so they are solid and drawn with the
@@ -338,12 +426,25 @@ impl World {
             let y = if m.ground {
                 self.terrain.height(x, z)
             } else if under {
-                self.terrain.support(x, z, m.pos[1] + 5.0)
+                // Given a little under the floor, it climbs out of the rock onto it.
+                let top = (0..80)
+                    .map(|k| m.pos[1] + 5.0 + k as f32 * 0.5)
+                    .find(|y| self.terrain.sdf(Vec3::new(x, *y, z)) > 0.5)
+                    .unwrap_or(m.pos[1] + 5.0);
+                self.terrain.support(x, z, top)
             } else {
                 m.pos[1]
             };
             let r = rot.to_radians();
             let axis = Vec2::new(r.cos(), -r.sin());
+            // Subway stairs run from the hall's floor right up to the street, however the
+            // ground has settled since they were laid out.
+            let (y, text) = if kind == Kind::MetroStairs {
+                self.fit_stairs(Vec3::new(x, m.pos[1], z), axis, text)
+                    .unwrap_or((y, text))
+            } else {
+                (y, text)
+            };
             let seed =
                 m.id.bytes()
                     .fold(7u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
@@ -794,7 +895,7 @@ impl World {
             p.id = i as u32;
         }
         // Town buildings give way to the big places dropped into towns.
-        let big: Vec<(Vec2, f32)> = self
+        let big: Vec<(Vec2, f32, f32)> = self
             .buildings
             .iter()
             .filter(|b| crate::landmark::KINDS.iter().any(|(_, k)| *k == b.kind))
@@ -804,6 +905,7 @@ impl World {
                 (
                     Vec2::new(b.pos.x, b.pos.z),
                     b.size.x.max(b.size.z) * 0.55 + 4.0,
+                    b.pos.y,
                 )
             })
             .collect();
@@ -811,9 +913,10 @@ impl World {
             // Landmarks and the sites the world files name (towers, lighthouses) stay.
             let mark = crate::landmark::KINDS.iter().any(|(_, k)| *k == b.kind) || b.site.is_some();
             let at = Vec2::new(b.pos.x, b.pos.z);
-            mark || big
-                .iter()
-                .all(|(c, r)| c.distance(at) > *r + b.size.x.max(b.size.z) * 0.5)
+            // A hall deep underground leaves the streets over it be.
+            mark || big.iter().all(|(c, r, y)| {
+                c.distance(at) > *r + b.size.x.max(b.size.z) * 0.5 || (b.pos.y - y).abs() > 30.0
+            })
         });
         for (i, b) in self.buildings.iter_mut().enumerate() {
             b.id = i as u32;
@@ -863,6 +966,16 @@ impl World {
                 let up = terrain.normal(x, z).y;
                 let cover = terrain.cover(x, z).map(|c| c.kind);
                 if matches!(cover, Some(CoverKind::Town | CoverKind::Snow)) {
+                    continue;
+                }
+                // Nothing grows on the snowy peaks: a little under the lowest the snow
+                // reaches on this island's climate (see the ground colors).
+                let tree_line = match terrain.climate(x, z) {
+                    3 => 210.0,
+                    1 => 830.0,
+                    _ => 660.0,
+                };
+                if h > tree_line {
                     continue;
                 }
                 // Clumps: bushes and trees gather where this is high.
@@ -1137,24 +1250,57 @@ impl World {
             }
         }
         // Bridge decks hold you up and stop you, one box per stretch of deck, and so do
-        // the road and track beds in tunnels, which lie over the tube's round floor.
+        // the road and track beds in tunnels, which lie over the tube's round floor. So
+        // does the stretch running onto a bridge or into a tunnel, and any stretch with
+        // air under it, or the road drawn there is one to walk through.
         for (ri, road) in self.terrain.def.roads.iter().enumerate() {
             let prof = self.terrain.road_points(ri);
             for i in 0..road.pts.len().saturating_sub(1) {
                 let held = |k: usize| prof[k].bridge || prof[k].tunnel;
-                if !(held(i) && held(i + 1)) {
-                    continue;
-                }
                 let a = Vec2::new(road.pts[i][0], road.pts[i][1]);
                 let b = Vec2::new(road.pts[i + 1][0], road.pts[i + 1][1]);
                 let mid = (a + b) * 0.5;
                 let top = (prof[i].y + prof[i + 1].y) * 0.5;
+                let hollow = self.terrain.sdf(Vec3::new(mid.x, top - 0.8, mid.y)) > 0.3;
+                if !(held(i) || held(i + 1) || hollow) {
+                    continue;
+                }
                 self.colliders.push(Collider {
                     prop: Collider::BRIDGE | ri as u32,
                     shape: Shape::Block(Block {
                         base: Vec3::new(mid.x, top - 1.6, mid.y),
                         half: Vec3::new(a.distance(b) * 0.5 + 0.5, 1.6, road.w * 0.5),
                         axis: (b - a).normalize_or(Vec2::X),
+                        roof: 0.0,
+                    }),
+                });
+            }
+            // So are the piers under them, and the stone blocks they stand on at each bank.
+            let hung: Vec<[f32; 2]> = self
+                .bridges
+                .iter()
+                .flat_map(|b| b.spans.iter())
+                .filter(|(r, _)| *r == ri)
+                .map(|(_, span)| *span)
+                .collect();
+            for (at, bottom, top) in self.terrain.piers(ri, &hung) {
+                self.colliders.push(Collider {
+                    prop: Collider::BRIDGE | ri as u32,
+                    shape: Shape::Block(Block {
+                        base: Vec3::new(at.x, bottom, at.y),
+                        half: Vec3::new(1.6, top - bottom, 1.6),
+                        axis: Vec2::X,
+                        roof: 0.0,
+                    }),
+                });
+            }
+            for ab in self.terrain.abutments(ri) {
+                self.colliders.push(Collider {
+                    prop: Collider::BRIDGE | ri as u32,
+                    shape: Shape::Block(Block {
+                        base: Vec3::new(ab.at.x, ab.bottom, ab.at.y),
+                        half: Vec3::new(ab.half_len, ab.top - ab.bottom, ab.half_w),
+                        axis: ab.along.normalize_or(Vec2::X),
                         roof: 0.0,
                     }),
                 });
@@ -1201,6 +1347,13 @@ impl World {
         self.near(p.x, p.z)
             .filter(|c| c.prop & Collider::BUILDING != 0)
             .any(|c| c.shape.push_out(p, 0.05).is_some())
+    }
+
+    /// Whether `p` is inside anything standing still, or within `r` of it: a building, a
+    /// prop, a bridge deck or pier. Not the ground.
+    pub fn within_still(&self, p: Vec3, r: f32) -> bool {
+        self.near(p.x, p.z)
+            .any(|c| c.shape.push_out(p, r).is_some())
     }
 
     /// Whether `p` is inside a building, prop or the ground.
@@ -1332,7 +1485,7 @@ impl World {
         (0..self.traffic.vehicles.len())
             .filter(move |&i| {
                 let p = self.traffic.poses[i].pos;
-                let reach = self.traffic.vehicles[i].size.x;
+                let reach = self.traffic.reach(i);
                 (p.x - x).abs() < reach && (p.z - z).abs() < reach
             })
             .flat_map(|i| self.traffic.shapes(i))
@@ -1357,8 +1510,7 @@ impl World {
             }
             // Where this tick's move carries the rider: a vehicle climbing or diving
             // fast (a mine car onto a trestle) would otherwise slip out from under them.
-            let (was, now) = (self.traffic.prev[i], self.traffic.poses[i]);
-            let p = now.to_world(was.to_local(Vec3::new(x, feet, z)));
+            let p = self.traffic.carry(i, Vec3::new(x, feet, z));
             self.traffic
                 .shapes(i)
                 .iter()
@@ -1371,7 +1523,7 @@ impl World {
     pub fn carrier(&self, x: f32, z: f32, feet: f32) -> Option<usize> {
         (0..self.traffic.vehicles.len()).find(|&i| {
             let p = self.traffic.poses[i].pos;
-            let reach = self.traffic.vehicles[i].size.x;
+            let reach = self.traffic.reach(i);
             (p.x - x).abs() < reach
                 && (p.z - z).abs() < reach
                 && self
@@ -1487,6 +1639,17 @@ impl World {
 
     pub fn ground_normal(&self, x: f32, z: f32) -> Vec3 {
         self.terrain.normal(x, z)
+    }
+
+    /// The slope of whatever is underfoot at height `y`: a cave floor, not the hill far
+    /// overhead.
+    pub fn floor_normal(&self, x: f32, z: f32, y: f32) -> Vec3 {
+        if self.terrain.height(x, z) < y + 4.0 {
+            return self.terrain.normal(x, z);
+        }
+        let e = 1.5;
+        let at = |dx: f32, dz: f32| self.support_still(x + dx, z + dz, y + 3.0);
+        Vec3::new(at(-e, 0.0) - at(e, 0.0), 2.0 * e, at(0.0, -e) - at(0.0, e)).normalize_or(Vec3::Y)
     }
 
     fn push(&mut self, kind: PropKind, pos: Vec3, scale: f32, variant: u8) {

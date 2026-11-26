@@ -251,16 +251,25 @@ impl TerrainMeshes {
     /// drawn there before keeps drawing, so nothing pops out.
     /// Caves far under the ground only show from inside them, so chunks leave them out
     /// until the camera comes near one, and build much faster.
+    /// With time to spare, it builds ahead too, the chunks wanted from `ahead`, where the
+    /// camera is going, so a fast ride never runs into ground still to come.
     pub fn update(
         &mut self,
         renderer: &mut Renderer,
         terrain: &Terrain,
         cam: Vec3,
+        ahead: Option<Vec3>,
         budget: usize,
         secs: f64,
     ) {
         let start = crate::prof::clock();
         let wanted = Self::select(terrain, cam);
+        let coming: Vec<Key> = ahead.map_or(Vec::new(), |a| {
+            Self::select(terrain, a)
+                .into_iter()
+                .filter(|k| !wanted.contains(k))
+                .collect()
+        });
         let near_now = near_voids(terrain, cam);
         let near = |v: u16| near_now[v as usize];
         let ready = |b: Option<&Built>| b.is_some_and(|b| !b.skipped.iter().any(|v| near(*v)));
@@ -279,7 +288,7 @@ impl TerrainMeshes {
             }
         }
         let mut left = if self.sending.is_some() { 0 } else { budget };
-        for k in &wanted {
+        for k in wanted.iter().chain(&coming) {
             if left == 0 {
                 break;
             }
@@ -333,7 +342,8 @@ impl TerrainMeshes {
                 drawn.push(*old);
             }
         }
-        let keep: HashSet<Key> = drawn.iter().copied().collect();
+        let mut keep: HashSet<Key> = drawn.iter().copied().collect();
+        keep.extend(coming.iter().filter(|k| self.built.contains_key(k)));
         self.built.retain(|k, id| {
             let stay = keep.contains(k);
             if !stay {
@@ -447,6 +457,7 @@ const ROCK: [Rgb; 3] = [Rgb(0x9C8F84), Rgb(0x8E8379), Rgb(0xA89C8E)];
 const ALPINE: Rgb = Rgb(0xA6B47E);
 const SNOW: Rgb = Rgb(0xF0F2F5);
 const TOWN: Rgb = Rgb(0xD9CBA8);
+const PLAZA: Rgb = Rgb(0xC9C3B6);
 const CAVE_ROCK: [Rgb; 3] = [Rgb(0x947760), Rgb(0x806856), Rgb(0xA0846A)];
 const CAVE_FLOOR: [Rgb; 2] = [Rgb(0x9C9070), Rgb(0x7F9A68)];
 /// Dressed stone along canals.
@@ -568,17 +579,26 @@ fn color(terrain: &Terrain, c: Vec3, n: Vec3, inside: bool, wet: bool, tiled: bo
     if c.y > snowline {
         return SNOW.mix(pick(&ROCK), h * 0.3);
     }
-    let base = match terrain.cover(c.x, c.z) {
-        Some(cv) => match (cv.kind, cv.density) {
-            (CoverKind::Town, _) => TOWN.mix(pick(&GRASS), 0.15 + h * 0.15),
-            (CoverKind::Snow, _) => SNOW,
-            (CoverKind::Forest, Density::Dense) => pick(&FOREST),
-            (CoverKind::Forest, Density::Rain) => RAIN.mix(pick(&FOREST), h * 0.4),
-            (CoverKind::Forest, Density::Open) => pick(&GRASS).mix(FOREST[0], 0.35),
-            (CoverKind::Meadow, _) => MEADOW.mix(pick(&GRASS), h * 0.4),
-        },
-        None => pick(&GRASS),
-    };
+    let base =
+        match terrain.cover(c.x, c.z) {
+            Some(cv) => match (cv.kind, cv.density) {
+                // A modern city's downtown is paved in pale stone, not lawn.
+                (CoverKind::Town, _)
+                    if terrain.def.towns.iter().any(|t| {
+                        t.id == cv.id && t.style == zawnabout_sim::terrain::Style::Modern
+                    }) =>
+                {
+                    PLAZA.mix(Rgb(0xACA69A), h * 0.5)
+                }
+                (CoverKind::Town, _) => TOWN.mix(pick(&GRASS), 0.15 + h * 0.15),
+                (CoverKind::Snow, _) => SNOW,
+                (CoverKind::Forest, Density::Dense) => pick(&FOREST),
+                (CoverKind::Forest, Density::Rain) => RAIN.mix(pick(&FOREST), h * 0.4),
+                (CoverKind::Forest, Density::Open) => pick(&GRASS).mix(FOREST[0], 0.35),
+                (CoverKind::Meadow, _) => MEADOW.mix(pick(&GRASS), h * 0.4),
+            },
+            None => pick(&GRASS),
+        };
     // Each island's own climate: deep greens in the rainforest, golden grass on the dry
     // island, pale frosty grass on the cold one. Towns keep their colors.
     let town = terrain

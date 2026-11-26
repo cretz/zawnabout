@@ -83,6 +83,38 @@ try-gate needle-weave 4
 wait 2
 expect gate needle-weave 4
 expect flown needle-weave
+try-gate river-run 0
+wait 2
+expect gate river-run 0
+try-gate river-run 1
+wait 2
+expect gate river-run 1
+try-gate river-run 2
+wait 2
+expect gate river-run 2
+try-gate river-run 3
+wait 2
+expect gate river-run 3
+try-gate river-run 4
+wait 2
+expect gate river-run 4
+expect flown river-run
+try-gate canyon-run 0
+wait 2
+expect gate canyon-run 0
+try-gate canyon-run 1
+wait 2
+expect gate canyon-run 1
+try-gate canyon-run 2
+wait 2
+expect gate canyon-run 2
+try-gate canyon-run 3
+wait 2
+expect gate canyon-run 3
+try-gate canyon-run 4
+wait 2
+expect gate canyon-run 4
+expect flown canyon-run
 try-gate lighthouse-run 0
 wait 2
 expect gate lighthouse-run 0

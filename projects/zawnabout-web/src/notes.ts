@@ -125,6 +125,20 @@ export function setupNotes(app: App, canvas: HTMLCanvasElement, touch: boolean) 
   const nearText = $("note-near");
   const text = $("note-text") as HTMLTextAreaElement;
   const store = new Store();
+  // With the on-screen keyboard up, the dialog sits at the top of what is still seen,
+  // so the words being typed are never under the keys.
+  const vv = window.visualViewport;
+  const fit = () => {
+    if (!vv || dialog.classList.contains("hidden")) return;
+    const covered = vv.height < window.innerHeight * 0.8;
+    dialog.style.top = covered ? `${vv.offsetTop + 8}px` : "";
+    dialog.style.transform = covered ? "translate(-50%, 0)" : "";
+    dialog.style.maxHeight = covered ? `${vv.height - 16}px` : "";
+    dialog.style.overflowY = covered ? "auto" : "";
+  };
+  vv?.addEventListener("resize", fit);
+  vv?.addEventListener("scroll", fit);
+  text.addEventListener("focus", () => setTimeout(fit, 300));
   let notes: Note[] = [];
   let draft: { spot: number[]; view: number[]; near: string[] } | null = null;
 

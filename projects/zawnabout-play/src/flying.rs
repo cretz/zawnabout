@@ -20,7 +20,7 @@ pub struct GateDef {
     pub hi: f32,
 }
 
-/// A stunt: through a gate (`gap`, `near`), a move (`dive`, `skim`, `glide`, `high`,
+/// A stunt: through a gate (`gap`, `near`), standing in one (`perch`), a move (`dive`, `shaft`, `skim`, `glide`, `high`,
 /// `spin`, `deep`, `cling`, `splash`, `comet`, `fast`), or riding a `vehicle` (`ride`).
 pub struct StuntDef {
     pub id: &'static str,
@@ -41,6 +41,8 @@ pub struct CourseDef {
     pub gold: u32,
     pub prize: GiftDef,
     pub gates: &'static [GateDef],
+    /// What roosts in its gates, `gull` or nothing.
+    pub nest: &'static str,
 }
 
 /// A race against a `vehicle` from one place to another, starting as it passes or
@@ -76,6 +78,8 @@ const DIVE_PITCH: f32 = -0.7;
 const DIVE_SPEED: f32 = 70.0;
 const DIVE_TIME: f32 = 2.5;
 const COMET_TIME: f32 = 1.0;
+/// How far down a shaft, rock all round overhead, makes a shaft dive (m).
+const SHAFT_DROP: f32 = 150.0;
 const SKIM_HEIGHT: f32 = 8.0;
 const SKIM_SPEED: f32 = 60.0;
 const SKIM_TIME: f32 = 3.0;
@@ -107,6 +111,8 @@ pub struct Flying {
     last: Option<(Vec3, Mode, f32)>,
     time: f32,
     dive: f32,
+    /// How far it has dropped down a shaft so far, under rock.
+    shaft: f32,
     comet: f32,
     skim: f32,
     glide: f32,
@@ -256,6 +262,13 @@ impl Play {
         // Moves.
         let diving = air && me.path_pitch < DIVE_PITCH && speed > DIVE_SPEED;
         f.dive = if diving { f.dive + dt } else { 0.0 };
+        // Down a shaft: falling fast with the hill far overhead.
+        let under = world.terrain.height(me.pos.x, me.pos.z) > me.pos.y + 25.0;
+        f.shaft = match step {
+            Some(a) if air && under && me.vel.y < -12.0 => f.shaft + (a.y - me.pos.y).max(0.0),
+            _ if air && under && me.vel.y < -4.0 => f.shaft,
+            _ => 0.0,
+        };
         f.comet = if diving && me.breath > 0.5 {
             f.comet + dt
         } else {
@@ -300,8 +313,19 @@ impl Play {
                     _ => (v, 0.0, me.pos),
                 };
                 f.ride = Some((rv, t, from));
-                (t >= RIDE_TIME && from.distance(me.pos) > RIDE_MOVED)
-                    .then(|| vehicle_name(world, v))
+                (t >= RIDE_TIME && from.distance(me.pos) > RIDE_MOVED).then(|| {
+                    // Up on a towed parasail rather than in the boat.
+                    let boat = world.traffic.poses[v];
+                    let flat = Vec2::new(me.pos.x - boat.pos.x, me.pos.z - boat.pos.z);
+                    match (
+                        world.traffic.parasail(v, &boat),
+                        world.traffic.skier(v, &boat),
+                    ) {
+                        (Some(_), _) if me.pos.y > boat.pos.y + 15.0 => "parasail".to_string(),
+                        (_, Some(_)) if flat.length() > 12.0 => "waterski".to_string(),
+                        _ => vehicle_name(world, v),
+                    }
+                })
             })
             .unwrap_or_else(|| {
                 f.ride = None;
@@ -313,8 +337,14 @@ impl Play {
                     (Some(g), Some(a)) => passes(g, a, me.pos),
                     _ => false,
                 },
+                // Standing up on top of something tall.
+                "perch" => {
+                    me.mode == Mode::Ground
+                        && s.gate.as_ref().is_some_and(|g| passes(g, me.pos, me.pos))
+                }
                 "dive" => f.dive >= DIVE_TIME,
                 "comet" => f.comet >= COMET_TIME,
+                "shaft" => f.shaft >= SHAFT_DROP,
                 "skim" => f.skim >= SKIM_TIME,
                 "glide" => f.glide >= GLIDE_TIME,
                 "high" => air && me.pos.y > HIGH,

@@ -1,7 +1,8 @@
 //! Car trips over the road network. Roads that end on another road join it there, so the
-//! roads make a graph of junctions and dead ends. Each car drives from one dead end to a
-//! far one by the shortest way, turning onto other roads at the junctions, waits there a
-//! moment, turns round and drives home again.
+//! roads make a graph of junctions and dead ends. Each car drives from one town or dead
+//! end to one of the farthest it can reach by the shortest way, turning onto other roads
+//! at the junctions, waits there a moment, turns round and drives home again. Cars only
+//! stop where there is somewhere to stop: in a town, never by a lone house on a highway.
 
 use glam::{Vec2, Vec3};
 
@@ -105,7 +106,7 @@ fn keep_right(pts: &[Vec3], lane: &[f32]) -> Vec<Vec3> {
 
 /// How many cars can call at one stop, each at its own spot along the curb, and how far
 /// apart those are (m).
-const SLOTS: u8 = 3;
+const SLOTS: u8 = 6;
 const SLOT_GAP: f32 = 14.0;
 
 /// A turn at the end of a lane: from `lane` right of the middle at `end`, heading along
@@ -233,12 +234,22 @@ pub fn car_trips(terrain: &Terrain, places: &[Vec2]) -> Vec<Trip> {
             pairs.push((s - 1, s));
         }
     }
-    // Places to call at: the road nearest each, one stop per stretch of road.
+    // Places to call at: the road nearest each, one stop per stretch of road. Only where
+    // buildings stand together, a town or a village street.
     let mut calls = Vec::new();
     for (k, place) in places.iter().enumerate() {
+        let neighbors = places.iter().filter(|q| q.distance(*place) < 90.0).count();
+        if neighbors < 6 {
+            continue;
+        }
         let mut best: Option<(f32, usize, f32)> = None;
         for r in 0..roads.len() {
             if pts[r].len() < 2 {
+                continue;
+            }
+            // Never on a highway, where a car pulled over is a car stopped in the middle
+            // of nowhere, only on the streets.
+            if w[r] >= 12.0 {
                 continue;
             }
             let (d, at) = nearest(&pts[r], *place);
@@ -349,17 +360,24 @@ pub fn car_trips(terrain: &Terrain, places: &[Vec2]) -> Vec<Trip> {
             break;
         };
         let (dist, via) = ways(home);
-        // Off to somewhere a good way off, so a rider sees a lot of the island.
+        // Off to somewhere a long way off, so a rider sees a lot of the island.
         let mut far: Vec<usize> = stops
             .iter()
             .copied()
-            .filter(|&d| d != home && used[d] < SLOTS && dist[d] < f32::MAX && dist[d] > 800.0)
+            .filter(|&d| d != home && used[d] < SLOTS && dist[d] < f32::MAX && dist[d] > 1500.0)
             .collect();
         if far.is_empty() {
             far = stops
                 .iter()
                 .copied()
-                .filter(|&d| d != home && used[d] < SLOTS && dist[d] < f32::MAX)
+                .filter(|&d| d != home && used[d] < SLOTS && dist[d] < f32::MAX && dist[d] > 800.0)
+                .collect();
+        }
+        if far.is_empty() {
+            far = stops
+                .iter()
+                .copied()
+                .filter(|&d| d != home && used[d] < SLOTS && dist[d] < f32::MAX && dist[d] > 600.0)
                 .collect();
         }
         if far.is_empty() {
@@ -367,7 +385,8 @@ pub fn car_trips(terrain: &Terrain, places: &[Vec2]) -> Vec<Trip> {
             continue;
         }
         far.sort_by(|&a, &b| dist[b].total_cmp(&dist[a]));
-        let pick = far[(h(2) * (far.len() as f32 * 0.6).ceil()) as usize % far.len()];
+        // One of the farthest few.
+        let pick = far[(h(2) * (far.len() as f32 * 0.3).ceil()) as usize % far.len()];
         let (home_slot, far_slot) = (used[home], used[pick]);
         used[home] += 1;
         used[pick] += 1;

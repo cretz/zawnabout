@@ -364,6 +364,16 @@ button {
   cursor: pointer;
 }
 
+/* Phones held sideways: short, so the map takes less of the height. */
+@media (max-height: 500px) {
+  #minimap:not(.big):not(.atlas) {
+    width: 104px;
+    height: 104px;
+    border-radius: 14px;
+    opacity: 0.92;
+  }
+}
+
 /* Phones: a smaller map, a compact bar and the note list as a short sheet near the top,
    clear of the stick and buttons at the bottom. */
 @media (max-width: 640px) {
@@ -484,9 +494,11 @@ button {
   color: white;
 }
 
-.pad.down {
-  transform: scale(0.92);
-  filter: brightness(0.95);
+.pad.down,
+.pad.pad-down {
+  transform: scale(0.9);
+  filter: brightness(1.25);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85);
 }
 
 /* Debug panel. */

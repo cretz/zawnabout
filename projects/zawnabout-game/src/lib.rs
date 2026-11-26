@@ -26,6 +26,7 @@ pub mod prof;
 pub mod render;
 pub mod script;
 pub mod sea_life;
+pub mod stranded;
 pub mod talk;
 pub mod terrain_mesh;
 pub mod thumbs;

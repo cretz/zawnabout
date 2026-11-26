@@ -442,7 +442,7 @@ impl Renderer {
         );
         let ground = pipeline(
             "ground",
-            "vs_lit",
+            "vs_ground",
             "fs_ground",
             &mesh_buffers,
             true,

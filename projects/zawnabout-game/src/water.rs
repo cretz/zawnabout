@@ -371,6 +371,34 @@ pub fn rivers(terrain: &Terrain) -> Vec<WaterPart> {
                 tri(&mut m, w(l1, true), w(br, true), w(r1, true));
                 continue;
             }
+            if falls && !r.under {
+                // Down the cliff in short steps, each pushed out from any rock bulging
+                // through the straight line from the lip to the foot, so the falls never
+                // pass behind the cliff.
+                let steps = (drop / 6.0).ceil().clamp(2.0, 60.0) as usize;
+                let out = Vec3::new(dir.x, 0.0, dir.y);
+                let clear = |t: f32| {
+                    let mut p = a.lerp(b, t);
+                    for _ in 0..60 {
+                        if terrain.sdf(p) > 0.8 {
+                            break;
+                        }
+                        p += out * 0.5;
+                    }
+                    (p, sa.lerp(sb, t))
+                };
+                let w = |p: Vec3| vert(p, color, OPAQUE_DEPTH, flow, day, true);
+                let mut prev = clear(0.0);
+                for k in 1..=steps {
+                    let next = clear(k as f32 / steps as f32);
+                    let (l0, r0) = (prev.0 - prev.1, prev.0 + prev.1);
+                    let (l1, r1) = (next.0 - next.1, next.0 + next.1);
+                    tri(&mut m, w(l0), w(l1), w(r1));
+                    tri(&mut m, w(l0), w(r1), w(r0));
+                    prev = next;
+                }
+                continue;
+            }
             let mid_a = v(a, false);
             let mid_b = v(b, false);
             let [la, ra, rb, lb] = corners.map(|p| v(p, true));

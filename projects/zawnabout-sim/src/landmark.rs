@@ -52,6 +52,8 @@ pub enum Mat {
     Basalt,
     /// Not drawn: a solid stand-in for something the client draws itself, smoothly.
     Hidden,
+    /// Ripe purple grapes.
+    Grape,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,7 +91,7 @@ pub struct Piece {
 }
 
 /// The kinds a world file can name, and what they become.
-pub const KINDS: [(&str, Kind); 95] = [
+pub const KINDS: [(&str, Kind); 106] = [
     ("faces", Kind::Faces),
     ("warden", Kind::Warden),
     ("stones", Kind::Stones),
@@ -185,6 +187,17 @@ pub const KINDS: [(&str, Kind); 95] = [
     ("port", Kind::Port),
     ("seadoors", Kind::SeaDoors),
     ("basaltgate", Kind::BasaltGate),
+    ("mansion", Kind::Mansion),
+    ("crag", Kind::Crag),
+    ("goats", Kind::Goats),
+    ("carpark", Kind::CarPark),
+    ("vineyard", Kind::Vineyard),
+    ("orchard", Kind::Orchard),
+    ("temple", Kind::Temple),
+    ("shrine", Kind::Shrine),
+    ("launchpad", Kind::LaunchPad),
+    ("icecream", Kind::IceCream),
+    ("chalkmoon", Kind::ChalkMoon),
 ];
 
 /// Where a fairground wheel turns, in the landmark's frame, and its radius.
@@ -974,6 +987,9 @@ fn spell(out: &mut Vec<Piece>, text: &str, at: Vec3, step: f32, depth: f32, mat:
 pub const METRO_PLATFORM: f32 = 52.0;
 const MEZZANINE: f32 = 7.0;
 
+/// How high a subway platform's top stands over the rails.
+pub const METRO_DECK: f32 = 1.0;
+
 /// A subway station in its vaulted hall, the track along x at the origin: a long tiled
 /// platform with a yellow edge, lamps hung in rows, columns, benches and the station's
 /// name on boards facing the track. Stairs at each end climb to a mezzanine along the back
@@ -982,7 +998,7 @@ fn metro(out: &mut Vec<Piece>, name: &str) {
     let l = METRO_PLATFORM;
     // The platform, from the hall floor up to a step above the rails.
     out.push(bx(
-        Vec3::new(0.0, -1.5, 8.5),
+        Vec3::new(0.0, METRO_DECK - 2.5, 8.5),
         Vec3::new(l, 2.5, 5.5),
         Mat::White,
     ));
@@ -1123,11 +1139,13 @@ pub const STAIR_SLOPE: f32 = 0.625;
 /// and two lit "M" totems either side of it.
 fn metro_gate(out: &mut Vec<Piece>) {
     let cut = 42.0;
-    out.push(soft(bx(
-        Vec3::new(0.0, -0.4, 6.0),
-        Vec3::new(13.0, 0.55, 6.0),
+    // Solid, as the cutting's hole runs on under it, and reaching back under the top
+    // step so there is no gap to drop through walking out.
+    out.push(bx(
+        Vec3::new(0.0, -0.4, 5.5),
+        Vec3::new(13.0, 0.55, 6.5),
         Mat::Concrete,
-    )));
+    ));
     for (x, z) in [(-10.8f32, -7.0f32), (10.8, -7.0), (-10.8, 4.0), (10.8, 4.0)] {
         out.push(round(Vec3::new(x, 0.0, z), 5.0, 0.22, 0.2, Mat::Metal));
     }
@@ -1233,9 +1251,10 @@ fn metro_stairs(out: &mut Vec<Piece>, text: &str) {
     for k in 0..n {
         let top = (k + 1) as f32 * rise;
         let mid = (k as f32 + 0.5) * run;
+        // Deep, down to the floor of the tube they climb, so nothing walks in under them.
         out.push(bx(
-            Vec3::new(0.0, top - 3.0, mid),
-            Vec3::new(half, 3.0, run * 0.5 + 0.02),
+            Vec3::new(0.0, top - STAIR_DEPTH, mid),
+            Vec3::new(half, STAIR_DEPTH, run * 0.5 + 0.02),
             Mat::Stone,
         ));
         // A pale nosing on every step edge, so the flight reads as stairs from afar. It
@@ -1267,11 +1286,14 @@ fn metro_stairs(out: &mut Vec<Piece>, text: &str) {
         }
     }
     out.push(bx(
-        Vec3::new(0.0, -3.0, -3.0),
-        Vec3::new(half, 3.0, 3.0),
+        Vec3::new(0.0, -STAIR_DEPTH, -3.0),
+        Vec3::new(half, STAIR_DEPTH, 3.0),
         Mat::Stone,
     ));
 }
+
+/// Half how far down a subway stair's steps reach under their tops.
+const STAIR_DEPTH: f32 = 7.0;
 
 /// A fence of posts and two rails round the corners given, in order and closed.
 fn fence(out: &mut Vec<Piece>, corners: &[Vec2], post_gap: f32, mat: Mat) {
@@ -1334,6 +1356,180 @@ fn observatory(out: &mut Vec<Piece>) {
 
 /// A fire lookout: a wooden cabin with windows all round on four tall braced legs, a
 /// stair zigzagging up between them, and a walkway round the cabin.
+/// A grand house for the high, empty ground: a pale two-story main house under a
+/// terracotta roof, a lower wing either side, a columned porch to the front (+z) with a
+/// gravel drive and a fountain, a pool and its terrace behind, hedges and lamps round
+/// the garden and a little gazebo. Windows glow at night. About 60 by 60 m.
+fn mansion(out: &mut Vec<Piece>, seed: u32) {
+    let wall = if seed.is_multiple_of(2) {
+        Mat::Pale
+    } else {
+        Mat::White
+    };
+    let roofed = |at: Vec3, half: Vec3, h: f32, roof: f32| {
+        [
+            bx(at, Vec3::new(half.x, h, half.z), wall),
+            Piece {
+                form: Form::Box {
+                    at: at + Vec3::Y * h,
+                    half: Vec3::new(half.x + 0.6, 0.3, half.z + 0.6),
+                    yaw: 0.0,
+                    roof,
+                },
+                mat: Mat::Red,
+                solid: true,
+            },
+        ]
+    };
+    // The main house and its wings.
+    out.extend(roofed(Vec3::ZERO, Vec3::new(11.0, 0.0, 7.0), 8.0, 4.0));
+    for side in [-1.0f32, 1.0] {
+        out.extend(roofed(
+            Vec3::new(side * 16.5, 0.0, -1.5),
+            Vec3::new(5.5, 0.0, 5.5),
+            5.5,
+            3.0,
+        ));
+    }
+    // Windows, two floors of them along the front and the back, and the wings' fronts.
+    for (z, sign) in [(7.02f32, 1.0f32), (-7.02, -1.0)] {
+        for floor in [1.2f32, 4.9] {
+            for k in 0..6 {
+                let x = -8.75 + k as f32 * 3.5;
+                if sign > 0.0 && floor < 2.0 && x.abs() < 2.5 {
+                    continue;
+                }
+                out.push(soft(bx(
+                    Vec3::new(x, floor, z),
+                    Vec3::new(0.65, 1.8, 0.06),
+                    Mat::Glass,
+                )));
+            }
+        }
+    }
+    for side in [-1.0f32, 1.0] {
+        for k in 0..2 {
+            out.push(soft(bx(
+                Vec3::new(side * (14.0 + k as f32 * 5.0), 1.3, 4.02),
+                Vec3::new(0.6, 1.7, 0.06),
+                Mat::Glass,
+            )));
+        }
+    }
+    // The front door under a porch on four columns, with a pediment over it.
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.0, 7.04),
+        Vec3::new(1.0, 3.0, 0.06),
+        Mat::Wood,
+    )));
+    for x in [-3.6f32, -1.2, 1.2, 3.6] {
+        out.push(round(Vec3::new(x, 0.0, 10.0), 6.2, 0.4, 0.34, Mat::White));
+    }
+    out.push(Piece {
+        form: Form::Box {
+            at: Vec3::new(0.0, 6.2, 8.6),
+            half: Vec3::new(4.6, 0.5, 2.0),
+            yaw: 0.0,
+            roof: 1.6,
+        },
+        mat: Mat::White,
+        solid: true,
+    });
+    out.push(bx(
+        Vec3::new(0.0, 0.0, 9.5),
+        Vec3::new(5.0, 0.35, 2.2),
+        Mat::Stone,
+    ));
+    // The drive up to it, a fountain in the turning circle, and lamps along it.
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.0, 22.0),
+        Vec3::new(3.2, 0.06, 11.0),
+        Mat::Sand,
+    )));
+    out.push(soft(round(
+        Vec3::new(0.0, 0.0, 22.0),
+        0.07,
+        8.0,
+        8.0,
+        Mat::Sand,
+    )));
+    out.push(round(Vec3::new(0.0, 0.0, 22.0), 0.7, 3.0, 3.0, Mat::Stone));
+    out.push(soft(round(
+        Vec3::new(0.0, 0.69, 22.0),
+        0.03,
+        2.7,
+        2.7,
+        Mat::Water,
+    )));
+    out.push(round(Vec3::new(0.0, 0.0, 22.0), 2.4, 0.35, 0.2, Mat::Stone));
+    out.push(ball(Vec3::new(0.0, 2.6, 22.0), 0.45, Mat::Water));
+    for z in [14.0f32, 28.0] {
+        for x in [-4.6f32, 4.6] {
+            out.push(round(Vec3::new(x, 0.0, z), 3.2, 0.09, 0.07, Mat::Metal));
+            out.push(ball(Vec3::new(x, 3.4, z), 0.32, Mat::Lamp));
+        }
+    }
+    // Hedges round the front garden, an opening for the drive.
+    for side in [-1.0f32, 1.0] {
+        out.push(bx(
+            Vec3::new(side * 17.0, 0.0, 33.0),
+            Vec3::new(13.0, 1.4, 0.7),
+            Mat::Hedge,
+        ));
+        out.push(bx(
+            Vec3::new(side * 29.5, 0.0, 14.0),
+            Vec3::new(0.7, 1.4, 19.0),
+            Mat::Hedge,
+        ));
+    }
+    // The pool behind, on a stone terrace, with loungers and an umbrella.
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.0, -17.0),
+        Vec3::new(12.0, 0.12, 7.5),
+        Mat::Stone,
+    )));
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.0, -17.5),
+        Vec3::new(8.0, 0.16, 4.0),
+        Mat::Water,
+    )));
+    for k in 0..3 {
+        out.push(soft(bx(
+            Vec3::new(-6.0 + k as f32 * 2.2, 0.0, -11.0),
+            Vec3::new(0.45, 0.5, 1.0),
+            Mat::Canvas((seed + k) as u8 % 6),
+        )));
+    }
+    out.push(soft(round(
+        Vec3::new(6.5, 0.0, -11.5),
+        2.4,
+        0.06,
+        0.05,
+        Mat::White,
+    )));
+    out.push(round(
+        Vec3::new(6.5, 2.2, -11.5),
+        0.6,
+        2.0,
+        0.08,
+        Mat::Canvas(seed as u8 % 6),
+    ));
+    // A gazebo out in the garden, round and open.
+    let g = Vec3::new(-20.0, 0.0, 16.0);
+    out.push(soft(round(g, 0.3, 4.0, 4.0, Mat::Stone)));
+    for k in 0..6 {
+        let a = k as f32 / 6.0 * std::f32::consts::TAU;
+        out.push(round(
+            g + Vec3::new(a.cos() * 3.4, 0.3, a.sin() * 3.4),
+            2.8,
+            0.14,
+            0.12,
+            Mat::White,
+        ));
+    }
+    out.push(round(g + Vec3::Y * 3.1, 1.8, 4.3, 0.2, Mat::Red));
+}
+
 fn lookout(out: &mut Vec<Piece>) {
     let tall = 18.0;
     for (x, z) in [(1.0f32, 1.0f32), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
@@ -4796,6 +4992,28 @@ fn market(out: &mut Vec<Piece>, seed: u32) {
             Mat::Wood,
         )));
     }
+    // Strings of bulbs criss-crossing over the square from poles at its corners, lit
+    // after dark for the night market.
+    let corners = [
+        (-22.0f32, -13.0f32),
+        (22.0, 13.0),
+        (-22.0, 13.0),
+        (22.0, -13.0),
+    ];
+    for (x, z) in corners {
+        out.push(soft(round(Vec3::new(x, 0.0, z), 5.0, 0.1, 0.08, Mat::Wood)));
+    }
+    for pair in corners.chunks(2) {
+        let (a, b) = (
+            Vec3::new(pair[0].0, 5.0, pair[0].1),
+            Vec3::new(pair[1].0, 5.0, pair[1].1),
+        );
+        for k in 0..20 {
+            let u = (k as f32 + 0.5) / 20.0;
+            let sag = (u * std::f32::consts::PI).sin() * 1.2;
+            out.push(soft(ball(a.lerp(b, u) - Vec3::Y * sag, 0.2, Mat::Lamp)));
+        }
+    }
 }
 
 /// A hospital: a tall white block with glass bands and a red cross, lower wings either
@@ -7596,6 +7814,79 @@ pub fn pieces(kind: Kind, seed: u32, text: &str) -> Vec<Piece> {
         Kind::Port => port(&mut out, seed),
         Kind::SeaDoors => sea_doors(&mut out),
         Kind::BasaltGate => basalt_gate(&mut out, r),
+        Kind::Mansion => mansion(&mut out, seed),
+        Kind::Crag => {
+            // Anchor posts at the top, a coil of rope and a kit bag.
+            for x in [-3.0f32, 3.0] {
+                out.push(soft(round(
+                    Vec3::new(x, 0.0, 0.0),
+                    1.2,
+                    0.12,
+                    0.1,
+                    Mat::Metal,
+                )));
+            }
+            out.push(soft(round(
+                Vec3::new(0.0, 0.0, -1.5),
+                0.25,
+                0.5,
+                0.5,
+                Mat::Canvas(0),
+            )));
+            out.push(soft(bx(
+                Vec3::new(1.4, 0.0, -1.6),
+                Vec3::new(0.4, 0.5, 0.3),
+                Mat::Canvas(2),
+            )));
+        }
+        Kind::CarPark => {
+            // Tarmac, a turning space in the middle, bays either side with cars in some.
+            out.push(soft(bx(
+                Vec3::ZERO,
+                Vec3::new(16.0, 0.08, 12.0),
+                Mat::Asphalt,
+            )));
+            for side in [-1.0f32, 1.0] {
+                for k in 0..6 {
+                    let x = -12.5 + k as f32 * 5.0;
+                    out.push(soft(bx(
+                        Vec3::new(x - 2.5, 0.0, side * 8.0),
+                        Vec3::new(0.08, 0.1, 3.6),
+                        Mat::White,
+                    )));
+                    if (seed >> (k + if side > 0.0 { 6 } else { 0 })).is_multiple_of(3) {
+                        continue;
+                    }
+                    let col = Mat::Canvas(((seed >> k) + k + side as u32) as u8 % 6);
+                    out.push(bx(
+                        Vec3::new(x, 0.25, side * 8.4),
+                        Vec3::new(0.9, 0.85, 2.0),
+                        col,
+                    ));
+                    out.push(soft(bx(
+                        Vec3::new(x, 1.1, side * 8.3),
+                        Vec3::new(0.8, 0.5, 1.1),
+                        Mat::Glass,
+                    )));
+                }
+            }
+            // A sign at the entrance.
+            out.push(soft(round(
+                Vec3::new(-15.0, 0.0, 0.0),
+                2.4,
+                0.07,
+                0.07,
+                Mat::Metal,
+            )));
+            out.push(soft(bx(
+                Vec3::new(-15.0, 2.4, 0.0),
+                Vec3::new(0.1, 0.9, 0.6),
+                Mat::Canvas(1),
+            )));
+        }
+        Kind::Goats => {
+            out.push(soft(round(Vec3::ZERO, 0.6, 0.5, 0.4, Mat::Pale)));
+        }
         Kind::Station => {
             // A railway station: a long platform with a canopy, a waiting hall, a clock
             // and benches.
@@ -7659,12 +7950,18 @@ pub fn pieces(kind: Kind, seed: u32, text: &str) -> Vec<Piece> {
                 )));
             }
         }
+        Kind::Vineyard => vineyard(&mut out),
+        Kind::Orchard => orchard(&mut out),
+        Kind::Temple => temple(&mut out),
+        Kind::Shrine => shrine(&mut out),
+        Kind::LaunchPad => launch_pad(&mut out),
+        Kind::IceCream => ice_cream(&mut out),
         _ => {}
     }
     // Homely things are built at a giant's size, so they read from the air.
     let grow = match kind {
         Kind::Lemonade | Kind::Well | Kind::Laundry => 1.5,
-        Kind::Treehouse | Kind::Faces => 1.3,
+        Kind::Treehouse | Kind::Faces | Kind::Shrine | Kind::IceCream => 1.3,
         Kind::Warden => 1.4,
         _ => 1.0,
     };
@@ -7772,6 +8069,9 @@ const SEA_H: f32 = 78.0;
 /// Where its two fronts face out: to sea (+z) and into the cavern (-z).
 const SEA_FRONT: f32 = 44.0;
 const SEA_BACK: f32 = -374.0;
+
+/// How far along the Sea Doors hall its pool is.
+pub const SEA_POOL: f32 = -180.0;
 
 /// The Sea Doors: a hall of pale stone built into a sea cliff, through the rock to a
 /// cavern. Its doors open on a quay at the water (+z), tall and stepped at the top, under
@@ -8018,7 +8318,7 @@ fn sea_doors(out: &mut Vec<Piece>) {
         );
     }
     // Halfway along, a round pool and a copper wave rising from it.
-    let mid = -180.0;
+    let mid = SEA_POOL;
     out.push(round(Vec3::new(0.0, 0.0, mid), 1.2, 10.0, 10.0, Mat::Stone));
     out.push(soft(round(
         Vec3::new(0.0, 1.2, mid),
@@ -8403,4 +8703,472 @@ pub fn extent(pieces: &[Piece]) -> Vec3 {
         e.y = e.y.max(at.y + top);
     }
     e
+}
+
+/// A string of little flags from `a` to `b`, sagging in the middle, each a bright color.
+fn flag_line(out: &mut Vec<Piece>, a: Vec3, b: Vec3, n: u32) {
+    let d = b - a;
+    let yaw = (-d.z).atan2(d.x);
+    let dip = d.length() * 0.06;
+    for k in 0..n {
+        let u = (k as f32 + 0.5) / n as f32;
+        let sag = (u * std::f32::consts::PI).sin() * dip;
+        let at = a.lerp(b, u) - Vec3::Y * (sag + 0.9);
+        out.push(soft(turned(
+            at,
+            Vec3::new(0.45, 0.8, 0.04),
+            yaw,
+            Mat::Canvas(k as u8),
+        )));
+    }
+    let mid = a.lerp(b, 0.5) - Vec3::Y * dip;
+    for (p, q) in [(a, mid), (mid, b)] {
+        let e = q - p;
+        out.push(soft(turned(
+            p.lerp(q, 0.5) - Vec3::Y * 0.03,
+            Vec3::new(e.length() * 0.5, 0.06, 0.03),
+            (-e.z).atan2(e.x),
+            Mat::Dark,
+        )));
+    }
+}
+
+/// A vineyard on a gentle slope: rows of vines on wires, hung with purple grapes, and a
+/// little stone winery with its barrels and press at the end of the rows.
+fn vineyard(out: &mut Vec<Piece>) {
+    for r in 0..11 {
+        let z = -40.0 + r as f32 * 8.0;
+        out.push(soft(bx(
+            Vec3::new(0.0, 0.0, z),
+            Vec3::new(45.0, 0.06, 1.4),
+            Mat::Dark,
+        )));
+        out.push(soft(bx(
+            Vec3::new(0.0, 0.5, z),
+            Vec3::new(44.0, 1.3, 0.6),
+            Mat::Leaf,
+        )));
+        for k in 0..12 {
+            let x = -44.0 + k as f32 * 8.0;
+            out.push(soft(round(Vec3::new(x, 0.0, z), 2.0, 0.1, 0.1, Mat::Wood)));
+            let side = if (k + r) % 2 == 0 { 0.7 } else { -0.7 };
+            out.push(soft(ball(
+                Vec3::new(x + 4.0, 1.0, z + side),
+                0.4,
+                Mat::Grape,
+            )));
+        }
+    }
+    // The winery, its door to the rows, barrels stood outside and the old press.
+    out.push(Piece {
+        form: Form::Box {
+            at: Vec3::new(-62.0, 0.0, 0.0),
+            half: Vec3::new(9.0, 6.0, 12.0),
+            yaw: 0.0,
+            roof: 4.0,
+        },
+        mat: Mat::Stone,
+        solid: true,
+    });
+    out.push(soft(bx(
+        Vec3::new(-52.95, 0.0, 0.0),
+        Vec3::new(0.1, 3.6, 2.2),
+        Mat::Wood,
+    )));
+    for k in 0..6 {
+        let at = Vec3::new(-50.5, 0.0, -9.0 + k as f32 * 1.9);
+        out.push(round(at, 1.7, 0.75, 0.8, Mat::Wood));
+    }
+    out.push(round(Vec3::new(-50.0, 0.0, 8.0), 1.4, 1.8, 1.8, Mat::Wood));
+    out.push(soft(round(
+        Vec3::new(-50.0, 1.4, 8.0),
+        1.8,
+        0.2,
+        0.2,
+        Mat::Metal,
+    )));
+    // Crates of picked grapes waiting at the ends of the rows.
+    for r in [1, 4, 7, 9] {
+        let at = Vec3::new(-47.0, 0.0, -40.0 + r as f32 * 8.0 + 3.0);
+        out.push(soft(bx(at, Vec3::new(0.7, 0.6, 0.5), Mat::Wood)));
+        out.push(soft(ball(at + Vec3::Y * 0.7, 0.45, Mat::Grape)));
+    }
+    fence(
+        out,
+        &[
+            Vec2::new(-74.0, -46.0),
+            Vec2::new(50.0, -46.0),
+            Vec2::new(50.0, 46.0),
+            Vec2::new(-74.0, 46.0),
+        ],
+        8.0,
+        Mat::Wood,
+    );
+}
+
+/// An apple orchard: fruit trees in neat rows, ladders up some, crates of apples.
+fn orchard(out: &mut Vec<Piece>) {
+    for i in 0..6 {
+        for j in 0..5 {
+            let at = Vec3::new(-30.0 + i as f32 * 12.0, 0.0, -24.0 + j as f32 * 12.0);
+            out.push(round(at, 2.4, 0.4, 0.3, Mat::Wood));
+            out.push(ball(at + Vec3::Y * 4.0, 2.8, Mat::Leaf));
+            let s = (i * 5 + j) as f32;
+            for k in 0..4 {
+                let a = s * 1.3 + k as f32 * 1.6;
+                let up = 3.6 + (k % 2) as f32 * 1.2;
+                let off = Vec3::new(a.cos() * 2.5, up, a.sin() * 2.5);
+                out.push(soft(ball(at + off, 0.35, Mat::Red)));
+            }
+            if (i + j) % 4 == 1 {
+                out.push(soft(turned(
+                    at + Vec3::new(1.8, 0.0, 0.0),
+                    Vec3::new(0.25, 3.6, 0.5),
+                    0.35,
+                    Mat::Wood,
+                )));
+            }
+        }
+    }
+    for k in 0..5 {
+        let at = Vec3::new(-38.0, 0.0, -18.0 + k as f32 * 8.0);
+        out.push(soft(bx(at, Vec3::new(0.8, 0.7, 0.6), Mat::Wood)));
+        for d in [-0.35f32, 0.35] {
+            out.push(soft(ball(at + Vec3::new(d, 0.8, 0.0), 0.3, Mat::Red)));
+        }
+    }
+    fence(
+        out,
+        &[
+            Vec2::new(-42.0, -32.0),
+            Vec2::new(36.0, -32.0),
+            Vec2::new(36.0, 32.0),
+            Vec2::new(-42.0, 32.0),
+        ],
+        8.0,
+        Mat::Wood,
+    );
+}
+
+/// A hilltop temple: a five tiered pagoda on a stone terrace, a red gate before it,
+/// stone lanterns along the way up, a bell, and prayer flags strung out to tall poles.
+fn temple(out: &mut Vec<Piece>) {
+    out.push(bx(Vec3::ZERO, Vec3::new(17.0, 1.5, 17.0), Mat::Stone));
+    out.push(bx(
+        Vec3::new(0.0, 0.0, 18.5),
+        Vec3::new(5.0, 0.75, 2.0),
+        Mat::Stone,
+    ));
+    let mut y = 1.5;
+    for i in 0..5 {
+        let w = 7.0 - i as f32 * 1.1;
+        out.push(bx(Vec3::new(0.0, y, 0.0), Vec3::new(w, 3.4, w), Mat::Red));
+        out.push(soft(bx(
+            Vec3::new(0.0, y + 0.4, w + 0.02),
+            Vec3::new(w * 0.45, 2.2, 0.05),
+            Mat::Lamp,
+        )));
+        y += 3.4;
+        out.push(round(
+            Vec3::new(0.0, y, 0.0),
+            1.6,
+            w + 3.2,
+            w * 0.7,
+            Mat::Copper,
+        ));
+        y += 1.6;
+    }
+    out.push(round(Vec3::new(0.0, y, 0.0), 7.0, 0.35, 0.12, Mat::Metal));
+    for k in 0..3 {
+        out.push(soft(ball(
+            Vec3::new(0.0, y + 1.5 + k as f32 * 1.8, 0.0),
+            0.6,
+            Mat::Lamp,
+        )));
+    }
+    // The gate.
+    for x in [-5.0f32, 5.0] {
+        out.push(round(Vec3::new(x, 0.0, 34.0), 9.0, 0.6, 0.5, Mat::Red));
+    }
+    out.push(bx(
+        Vec3::new(0.0, 9.0, 34.0),
+        Vec3::new(7.5, 0.8, 0.7),
+        Mat::Dark,
+    ));
+    out.push(soft(bx(
+        Vec3::new(0.0, 7.2, 34.0),
+        Vec3::new(5.6, 0.45, 0.4),
+        Mat::Red,
+    )));
+    // Stone lanterns up the path, lit at night.
+    for z in [22.0f32, 28.0] {
+        for x in [-4.0f32, 4.0] {
+            out.push(round(Vec3::new(x, 0.0, z), 1.6, 0.45, 0.35, Mat::Stone));
+            out.push(soft(ball(Vec3::new(x, 1.9, z), 0.4, Mat::Lamp)));
+            out.push(soft(round(Vec3::new(x, 2.2, z), 0.5, 0.8, 0.1, Mat::Stone)));
+        }
+    }
+    // The bell under its little roof.
+    let bell = Vec3::new(-12.0, 1.5, 12.0);
+    for (x, z) in [(-1.6f32, -1.6f32), (1.6, -1.6), (-1.6, 1.6), (1.6, 1.6)] {
+        out.push(soft(round(
+            bell + Vec3::new(x, 0.0, z),
+            4.0,
+            0.2,
+            0.2,
+            Mat::Wood,
+        )));
+    }
+    out.push(round(bell + Vec3::Y * 4.0, 1.2, 3.0, 0.4, Mat::Copper));
+    out.push(soft(round(
+        bell + Vec3::Y * 1.6,
+        1.8,
+        1.0,
+        0.5,
+        Mat::Copper,
+    )));
+    // Prayer flags from the spire out to four tall poles round the terrace.
+    let top = Vec3::new(0.0, y + 4.0, 0.0);
+    for (x, z) in [
+        (-30.0f32, -30.0f32),
+        (30.0, -30.0),
+        (-30.0, 30.0),
+        (30.0, 30.0),
+    ] {
+        let foot = Vec3::new(x, 0.0, z);
+        out.push(soft(round(foot, 12.0, 0.2, 0.15, Mat::Wood)));
+        flag_line(out, top, foot + Vec3::Y * 12.0, 16);
+    }
+    flag_line(
+        out,
+        Vec3::new(-5.0, 9.6, 34.0),
+        Vec3::new(-30.0, 12.0, 30.0),
+        10,
+    );
+    flag_line(
+        out,
+        Vec3::new(5.0, 9.6, 34.0),
+        Vec3::new(30.0, 12.0, 30.0),
+        10,
+    );
+}
+
+/// A little roadside shrine: a roofed box on a post with a lamp inside, flowers and
+/// offerings at its foot.
+fn shrine(out: &mut Vec<Piece>) {
+    out.push(round(Vec3::ZERO, 0.4, 1.2, 1.1, Mat::Stone));
+    out.push(round(Vec3::Y * 0.4, 1.4, 0.18, 0.18, Mat::Wood));
+    out.push(Piece {
+        form: Form::Box {
+            at: Vec3::Y * 1.8,
+            half: Vec3::new(0.6, 0.9, 0.5),
+            yaw: 0.0,
+            roof: 0.6,
+        },
+        mat: Mat::Red,
+        solid: true,
+    });
+    out.push(soft(bx(
+        Vec3::new(0.0, 2.0, 0.51),
+        Vec3::new(0.35, 0.5, 0.03),
+        Mat::Lamp,
+    )));
+    for k in 0..5 {
+        let a = k as f32 * 1.25;
+        out.push(soft(ball(
+            Vec3::new(a.cos() * 0.9, 0.5, a.sin() * 0.9 + 0.3),
+            0.16,
+            Mat::Canvas(k as u8),
+        )));
+    }
+    out.push(soft(bx(
+        Vec3::new(0.5, 0.4, 0.7),
+        Vec3::new(0.15, 0.15, 0.15),
+        Mat::Hay,
+    )));
+}
+
+/// Where a launch pad's rocket stands in its frame, its full height, and its body's
+/// radius.
+pub const ROCKET_BASE: Vec3 = Vec3::new(0.0, 1.0, 0.0);
+pub const ROCKET_HEIGHT: f32 = 105.0;
+pub const ROCKET_R: f32 = 5.0;
+
+/// A launch site far from anyone: a great rocket upright on its pad, the service tower
+/// beside it with its arms reaching across, lightning masts, fuel tanks, the blockhouse
+/// at a safe distance and a fence round it all.
+fn launch_pad(out: &mut Vec<Piece>) {
+    out.push(bx(Vec3::ZERO, Vec3::new(36.0, 1.0, 36.0), Mat::Concrete));
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.0, -23.5),
+        Vec3::new(5.0, 1.02, 11.5),
+        Mat::Dark,
+    )));
+    // The rocket: two white stages banded in black, a payload fairing and a red nose.
+    let base = ROCKET_BASE;
+    for (x, z) in [(1.6f32, 0.0f32), (-0.8, 1.4), (-0.8, -1.4)] {
+        out.push(soft(round(
+            base + Vec3::new(x, 0.0, z),
+            3.0,
+            1.2,
+            0.7,
+            Mat::Dark,
+        )));
+    }
+    out.push(round(
+        base + Vec3::Y * 3.0,
+        52.0,
+        ROCKET_R,
+        ROCKET_R,
+        Mat::White,
+    ));
+    for y in [18.0f32, 40.0] {
+        out.push(soft(round(
+            base + Vec3::Y * y,
+            2.0,
+            ROCKET_R + 0.05,
+            ROCKET_R + 0.05,
+            Mat::Dark,
+        )));
+    }
+    out.push(round(base + Vec3::Y * 55.0, 3.0, ROCKET_R, 4.2, Mat::Dark));
+    out.push(round(base + Vec3::Y * 58.0, 28.0, 4.2, 4.2, Mat::White));
+    out.push(round(base + Vec3::Y * 86.0, 10.0, 4.6, 4.6, Mat::White));
+    out.push(round(base + Vec3::Y * 96.0, 9.0, 4.6, 0.3, Mat::Red));
+    for k in 0..4 {
+        let a = k as f32 * std::f32::consts::FRAC_PI_2;
+        out.push(turned(
+            base + Vec3::new(a.cos() * 6.2, 3.0, a.sin() * 6.2),
+            Vec3::new(2.0, 9.0, 0.25),
+            -a,
+            Mat::Red,
+        ));
+    }
+    // The service tower, with arms across to the rocket.
+    let tower = Vec3::new(16.0, 1.0, 0.0);
+    for (x, z) in [(-3.0f32, -3.0f32), (3.0, -3.0), (-3.0, 3.0), (3.0, 3.0)] {
+        out.push(bx(
+            tower + Vec3::new(x, 0.0, z),
+            Vec3::new(0.5, 104.0, 0.5),
+            Mat::Red,
+        ));
+    }
+    for k in 0..13 {
+        let y = 6.0 + k as f32 * 8.0;
+        out.push(bx(
+            tower + Vec3::Y * y,
+            Vec3::new(3.5, 0.4, 3.5),
+            Mat::Metal,
+        ));
+    }
+    for y in [60.0f32, 88.0] {
+        out.push(bx(
+            Vec3::new(8.0, 1.0 + y, 0.0),
+            Vec3::new(5.0, 0.8, 1.2),
+            Mat::Metal,
+        ));
+    }
+    // Lightning masts at the corners, fuel tanks off to one side.
+    for (x, z) in [
+        (-34.0f32, -34.0f32),
+        (34.0, -34.0),
+        (-34.0, 34.0),
+        (34.0, 34.0),
+    ] {
+        out.push(round(Vec3::new(x, 1.0, z), 120.0, 0.6, 0.3, Mat::Metal));
+        out.push(soft(ball(Vec3::new(x, 121.0, z), 0.7, Mat::Red)));
+    }
+    for (k, z) in [-12.0f32, 4.0, 20.0].into_iter().enumerate() {
+        let r = if k == 1 { 7.0 } else { 5.5 };
+        out.push(ball(Vec3::new(-56.0, r, z), r, Mat::White));
+    }
+    // The blockhouse, low and thick, windows toward the pad.
+    out.push(bx(
+        Vec3::new(0.0, 0.0, 95.0),
+        Vec3::new(16.0, 6.0, 9.0),
+        Mat::Concrete,
+    ));
+    out.push(soft(bx(
+        Vec3::new(0.0, 3.0, 85.95),
+        Vec3::new(12.0, 1.4, 0.1),
+        Mat::Glass,
+    )));
+    out.push(soft(round(
+        Vec3::new(10.0, 6.0, 95.0),
+        10.0,
+        0.15,
+        0.1,
+        Mat::Metal,
+    )));
+    out.push(soft(ball(Vec3::new(10.0, 16.0, 95.0), 1.6, Mat::White)));
+    // A road out to the pad.
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.0, 62.0),
+        Vec3::new(3.5, 0.06, 26.0),
+        Mat::Asphalt,
+    )));
+    fence(
+        out,
+        &[
+            Vec2::new(-72.0, -50.0),
+            Vec2::new(50.0, -50.0),
+            Vec2::new(50.0, 110.0),
+            Vec2::new(-72.0, 110.0),
+        ],
+        10.0,
+        Mat::Metal,
+    );
+}
+
+/// An ice cream van parked up, its hatch open, a giant cone on its roof, with a table
+/// and parasol beside it. Its customers queue at +z.
+fn ice_cream(out: &mut Vec<Piece>) {
+    out.push(bx(Vec3::Y * 0.5, Vec3::new(2.8, 2.6, 1.3), Mat::White));
+    out.push(soft(bx(
+        Vec3::new(0.0, 0.9, 0.0),
+        Vec3::new(2.82, 0.35, 1.32),
+        Mat::Canvas(4),
+    )));
+    out.push(soft(bx(
+        Vec3::new(2.82, 1.8, 0.0),
+        Vec3::new(0.04, 0.8, 1.1),
+        Mat::Glass,
+    )));
+    out.push(soft(bx(
+        Vec3::new(-0.4, 1.7, 1.32),
+        Vec3::new(1.4, 0.9, 0.04),
+        Mat::Dark,
+    )));
+    out.push(soft(bx(
+        Vec3::new(-0.4, 2.65, 1.7),
+        Vec3::new(1.6, 0.06, 0.5),
+        Mat::Canvas(4),
+    )));
+    for (x, z) in [(1.8f32, 1.3f32), (-1.8, 1.3), (1.8, -1.3), (-1.8, -1.3)] {
+        out.push(soft(bx(
+            Vec3::new(x, 0.0, z),
+            Vec3::new(0.45, 0.9, 0.12),
+            Mat::Dark,
+        )));
+    }
+    out.push(soft(round(
+        Vec3::new(-0.6, 3.1, 0.0),
+        1.8,
+        0.12,
+        0.75,
+        Mat::Hay,
+    )));
+    out.push(soft(ball(Vec3::new(-0.6, 5.0, 0.0), 0.75, Mat::Canvas(4))));
+    out.push(soft(ball(Vec3::new(-0.6, 5.7, 0.0), 0.3, Mat::Red)));
+    let t = Vec3::new(-1.0, 0.0, 5.0);
+    out.push(soft(round(t, 0.8, 0.12, 0.12, Mat::White)));
+    out.push(soft(round(t + Vec3::Y * 0.8, 0.08, 0.7, 0.7, Mat::White)));
+    out.push(soft(round(t, 2.4, 0.05, 0.05, Mat::Metal)));
+    out.push(soft(round(
+        t + Vec3::Y * 2.2,
+        0.5,
+        1.5,
+        0.1,
+        Mat::Canvas(2),
+    )));
 }
