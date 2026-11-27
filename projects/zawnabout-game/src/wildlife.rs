@@ -59,6 +59,17 @@ const WINGS: [Vec3; 5] = [
 ];
 
 impl Wildlife {
+    /// Whether a drawn mesh is someone out in a boat, who can be talked to.
+    pub fn paddler(&self, m: MeshId) -> Option<&'static str> {
+        if m == self.kayak {
+            Some("Kayaker")
+        } else if m == self.rowboat {
+            Some("Rower")
+        } else {
+            None
+        }
+    }
+
     pub fn new(renderer: &mut Renderer, world: &World) -> Self {
         let terrain = &world.terrain;
         let def = terrain.def;

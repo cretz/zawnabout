@@ -203,6 +203,12 @@ mod web {
             };
         }
 
+        /// How much of the bottom the touch controls take up, in HUD pixels. The guide's
+        /// arrow and name stay above them.
+        pub fn set_bottom_clear(&mut self, bottom: f32) {
+            self.game.hud.bottom = bottom;
+        }
+
         /// Which build this is, shown small on the journal's help page.
         pub fn set_build(&mut self, text: &str) {
             self.game.hud.book.build = text.to_string();
@@ -472,6 +478,16 @@ mod web {
                 let d = self.game.player_dragon();
                 vec![d.pos.x, d.pos.z, d.heading]
             }
+        }
+
+        /// Whether Show me asked for the map since last asked: the page opens its atlas.
+        pub fn take_map_wanted(&mut self) -> bool {
+            std::mem::take(&mut self.game.map_wanted)
+        }
+
+        /// Where the red arrow points, for the maps: x and z, or nothing.
+        pub fn goal_marker(&self) -> Vec<f32> {
+            self.game.goal_spot.map_or(vec![], |p| vec![p.x, p.z])
         }
 
         /// The keys, one action a line: `flap Space KeyV`.

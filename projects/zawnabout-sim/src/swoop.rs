@@ -51,8 +51,52 @@ fn bezier(p: &[Vec3; 4], t: f32) -> Vec3 {
 }
 
 impl Swoop {
-    /// Plans a flight from `pos` (body center, moving at `vel`) to feet at `target`.
-    pub fn plan(world: &World, pos: Vec3, vel: Vec3, target: Vec3, stand_height: f32) -> Self {
+    /// Plans a flight from `pos` (body center, moving at `vel`) to feet at `target`. A
+    /// flight that would pass through rock, such as from one cave to another, stops short
+    /// of the rock instead, on the ground where its way is still clear. None when no clear
+    /// way is found.
+    pub fn plan(
+        world: &World,
+        pos: Vec3,
+        vel: Vec3,
+        target: Vec3,
+        stand_height: f32,
+    ) -> Option<Self> {
+        let mut s = Self::plan_once(world, pos, vel, target, stand_height);
+        // Out in the open the arc clears everything itself. Only a flight into or out
+        // of a cave can find rock in its way.
+        let covered = |p: Vec3| (1..=60).any(|k| world.solid_at(p + Vec3::Y * (k as f32 * 5.0)));
+        if s.carrier.is_some() || !(covered(pos) || covered(target + Vec3::Y * 2.0)) {
+            return Some(s);
+        }
+        for _ in 0..4 {
+            let Some(t) = s.through_rock(world) else {
+                return Some(s);
+            };
+            let back = bezier(&s.points, (t - 0.08).max(0.0));
+            if back.distance(pos) < 10.0 {
+                return None;
+            }
+            let ground = world.support(back.x, back.z, back.y);
+            s = Self::plan_once(
+                world,
+                pos,
+                vel,
+                Vec3::new(back.x, ground, back.z),
+                stand_height,
+            );
+        }
+        s.through_rock(world).is_none().then_some(s)
+    }
+
+    /// The first point along the flight, as a fraction, where the body is deep in rock.
+    fn through_rock(&self, world: &World) -> Option<f32> {
+        (2..SAMPLES - 1)
+            .map(|i| i as f32 / SAMPLES as f32)
+            .find(|t| world.terrain.sdf(bezier(&self.points, *t)) < -1.0)
+    }
+
+    fn plan_once(world: &World, pos: Vec3, vel: Vec3, target: Vec3, stand_height: f32) -> Self {
         let carrier = world.carrier(target.x, target.z, target.y);
         let wall = carrier
             .is_none()
@@ -70,7 +114,10 @@ impl Swoop {
         // a hill has the hill above it, and that is to be cleared.
         let mut top = pos.y.max(end.y);
         let mut roof = f32::MAX;
-        let reach_up = top + 60.0;
+        // Out in the open at both ends, a mountain of any height is in the way.
+        let covered = |p: Vec3| (1..=60).any(|k| world.solid_at(p + Vec3::Y * (k as f32 * 5.0)));
+        let open = !covered(pos) && !covered(end);
+        let reach_up = if open { 1.0e4 } else { top + 60.0 };
         for i in 0..=24 {
             let p = pos.lerp(end, i as f32 / 24.0);
             top = top.max(world.support(p.x, p.z, reach_up) + stand_height);
@@ -118,19 +165,34 @@ impl Swoop {
                 if !world.solid_at(feet) {
                     continue;
                 }
-                let Some(k) =
-                    (1..=100).find(|k| !world.solid_at(feet + Vec3::Y * (*k as f32 * 4.0)))
-                else {
-                    continue;
-                };
+                // Deep inside a mountain, out over its top.
+                let up =
+                    match (1..=100).find(|k| !world.solid_at(feet + Vec3::Y * (*k as f32 * 4.0))) {
+                        Some(k) => k as f32 * 4.0,
+                        None if open => world.support(feet.x, feet.z, 1.0e4) - feet.y,
+                        None => continue,
+                    };
                 // Raising both middle points by `d` raises the curve by 3t(1-t)d here.
-                lift = lift.max((k as f32 * 4.0 + 4.0) / (3.0 * t * (1.0 - t)));
+                lift = lift.max((up + 4.0) / (3.0 * t * (1.0 - t)));
             }
             if lift <= 0.0 {
                 break;
             }
             p1.y = (p1.y + lift).min(ceiling.max(p1.y));
             p2.y = (p2.y + lift).min(ceiling.max(p2.y));
+        }
+
+        // In a cave, at either end, an arc up would go into the roof and on through the
+        // hill. Where the straight way is clear, fly it, dropping onto the spot at the end.
+        let straight = (1..48).all(|i| {
+            world
+                .terrain
+                .sdf(pos.lerp(end + Vec3::Y * 3.0, i as f32 / 48.0))
+                > 2.5
+        });
+        if wall.is_none() && carrier.is_none() && straight && !open {
+            p1 = pos.lerp(end, 0.33) + Vec3::Y * 3.0;
+            p2 = pos.lerp(end, 0.75) + Vec3::Y * 4.0;
         }
 
         let mut s = Self {
@@ -176,10 +238,10 @@ impl Swoop {
     }
 
     /// Advances one tick. Returns the new body center, velocity and whether it arrived.
-    pub fn step(&mut self, dt: f32, top_speed: f32) -> (Vec3, Vec3, bool) {
+    pub fn step(&mut self, dt: f32, top_speed: f32, rush: f32) -> (Vec3, Vec3, bool) {
         let left = self.length() - self.travelled;
         // Short hops stay gentle, long trips go all out, and very long ones rush.
-        let top = top_speed.max((self.length() * 0.06).min(320.0));
+        let top = top_speed.max((self.length() * rush).min(320.0));
         // At least 18 m/s, unless the top speed itself is lower.
         let cruise = (self.length() * 0.18).max(18.0).min(top);
         // Rush in, then brake hard enough to touch down gently.
@@ -247,7 +309,7 @@ mod tests {
             world.solid_at(Vec3::new(x, 200.0, z)),
             "the needle stands midway"
         );
-        let s = Swoop::plan(&world, from, Vec3::ZERO, to, stand);
+        let s = Swoop::plan(&world, from, Vec3::ZERO, to, stand).expect("a clear way");
         for i in 1..SAMPLES {
             let p = bezier(&s.points, i as f32 / SAMPLES as f32);
             assert!(!world.solid_at(p), "flies through rock at {p}");

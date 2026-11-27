@@ -1108,6 +1108,17 @@ fn beacon() -> MeshBuilder {
     use zawnabout_sim::cave::{BEACON_POST, BEACON_RIM, BEACON_TOP};
     let mut m = MeshBuilder::new();
     let stone = OLD_STONE[0];
+    // A rubble footing reaching down into the ground, so on a sharp peak, where the
+    // drawn ground lies lower than the real one, the beacon never floats.
+    m.frustum(
+        6,
+        -6.0,
+        1.6,
+        0.0,
+        1.25,
+        stone.mix(Rgb(0x000000), 0.25),
+        stone.mix(Rgb(0x000000), 0.1),
+    );
     m.frustum(
         6,
         0.0,
@@ -1282,6 +1293,46 @@ pub fn water_skis() -> MeshBuilder {
     m
 }
 
+/// A mountain goat: a sheep's shape in tan and white, with little curved horns.
+pub fn goat() -> MeshBuilder {
+    let mut m = sheep();
+    m.recolor(Rgb(0xF3F0E6), Rgb(0xD9C7A8));
+    for x in [-0.1f32, 0.1] {
+        m.cube(
+            Vec3::new(x, 1.1, 0.7),
+            Vec3::new(0.035, 0.1, 0.035),
+            Rgb(0x6B5A48),
+        );
+        m.cube(
+            Vec3::new(x, 1.19, 0.62),
+            Vec3::new(0.035, 0.035, 0.08),
+            Rgb(0x6B5A48),
+        );
+    }
+    m
+}
+
+/// A surfboard, 2.2 m long along z, its deck at 0.06.
+pub fn surfboard() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    m.cube(
+        Vec3::new(0.0, 0.03, 0.0),
+        Vec3::new(0.26, 0.03, 0.95),
+        Rgb(0xF6F1E7),
+    );
+    m.cube(
+        Vec3::new(0.0, 0.03, 1.02),
+        Vec3::new(0.16, 0.03, 0.1),
+        Rgb(0xF6F1E7),
+    );
+    m.cube(
+        Vec3::new(0.0, 0.065, 0.0),
+        Vec3::new(0.05, 0.005, 0.9),
+        Rgb(0xE0564A),
+    );
+    m
+}
+
 /// A parasail canopy, about 9 m across, arched over the origin where its lines meet, its
 /// span along x and the open front toward +z. Striped in bright panels.
 pub fn parasail() -> MeshBuilder {
@@ -1351,6 +1402,49 @@ pub fn gull() -> MeshBuilder {
         Vec3::new(0.0, 0.0, 0.42),
         Vec3::new(0.0, -0.05, 0.25),
         Rgb(0xF2B33D),
+    );
+    m
+}
+
+/// A gull sitting with its wings folded, beak toward +z, on the ground at the origin.
+pub fn gull_sitting() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (white, grey) = (Rgb(0xF4F4F0), Rgb(0xA8AEB6));
+    m.blob(
+        Vec3::new(0.0, 0.16, 0.0),
+        Vec3::new(0.13, 0.13, 0.24),
+        false,
+        0.03,
+        61,
+        white,
+    );
+    m.blob(
+        Vec3::new(0.0, 0.22, -0.06),
+        Vec3::new(0.14, 0.08, 0.24),
+        false,
+        0.02,
+        62,
+        grey,
+    );
+    m.blob(
+        Vec3::new(0.0, 0.34, 0.17),
+        Vec3::new(0.08, 0.08, 0.09),
+        false,
+        0.02,
+        63,
+        white,
+    );
+    m.tri(
+        Vec3::new(-0.025, 0.33, 0.24),
+        Vec3::new(0.025, 0.33, 0.24),
+        Vec3::new(0.0, 0.31, 0.34),
+        Rgb(0xF2B33D),
+    );
+    m.thin_tri(
+        Vec3::new(-0.06, 0.2, -0.25),
+        Vec3::new(0.06, 0.2, -0.25),
+        Vec3::new(0.0, 0.17, -0.4),
+        Rgb(0x2E3238),
     );
     m
 }
@@ -3926,4 +4020,158 @@ fn from_hsv(h: f32, s: f32, v: f32) -> [u8; 3] {
     };
     let m = v - c;
     [r, g, b].map(|k| ((k + m) * 255.0).round().clamp(0.0, 255.0) as u8)
+}
+
+/// The giant salamander of the ember hall, curled round on itself: a ring of body, ember
+/// spots along its back, four stubby legs and a tail tip. Its head is apart, so it can
+/// look about. The ring centers on the origin, the neck at +x.
+pub fn salamander_body() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (skin, belly, spot) = (Rgb(0x8A4A36), Rgb(0xC4703E), Rgb(0xFFA040));
+    let n = 22;
+    for i in 0..n {
+        let u = i as f32 / (n - 1) as f32;
+        let a = u * 5.0;
+        let r = 2.3 - u * 1.7;
+        let c = Vec3::new(a.cos() * 8.0, r * 0.75, a.sin() * 8.0);
+        m.blob(
+            c,
+            Vec3::new(r * 1.15, r * 0.75, r * 1.15),
+            false,
+            0.06,
+            40 + i,
+            skin,
+        );
+        m.blob(
+            c - Vec3::Y * r * 0.35,
+            Vec3::new(r, r * 0.4, r),
+            false,
+            0.03,
+            60 + i,
+            belly,
+        );
+        if i % 3 == 0 && i < n - 2 {
+            m.blob(
+                c + Vec3::Y * r * 0.72,
+                Vec3::new(r * 0.3, r * 0.12, r * 0.3),
+                false,
+                0.0,
+                80 + i,
+                spot,
+            );
+        }
+    }
+    // Stubby legs, two at the shoulders and two at the hips, splayed out.
+    for a in [0.4f32, 0.9, 3.0, 3.5] {
+        let out = Vec3::new(a.cos(), 0.0, a.sin());
+        let r = if a < 2.0 { 0.9 } else { 0.7 };
+        let side = if a < 0.6 || (2.0..3.2).contains(&a) {
+            9.7
+        } else {
+            6.4
+        };
+        m.blob(
+            out * side + Vec3::Y * 0.4,
+            Vec3::new(r, 0.5, r),
+            false,
+            0.05,
+            (a * 10.0) as u32,
+            skin,
+        );
+    }
+    m
+}
+
+/// The salamander's head, looking along +z: broad and flat with a wide smile, two amber
+/// eyes on top and a pair of glowing nostrils.
+pub fn salamander_head() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let (skin, eye) = (Rgb(0x8A4A36), Rgb(0xFFC23A));
+    m.blob(
+        Vec3::new(0.0, 0.0, 1.4),
+        Vec3::new(2.0, 1.0, 2.4),
+        false,
+        0.05,
+        7,
+        skin,
+    );
+    m.blob(
+        Vec3::new(0.0, -0.35, 1.6),
+        Vec3::new(1.8, 0.45, 2.2),
+        false,
+        0.02,
+        8,
+        Rgb(0xC4703E),
+    );
+    for x in [-1.0f32, 1.0] {
+        m.blob(
+            Vec3::new(x * 1.05, 0.85, 1.7),
+            Vec3::new(0.42, 0.42, 0.42),
+            false,
+            0.0,
+            9,
+            skin,
+        );
+        m.blob(
+            Vec3::new(x * 1.12, 0.98, 1.95),
+            Vec3::new(0.24, 0.24, 0.2),
+            false,
+            0.0,
+            10,
+            eye,
+        );
+        m.blob(
+            Vec3::new(x * 0.45, 0.35, 3.7),
+            Vec3::new(0.14, 0.1, 0.1),
+            false,
+            0.0,
+            11,
+            Rgb(0xFF6A1A),
+        );
+    }
+    m
+}
+
+/// A scrap of confetti, white to be tinted.
+pub fn confetti() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let v = Vec3::new;
+    let c = Rgb(0xFFFFFF);
+    m.thin_tri(
+        v(-0.2, 0.0, -0.13),
+        v(0.2, 0.0, -0.13),
+        v(0.2, 0.0, 0.13),
+        c,
+    );
+    m.thin_tri(
+        v(-0.2, 0.0, -0.13),
+        v(0.2, 0.0, 0.13),
+        v(-0.2, 0.0, 0.13),
+        c,
+    );
+    m
+}
+
+/// A little acoustic guitar, its neck along +y.
+pub fn guitar() -> MeshBuilder {
+    let mut m = MeshBuilder::new();
+    let wood = Rgb(0xC98A4B);
+    m.cube(Vec3::new(0.0, -0.12, 0.0), Vec3::new(0.2, 0.2, 0.06), wood);
+    m.cube(Vec3::new(0.0, 0.14, 0.0), Vec3::new(0.15, 0.1, 0.06), wood);
+    m.cube(
+        Vec3::new(0.0, -0.05, 0.061),
+        Vec3::new(0.06, 0.06, 0.005),
+        Rgb(0x3A2A1E),
+    );
+    m.cube(
+        Vec3::new(0.0, 0.5, 0.0),
+        Vec3::new(0.035, 0.28, 0.03),
+        Rgb(0x6E4A33),
+    );
+    m.cube(
+        Vec3::new(0.0, 0.82, 0.0),
+        Vec3::new(0.05, 0.06, 0.03),
+        Rgb(0x3A2A1E),
+    );
+    m
 }

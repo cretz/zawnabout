@@ -95,3 +95,35 @@ export function setupTouch(app: App, onTap: (x: number, y: number) => void) {
     button.addEventListener("pointercancel", () => set(false));
   }
 }
+
+/** Gamepad buttons for each screen button, as the game binds them. */
+const PAD_BUTTONS: Record<string, number[]> = {
+  flap: [0],
+  brake: [1, 3, 4, 6],
+  breath: [2],
+  tuck: [5, 7],
+};
+
+/** Shows a gamepad on the screen controls: the knob follows the left stick and a held
+ *  button lights its screen button, so the two always agree. A thumb on the screen
+ *  stick wins. */
+export function mirrorPad(axes: ArrayLike<number>, buttons: ArrayLike<number>) {
+  const root = document.getElementById("touch");
+  if (!root || root.classList.contains("hidden")) return;
+  const knob = document.getElementById("stick-knob");
+  const base = document.getElementById("stick-base");
+  if (knob && base && !base.style.left) {
+    let x = axes[0] ?? 0;
+    let y = axes[1] ?? 0;
+    const len = Math.hypot(x, y);
+    if (len > 1) {
+      x /= len;
+      y /= len;
+    }
+    knob.style.transform = len > 0.1 ? `translate(${x * RADIUS}px, ${y * RADIUS}px)` : "";
+  }
+  for (const button of root.querySelectorAll<HTMLButtonElement>("[data-action]")) {
+    const held = (PAD_BUTTONS[button.dataset.action!] ?? []).some((b) => (buttons[b] ?? 0) > 0.5);
+    button.classList.toggle("pad-down", held);
+  }
+}

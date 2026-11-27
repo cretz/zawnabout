@@ -1,7 +1,7 @@
 # Gameplay: walk up to Fen by the start beacon, take on the favor, light the beacon, and
 # come back for thanks. Then chat with a townsperson in Kettle Harbor.
 cards keep
-land-at -1951 1157
+land-at -1945 1137
 wait-until landed 20
 wait 0.5
 expect can-talk

@@ -82,6 +82,9 @@ lake sky-pool level=262 {
     p -1350 -120
 }
 dugout pool-nook x=-1250 y=275 z=-370 facing=north r=20
+landmark chalk-moon kind=chalkmoon x=-1399 z=-472 rot=-21 {
+    note "A great white crescent cut into the turf on Moon Hill's south face, seen from all across the lagoon."
+}
 
 spire the-eye x=100 z=0 h=40 r=90 top=flat {
     note "Ring of rock in the middle of the lagoon. Looks like a reef with a hole."
@@ -135,7 +138,7 @@ city moonharbor style=modern tech=modern {
     site moon-tower kind=tower x=-1050 z=650 {
         note "Tall TV tower. Highest perch in the city."
     }
-    site moon-marina kind=marina x=-600 z=950
+    site moon-marina kind=marina x=-540 z=960
     site seaplane-base kind=seaplane x=-500 z=700
 }
 
@@ -300,23 +303,23 @@ caves moon-metro {
     cavern subway-west-cut x=-904.5 y=-5.9 z=1117.2 w=19.2 h=38 d=42 rot=150 shape=block glow=0 decor=bare
     cavern subway-central-hall x=-1122 y=-34 z=337 w=120 h=26 d=38 rot=17 shape=carved glow=0.75 decor=tiled
     mouth subway-central-stairs kind=chimney w=20 tight=#true decor=tiled {
-        p -1096 -39 353
-        p -1155 35.2 456
+        p -1096 -45 353
+        p -1155 29.2 456
     }
     cavern subway-canals-hall x=-606 y=-34 z=934 w=120 h=26 d=38 rot=55 shape=carved glow=0.75 decor=tiled
     mouth subway-canals-stairs kind=chimney w=20 tight=#true decor=tiled {
-        p -629 -39 914
-        p -687 33.2 1014
+        p -629 -45 914
+        p -687 27.2 1014
     }
     cavern subway-hill-hall x=-426 y=-34 z=1229 w=120 h=26 d=38 rot=53 shape=carved glow=0.75 decor=tiled
     mouth subway-hill-stairs kind=chimney w=20 tight=#true decor=tiled {
-        p -456 -39 1202
-        p -553 30.8 1258
+        p -456 -45 1202
+        p -553 24.8 1258
     }
     cavern subway-west-hall x=-899 y=-34 z=1183 w=120 h=26 d=38 rot=185 shape=carved glow=0.75 decor=tiled
     mouth subway-west-stairs kind=chimney w=20 tight=#true decor=tiled {
-        p -869 -39 1178
-        p -926 31.8 1080
+        p -869 -45 1178
+        p -926 25.8 1080
     }
 }
 landmark subway-central-gate kind=metro-gate x=-1144 z=437 rot=330

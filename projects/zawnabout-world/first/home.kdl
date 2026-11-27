@@ -481,8 +481,8 @@ road harbor-hill w=14 {
 road hill-spur w=10 {
     note "Up off the highway's bend onto the lowest terrace of the hill city."
     p 1108 388
-    p 1150 345
-    p 1172 330
+    p 1132 348
+    p 1140 300
 }
 road meadow-lane w=8 {
     note "A country lane off the highway, past the racetrack and over the rises to the golf clubhouse."
@@ -543,6 +543,17 @@ landmark hall-camp kind=campsite x=900 y=-940 z=-100 rot=30 {
 }
 landmark vault-camp kind=campsite x=150 y=-1300 z=-2180 rot=-20 {
     note "An expedition camp among the ruins of the north vault."
+}
+landmark glimmer-market kind=market x=850 y=-1420 z=-2300 rot=-8 {
+    note "Glimmer Deep's market under the sea, open at every hour."
+}
+landmark glimmer-farm kind=shroomfarm x=1150 y=-1410 z=-2400 rot=-8
+landmark glimmer-cafe kind=cafe x=700 y=-1420 z=-2200 rot=170
+landmark glimmer-spring kind=hotspring x=1050 y=-1410 z=-2060 rot=0 {
+    note "A warm spring at the edge of Glimmer Deep, steaming under the lanterns."
+}
+landmark hollow-bandstand kind=bandstand x=-120 y=-940 z=420 rot=10 {
+    note "Lantern Hollow's bandstand, where the band plays at every hour."
 }
 landmark glass-camp kind=campsite x=-1250 y=-670 z=620 rot=60 {
     note "Cavers camped by the glass lake, where the river leaves it."
@@ -800,6 +811,13 @@ caves deep {
         ruin vault-columns-2 kind=columns x=250 y=-1300 z=-2300
         ruin vault-arch-2 kind=arch x=420 y=-1300 z=-2420
         ruin vault-stair kind=stair x=80 y=-1300 z=-2450
+        city glimmer-deep style=cavern tech=simple y=-1420 {
+            note "A little town in the far end of the north vault, under the sea, lit by lanterns and glowing moss."
+            p 560 -2460
+            p 1060 -2490
+            p 1150 -2160
+            p 660 -2110
+        }
     }
 
     passage west-run w=180 {
@@ -807,11 +825,12 @@ caves deep {
         p -1150 -620 200
     }
     passage river-run w=170 {
+        note "Kept 25 m or more below the river's own line, or a thin sheet of rock roofs the river off from the passage."
         p -1500 -680 700
         p -900 -720 950
         p 0 -730 1000
-        p 800 -700 1050
-        p 1350 -680 1100
+        p 800 -730 1050
+        p 1350 -730 1100
     }
     river glass-river w=40 {
         p -1500 -690 700
@@ -886,7 +905,7 @@ caves sea-doors-rock {
     cavern sea-doors-back x=501 y=54 z=-1321 w=192 h=200 d=45 rot=20 shape=block glow=0 decor=bare
     cavern sea-doors-cave x=451 y=50 z=-1183 w=400 h=250 d=320 rot=20 shape=dome glow=0.35 decor=crystal {
         note "Behind the Sea Doors. Still water under the stair, crystal glow."
-        lake sea-doors-pool level=-15 {
+        lake sea-doors-pool level=-27 {
             p 559 -1218
             p 390 -1279
             p 352 -1235
@@ -894,6 +913,12 @@ caves sea-doors-rock {
             p 509 -1109
             p 559 -1159
         }
+    }
+    mouth sea-doors-side kind=cliff w=36 light=#true {
+        note "A low side way from the cave behind the Sea Doors out to the bay east of them."
+        p 600 -5 -1215
+        p 700 12 -1420
+        p 790 24 -1600
     }
 }
 landmark sea-doors kind=seadoors x=620 y=4 z=-1648 rot=160 {

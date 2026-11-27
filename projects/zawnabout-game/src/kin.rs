@@ -50,7 +50,7 @@ pub enum FlockNews {
 const HOP: f32 = 32.0;
 const LEAD: f32 = 34.0;
 const FLEE: f32 = 55.0;
-const RACE: f32 = 52.0;
+const RACE: f32 = 44.0;
 /// A leader waits until you are this near before flying on (m).
 const WAIT_FOR: f32 = 130.0;
 
@@ -116,6 +116,10 @@ impl Flyer {
         }
         let mut p = p.clone();
         p.swoop_speed = self.speed;
+        // A racer keeps its own pace, however far it goes, so it can be beaten.
+        if self.task == Task::Race {
+            p.swoop_rush = 0.0;
+        }
         self.d.step(&p, world, input, dt);
         self.vis.tick(&self.d, &p, world, dt);
         self.spin = (self.spin - dt * 7.0).max(0.0);
@@ -282,10 +286,12 @@ impl Flock {
             self.landing = false;
             h.go = None;
             h.d.swoop = None;
-            let want = me.pos + fwd * 0.5 + side * 5.0 + Vec3::Y * 0.8;
+            let want = me.pos + fwd * 2.0 + side * 5.0 + Vec3::Y * 2.5;
             let to = want - h.d.pos;
             let top = me.speed() + 25.0;
-            let vel = (to * 2.5).clamp_length_max(top);
+            // Keeping your pace and closing the gap, so it flies level with you, not
+            // trailing behind where the camera is.
+            let vel = (me.vel + to * 2.5).clamp_length_max(top);
             let before = h.d.heading;
             h.d.vel = vel;
             h.d.pos += vel * dt;

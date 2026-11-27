@@ -38,8 +38,12 @@ cards keep
 ui-key Enter
 expect card
 ui-key Enter
-expect busy
+# Blaze waits on the rim until you take off.
 wait 1
+expect not busy
+tap flap
+wait 1
+expect busy
 shot race.png
 goto 4607 3215 15 90
 wait-until card 3

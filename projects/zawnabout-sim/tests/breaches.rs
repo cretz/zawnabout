@@ -842,3 +842,212 @@ fn cave_lakes_stay_in_their_caves() {
         bad.join("\n")
     );
 }
+
+/// Every passage and mouth can be flown end to end: along each one's middle there is
+/// always room for the dragon somewhere across it.
+#[test]
+fn passages_fly_through() {
+    let t = Terrain::new(&WORLD);
+    let mut bad = Vec::new();
+    // Spouts come up through narrow cracks on purpose.
+    for v in t
+        .def
+        .voids
+        .iter()
+        .filter(|v| v.a != v.b && !v.id.contains("#crack"))
+    {
+        let (a, b) = (Vec3::from(v.a), Vec3::from(v.b));
+        let n = ((b - a).length() / 10.0).ceil().max(1.0) as usize;
+        for k in 0..=n {
+            let c = a.lerp(b, k as f32 / n as f32);
+            let room = [-0.5f32, 0.0, 0.5]
+                .iter()
+                .flat_map(|dy| [-0.4f32, 0.0, 0.4].map(move |dx| (dx, *dy)))
+                .map(|(dx, dy)| t.sdf(c + Vec3::new(dx * v.r, dy * v.r, 0.0)))
+                .fold(f32::MIN, f32::max);
+            if room < 6.0 {
+                bad.push(format!(
+                    "{} pinched at {:.0} {:.0} {:.0}",
+                    v.id, c.x, c.y, c.z
+                ));
+                break;
+            }
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "passages that cannot be flown:
+{}",
+        bad.join(
+            "
+"
+        )
+    );
+}
+
+/// Sheets of rock under 25 m thick with air above and below, through the middle of each
+/// passage and a little under it, where a river cuts its own channel. A sheet over a
+/// river roofs it off into a dead end (the river run under Kettle Harbor had one). Most
+/// listed are one cave passing over another, so look at each. Run with `--features
+/// probes` and `--nocapture`.
+#[test]
+#[cfg(feature = "probes")]
+fn passage_sheets() {
+    let t = Terrain::new(&WORLD);
+    for v in t
+        .def
+        .voids
+        .iter()
+        .filter(|v| v.a != v.b && !v.id.contains("#crack"))
+    {
+        let (a, b) = (Vec3::from(v.a), Vec3::from(v.b));
+        let n = ((b - a).length() / 10.0).ceil().max(1.0) as usize;
+        for k in 0..=n {
+            let c = a.lerp(b, k as f32 / n as f32);
+            let col: Vec<bool> = (0..=(v.r * 2.0 + 40.0) as i32 / 2)
+                .map(|i| t.sdf(c + Vec3::Y * (i as f32 * 2.0 - v.r - 40.0)) > 0.0)
+                .collect();
+            let first = col.iter().position(|&o| o);
+            let last = col.iter().rposition(|&o| o);
+            if let (Some(f), Some(l)) = (first, last) {
+                let rock = col[f..=l].iter().filter(|o| !**o).count();
+                if rock > 0 && rock * 2 < 25 {
+                    println!("{} sheet at {:.0} {:.0} {:.0}", v.id, c.x, c.y, c.z);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// No house, row or block of flats stands on a road or a railway.
+#[test]
+fn homes_off_roads() {
+    use zawnabout_sim::town::Kind;
+    let w = zawnabout_sim::World::generate(1);
+    let mut bad = Vec::new();
+    for b in w
+        .buildings
+        .iter()
+        .filter(|b| matches!(b.kind, Kind::House | Kind::Row | Kind::Flat))
+    {
+        let f = glam::Vec2::new(-b.axis.y, b.axis.x);
+        let c = glam::Vec2::new(b.pos.x, b.pos.z);
+        let mut hit = false;
+        for i in -3..=3 {
+            for j in -3..=3 {
+                let p = c
+                    + b.axis * b.size.x * 0.5 * (i as f32 / 3.0)
+                    + f * b.size.z * 0.5 * (j as f32 / 3.0);
+                // Only roads at the house's height: a tunnel underneath is no matter.
+                if w.terrain.road_spot(p.x, p.y, 0.0).is_some()
+                    && (w.terrain.height(p.x, p.y) - b.pos.y).abs() < 6.0
+                {
+                    hit = true;
+                }
+            }
+        }
+        if hit {
+            bad.push(format!(
+                "{:?} at {:.0} {:.0} {:.0}",
+                b.kind, b.pos.x, b.pos.y, b.pos.z
+            ));
+        }
+    }
+    assert!(
+        bad.is_empty(),
+        "{} homes on roads:\n{}",
+        bad.len(),
+        bad.join("\n")
+    );
+}
+
+#[test]
+#[cfg(feature = "probes")]
+fn road_here() {
+    let Ok(v) = std::env::var("ROAD") else { return };
+    let v: Vec<f32> = v
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let w = zawnabout_sim::World::generate(1);
+    let mut x = v[0] - 20.0;
+    while x < v[0] + 20.0 {
+        println!(
+            "{x:.0} {:?} h {:.1}",
+            w.terrain.road_spot(x, v[1], 0.0).map(|r| (r.d, r.half)),
+            w.terrain.height(x, v[1])
+        );
+        x += 2.0;
+    }
+}
+
+/// Bridge abutments near a spot: `ABUT="x z" cargo test --release --features probes --test
+/// breaches abutments_near -- --nocapture`.
+#[test]
+#[cfg(feature = "probes")]
+fn abutments_near() {
+    let Ok(v) = std::env::var("ABUT") else { return };
+    let v: Vec<f32> = v
+        .split_whitespace()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let w = zawnabout_sim::World::generate(1);
+    let here = glam::Vec2::new(v[0], v[1]);
+    for i in 0..w.terrain.def.roads.len() {
+        for a in w.terrain.abutments(i) {
+            if a.at.distance(here) < 60.0 {
+                println!(
+                    "{} at {:.1} {:.1} along {:.2} {:.2} half {:.1}x{:.1} y {:.1}..{:.1}",
+                    w.terrain.def.roads[i].id,
+                    a.at.x,
+                    a.at.y,
+                    a.along.x,
+                    a.along.y,
+                    a.half_len,
+                    a.half_w,
+                    a.bottom,
+                    a.top
+                );
+            }
+        }
+        for (p, bottom, top) in w.terrain.piers(i, &[]) {
+            if p.distance(here) < 60.0 {
+                println!("pier {:.1} {:.1} y {bottom:.1}..{top:.1}", p.x, p.y);
+            }
+        }
+    }
+    let at = glam::Vec3::new(v[0], 3.0, v[1]);
+    println!(
+        "support {:.1} push {:?}",
+        w.support_still(v[0], v[1], 20.0),
+        w.push_out_still(at, 1.0)
+    );
+}
+
+/// Every cave space stays inside the bounds its walls are meshed within, or the mesh
+/// leaves a hole where it pokes out (a turned lake basin did).
+#[test]
+fn caves_inside_bounds() {
+    use zawnabout_sim::terrain::{void_bounds, void_sdf};
+    let t = Terrain::new(&WORLD);
+    for (i, v) in t.def.voids.iter().enumerate() {
+        let b = void_bounds(v);
+        let (mid, half) = ((b.min + b.max) * 0.5, (b.max - b.min) * 0.5);
+        let n = 16;
+        for k in 0..n * n * n {
+            let f = Vec3::new((k % n) as f32, ((k / n) % n) as f32, (k / (n * n)) as f32)
+                / (n - 1) as f32;
+            // A box half again as big as the bounds.
+            let p = mid + (f * 2.0 - Vec3::ONE) * half * 1.5;
+            let inside = p.cmpge(b.min).all() && p.cmple(b.max).all();
+            assert!(
+                inside || void_sdf(v, p) > 0.0,
+                "void {i} {:?} reaches {p} outside {} {}",
+                v.shape,
+                b.min,
+                b.max
+            );
+        }
+    }
+}

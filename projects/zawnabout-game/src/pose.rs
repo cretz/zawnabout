@@ -128,6 +128,13 @@ impl DragonVisual {
         *self = Self::new(d);
     }
 
+    /// Turns to the dragon's heading at once, for turning it between ticks.
+    pub fn face(&mut self, d: &Dragon) {
+        self.rot = d.rotation();
+        self.prev_rot = self.rot;
+        self.prev_heading = d.heading;
+    }
+
     pub fn tick(&mut self, d: &Dragon, p: &FlightParams, world: &World, dt: f32) {
         self.time += dt;
         self.prev_pos = self.pos;
@@ -213,7 +220,7 @@ impl DragonVisual {
         // Stand along a hillside, partly: fully level looks like sinking into the
         // slope, fully tilted looks like falling over.
         let tilt = if ground && d.cling.is_none() && !world.on_structure(d.pos.x, d.pos.z, feet) {
-            let n = world.ground_normal(d.pos.x, d.pos.z);
+            let n = world.floor_normal(d.pos.x, d.pos.z, feet);
             Quat::from_rotation_arc(Vec3::Y, n.lerp(Vec3::Y, 0.35).normalize())
         } else {
             Quat::IDENTITY

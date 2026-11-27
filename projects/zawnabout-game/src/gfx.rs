@@ -116,6 +116,9 @@ pub struct Gfx {
     treasures: Vec<(&'static str, MeshId)>,
     star: MeshId,
     heap: MeshId,
+    /// Footprints in the snow, fading: where, which way, and when.
+    footprint: MeshId,
+    prints: std::cell::RefCell<std::collections::VecDeque<(Vec3, f32, f32)>>,
     /// The postcard pictures in the atlas, as of this version of them.
     pics_version: u32,
     /// Which version of the player's look the dragon meshes and portrait show, and
@@ -142,6 +145,11 @@ pub struct Gfx {
     /// A passenger's basket seat, and the umbrella they float down under.
     saddle: MeshId,
     umbrella: MeshId,
+    /// Broken-down cars by the road, the car and its propped-up bonnet.
+    stranded: Vec<crate::stranded::Stranded>,
+    stranded_car: MeshId,
+    stranded_boat: MeshId,
+    bonnet: MeshId,
     dragon: DragonIds,
     /// Each named dragon's own colors, built once they are known.
     kin_meshes: Vec<DragonIds>,
@@ -168,6 +176,16 @@ pub struct Gfx {
     /// Dark plugs a little way into every cave mouth, so from outside a mouth looks like
     /// darkness instead of a hole onto the sky where the deep walls are not drawn.
     plugs: Vec<Mat4>,
+    /// The lanterns up old ships' masts, lit at night and seen from far off.
+    ship_lamps: Vec<Vec3>,
+    /// Where each city's fireworks burst, high over its middle.
+    shows: Vec<Vec3>,
+    /// Where sky lanterns are let go at night: temples and beaches.
+    lantern_spots: Vec<Vec3>,
+    /// Whether pigeons were already scattered, so their flutter sounds once.
+    pigeons_up: std::cell::Cell<bool>,
+    /// Whether the salamander was already yawning, so it groans once a yawn.
+    yawning: std::cell::Cell<bool>,
     /// Where each cave mouth opens to the sky. Near one, the outside draws in full even
     /// from inside, so the view out is the real world.
     mouths: Vec<Vec3>,
@@ -182,6 +200,8 @@ pub struct Gfx {
     /// Each vehicle's daylight and where it was found, kept until it moves on a little,
     /// as finding it means the ground height there.
     vehicle_day: std::cell::RefCell<Vec<(Vec3, f32)>>,
+    /// Where gulls roost in each nesting cave, found once the dragon first comes near.
+    nests: std::cell::RefCell<HashMap<usize, Nest>>,
     /// Every lamp's head and foot, and whether it is underground where it always burns.
     lamps: Vec<(Vec3, Vec3, bool)>,
     /// Every landmark's lamps and bulbs: where, how big, whether they burn all day, and
@@ -845,6 +865,7 @@ impl Gfx {
             .map(|k| (*k, renderer.add_mesh(&crate::treasure::treasure(k))))
             .collect();
         let star = renderer.add_mesh(&crate::treasure::star());
+        let footprint = renderer.add_mesh(&crate::treasure::footprint());
         let lectern = renderer.add_mesh(&crate::treasure::lectern());
         let postcards = [0, 1, 2].map(|v| renderer.add_mesh(&crate::treasure::postcard(v)));
         let pinboard = renderer.add_mesh(&crate::treasure::pinboard());
@@ -855,6 +876,27 @@ impl Gfx {
         let brazier = renderer.add_mesh(&crate::treasure::brazier());
         let saddle = renderer.add_mesh(&crate::treasure::saddle());
         let umbrella = renderer.add_mesh(&crate::treasure::umbrella());
+        let stranded_car = renderer.add_mesh(&crate::town_mesh::vehicle(
+            &world.terrain,
+            zawnabout_sim::town::Kind::Car,
+            Vec3::new(4.2, 1.5, 1.9),
+            CAR_WHITE as u32,
+        ));
+        let stranded_boat = renderer.add_mesh(&crate::town_mesh::vehicle(
+            &world.terrain,
+            zawnabout_sim::town::Kind::Sailboat,
+            Vec3::new(8.0, 2.0, 2.8),
+            7,
+        ));
+        let bonnet = {
+            let mut m = crate::mesh::MeshBuilder::new();
+            m.cube(
+                Vec3::ZERO,
+                Vec3::new(0.85, 0.04, 0.6),
+                crate::mesh::Rgb(0xFFFFFF),
+            );
+            renderer.add_mesh(&m)
+        };
         let bubbles = [
             renderer.add_mesh(&crate::treasure::bubble(false)),
             renderer.add_mesh(&crate::treasure::bubble(true)),
@@ -971,6 +1013,8 @@ impl Gfx {
             terrain: TerrainMeshes::default(),
             treasures,
             star,
+            footprint,
+            prints: std::cell::RefCell::new(std::collections::VecDeque::new()),
             heap,
             pics_version: 0,
             look_version: None,
@@ -986,6 +1030,10 @@ impl Gfx {
             brazier,
             saddle,
             umbrella,
+            stranded: crate::stranded::all(world),
+            stranded_car,
+            stranded_boat,
+            bonnet,
             water,
             spray: renderer_spray,
             flame,
@@ -1004,11 +1052,55 @@ impl Gfx {
             sea_life,
             wildlife,
             plugs,
+            pigeons_up: std::cell::Cell::new(false),
+            yawning: std::cell::Cell::new(false),
+            shows: world
+                .terrain
+                .def
+                .towns
+                .iter()
+                .filter(|t| !t.village && !t.under)
+                .map(|t| {
+                    let n = t.pts.len().max(1) as f32;
+                    let (x, z) = t
+                        .pts
+                        .iter()
+                        .fold((0.0, 0.0), |(x, z), p| (x + p[0] / n, z + p[1] / n));
+                    Vec3::new(x, world.terrain.height(x, z).max(0.0) + 150.0, z)
+                })
+                .collect(),
+            lantern_spots: world
+                .buildings
+                .iter()
+                .filter(|b| {
+                    matches!(
+                        b.kind,
+                        zawnabout_sim::town::Kind::Temple | zawnabout_sim::town::Kind::Umbrellas
+                    )
+                })
+                .map(|b| b.pos + Vec3::Y * 2.0)
+                .collect(),
+            ship_lamps: world
+                .buildings
+                .iter()
+                .filter(|b| b.kind == zawnabout_sim::town::Kind::Galleon)
+                .map(|b| {
+                    // Up the main mast as drawn, listing with the hull.
+                    let list = Mat4::from_rotation_x(0.13) * Mat4::from_rotation_z(-0.05);
+                    let l = list.transform_point3(Vec3::new(
+                        -0.02 * b.size.x + 1.0,
+                        b.size.y + 25.6,
+                        0.0,
+                    ));
+                    b.at(l.x, l.y, l.z)
+                })
+                .collect(),
             mouths,
             plug,
             tufts: std::cell::RefCell::new(Lawn::default()),
             far_tufts: std::cell::RefCell::new(Lawn::default()),
             vehicle_day: Default::default(),
+            nests: Default::default(),
             falls: crate::water::falls_feet(&game.sim.world.terrain),
             listener: crate::audio::Listener::new(game),
             chunk_budget: 12,
@@ -1031,10 +1123,18 @@ impl Gfx {
     /// Streams terrain chunks around the camera, at most `budget` steps of building, and
     /// none started after `secs`.
     pub fn update_terrain(&mut self, game: &Game, budget: usize, secs: f64) {
+        // Fast, it builds toward where the camera will be in a couple of seconds.
+        // Riding, the dragon itself is still: what carries it is moving.
+        let d = game.player_dragon();
+        let vel = d
+            .riding
+            .map_or(d.vel, |i| game.sim.world.traffic.poses[i].vel);
+        let ahead = (vel.length() > 25.0).then(|| game.camera.pos + vel * 2.5);
         self.terrain.update(
             &mut self.renderer,
             &game.sim.world.terrain,
             game.camera.pos,
+            ahead,
             budget,
             secs,
         );
@@ -1059,6 +1159,22 @@ impl Gfx {
             Part::Hand(i) => d.hand[i],
             Part::Star => d.star,
         }
+    }
+
+    /// Everyone drawn within r of the camera, with how high their feet are over the
+    /// ground there, to find anyone floating.
+    pub fn people_near(&self, game: &Game, r: f32) -> Vec<(Vec3, f32)> {
+        let (body, _) = self.life.people();
+        let world = &game.sim.world;
+        let cam = game.camera.pos;
+        self.frame(game)
+            .draws
+            .iter()
+            .filter(|(m, _)| *m == body)
+            .map(|(_, inst)| Vec3::from_slice(&inst.model[3][..3]))
+            .filter(|p| p.distance(cam) < r)
+            .map(|p| (p, p.y - world.support_still(p.x, p.z, p.y + 1.0)))
+            .collect()
     }
 
     pub fn frame(&self, game: &Game) -> Frame {
@@ -1327,7 +1443,11 @@ impl Gfx {
             .unwrap_or_default();
         let (mut fx, lights) = time("effects", || self.effects(game, caves, t, &dark));
         time("play", || self.play(game, t, night, &mut draws, &mut fx));
+        self.footprints(game, t, &mut fx);
         // People live underground too, so their towns' life draws near the caves.
+        self.life
+            .waiting
+            .set(game.play.as_ref().and_then(crate::play::waiting_folk));
         if outside || caves {
             time("life", || {
                 let sim_time = (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT;
@@ -1344,6 +1464,16 @@ impl Gfx {
                     &mut fx,
                 )
             });
+            let up = night < 0.6 && self.life.pigeons_scared(game.player_dragon().pos);
+            if up && !self.pigeons_up.get() {
+                game.calls.borrow_mut().push(crate::audio::Call::Flutter);
+            }
+            self.pigeons_up.set(up);
+            let yawn = self.life.salamander_yawn(game.player_dragon().pos, t) > 0.0;
+            if yawn && !self.yawning.get() {
+                game.calls.borrow_mut().push(crate::audio::Call::Yawn);
+            }
+            self.yawning.set(yawn);
             time("park_life", || {
                 self.park_life.draw(
                     &world.traffic,
@@ -1356,6 +1486,112 @@ impl Gfx {
                     &mut fx,
                 )
             });
+        }
+        // Broken-down cars, bonnet up and hazards blinking, the driver waiting by them, and
+        // becalmed boats with their sailor aboard.
+        {
+            let (body, heads) = self.life.people();
+            let cam = game.camera.pos;
+            let blink = (t * 1.6).fract() < 0.5;
+            for (k, s) in self.stranded.iter().enumerate() {
+                if s.car.distance(cam) > 500.0 {
+                    continue;
+                }
+                let day = world.terrain.daylight(s.car + Vec3::Y);
+                let turn = Quat::from_rotation_y(s.heading);
+                // A becalmed boat rocks gently, its sailor with it.
+                let bob = Vec3::Y * ((t * 0.9 + k as f32).sin() * 0.12);
+                if s.boat {
+                    let rock = Quat::from_rotation_z((t * 0.7 + k as f32).sin() * 0.04);
+                    let m = Mat4::from_rotation_translation(turn * rock, s.car + bob);
+                    draws.push((
+                        self.stranded_boat,
+                        Instance::tinted(m, Vec4::ONE.with_w(day)),
+                    ));
+                    // After dark a lantern hangs on the mast so the boat can be found.
+                    if night > 0.1 {
+                        let at = s.car + bob + turn * (rock * Vec3::new(0.0, 6.5, 0.0));
+                        let glow = 0.85 + (t * 7.0 + k as f32).sin() * 0.08;
+                        let lamp = Mat4::from_scale_rotation_translation(
+                            Vec3::splat(1.4),
+                            Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y)),
+                            at,
+                        );
+                        fx.push((
+                            self.star,
+                            Instance::tinted(
+                                lamp,
+                                Vec4::new(1.0, 0.75, 0.3, glow * night.min(1.0)),
+                            ),
+                        ));
+                    }
+                }
+                let m = Mat4::from_rotation_translation(turn, s.car);
+                let paint = CAR_PAINT[k % CAR_PAINT.len()];
+                if !s.boat {
+                    draws.push((self.stranded_car, Instance::tinted(m, paint.extend(day))));
+                    // The bonnet propped open at the front.
+                    let hinge = s.car + turn * Vec3::new(0.0, 1.35, 1.4);
+                    let lid = Mat4::from_rotation_translation(
+                        turn * Quat::from_rotation_x(-1.0),
+                        hinge + turn * Vec3::new(0.0, 0.3, -0.25),
+                    );
+                    draws.push((self.bonnet, Instance::tinted(lid, paint.extend(day))));
+                    if blink {
+                        for (x, z) in [(-0.85, 2.05), (0.85, 2.05), (-0.85, -2.05), (0.85, -2.05)] {
+                            let at = s.car + turn * Vec3::new(x, 0.75, z);
+                            let lamp = Mat4::from_scale_rotation_translation(
+                                Vec3::splat(0.5),
+                                Quat::from_rotation_arc(Vec3::Y, (cam - at).normalize_or(Vec3::Y)),
+                                at,
+                            );
+                            fx.push((
+                                self.star,
+                                Instance::tinted(lamp, Vec4::new(1.0, 0.55, 0.05, 0.9)),
+                            ));
+                        }
+                    }
+                }
+                // The driver waits, unless flown off on the dragon's back or already
+                // dropped where they were going.
+                let q = |v: f32| (v / 3.0).round() as i32 as u32;
+                let seed = (q(s.driver.x).wrapping_mul(73_856_093)
+                    ^ q(s.driver.z).wrapping_mul(19_349_663))
+                    | 1 << 31;
+                let gone = game
+                    .play
+                    .as_ref()
+                    .is_some_and(|p| crate::play::folk_gone(p, seed));
+                if !gone {
+                    let to = game.player_dragon().pos - s.driver;
+                    let face = if to.length() < 20.0 {
+                        to.x.atan2(to.z)
+                    } else {
+                        s.heading + 1.6
+                    };
+                    let stand = if s.boat { s.driver + bob } else { s.driver };
+                    let m = Mat4::from_rotation_translation(Quat::from_rotation_y(face), stand);
+                    let shirt = linear(Rgb(LOCAL_SHIRTS[k % LOCAL_SHIRTS.len()]), 1.0);
+                    draws.push((body, Instance::tinted(m, shirt.extend(day))));
+                    draws.push((
+                        heads[k % 3],
+                        Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
+                    ));
+                }
+            }
+        }
+        // Cavers too can be talked to, so they are drawn before anyone is picked.
+        if caves {
+            self.cave_life.draw(
+                world,
+                game.camera.pos,
+                t,
+                lighting.cave_ambient,
+                self.pool,
+                self.life.people(),
+                &mut draws,
+                &mut fx,
+            );
         }
         // Nobody stands inside a wall: anyone whose way crosses one waits out of sight
         // until they are through. Whoever is left nearest the dragon can be talked to.
@@ -1382,6 +1618,12 @@ impl Gfx {
                 .min_by(|a, b| a.distance(me).total_cmp(&b.distance(me)))
                 .filter(|p| p.distance(me) < 12.0)
                 .map(|p| {
+                    // Someone walking keeps who they are from one frame to the next.
+                    if let Some((q, seed)) = game.near_drawn.get()
+                        && q.distance(p) < 1.0
+                    {
+                        return (p, seed);
+                    }
                     let q = |v: f32| (v / 3.0).round() as i32 as u32;
                     (
                         p,
@@ -1403,7 +1645,10 @@ impl Gfx {
                 )
             });
             time("sea_life", || {
-                self.sea_life.draw(game.camera.pos, t, &mut draws)
+                game.near_whale
+                    .set(self.sea_life.whale_near(game.player_dragon().pos, t));
+                self.sea_life
+                    .draw(game.camera.pos, game.player_dragon().pos, t, &mut draws)
             });
             time("wildlife", || {
                 self.wildlife.draw(
@@ -1417,17 +1662,23 @@ impl Gfx {
                 )
             });
         }
-        if caves {
-            self.cave_life.draw(
-                world,
-                game.camera.pos,
-                t,
-                lighting.cave_ambient,
-                self.pool,
-                self.life.people(),
-                &mut draws,
-                &mut fx,
-            );
+        // The nearest animal or paddler by the dragon, who answers when talked to.
+        {
+            let me = game.player_dragon().pos;
+            let near = draws
+                .iter()
+                .filter_map(|(m, inst)| {
+                    let at = Vec3::from_slice(&inst.model[3][..3]);
+                    let (name, call) = match self.park_life.critter(*m) {
+                        Some(c) => c,
+                        None => (self.wildlife.paddler(*m)?, crate::audio::Call::Honk),
+                    };
+                    let flat = Vec2::new(at.x - me.x, at.z - me.z).length();
+                    (flat < 16.0 && (at.y - me.y).abs() < 8.0).then_some((flat, at, name, call))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, at, name, call)| (at, name, call));
+            game.near_critter.set(near);
         }
         // People far off are a speck of shirt: a cheap body, and no head.
         {
@@ -1534,6 +1785,9 @@ impl Gfx {
     /// Drawing does this every frame. Hosts that do not draw every frame call it.
     pub fn observe(&self, game: &Game) {
         let me = game.player_dragon();
+        self.life
+            .waiting
+            .set(game.play.as_ref().and_then(crate::play::waiting_folk));
         let near = (game.play.is_some() && me.mode == zawnabout_sim::Mode::Ground)
             .then(|| {
                 self.life.nearest_person(
@@ -1545,6 +1799,27 @@ impl Gfx {
             })
             .flatten();
         game.near_folk.set(near);
+        self.search_nests(game);
+    }
+
+    /// Goes on finding where gulls roost near the camera, a few columns a frame.
+    fn search_nests(&self, game: &Game) {
+        let Some(play) = &game.play else { return };
+        let cam = game.camera.pos;
+        let mut nests = self.nests.borrow_mut();
+        let mut budget = NEST_COLUMNS;
+        for (k, spot) in crate::play::nests(play).into_iter().enumerate() {
+            if budget == 0 {
+                break;
+            }
+            if spot.mid.distance(Vec2::new(cam.x, cam.z)) > 800.0 {
+                continue;
+            }
+            let nest = nests.entry(k).or_default();
+            if !nest.ready {
+                nest.search(&game.sim.world, &spot, &mut budget);
+            }
+        }
     }
 
     /// Gameplay on top: finds still lying about, each glinting now and then when the sun
@@ -1591,6 +1866,70 @@ impl Gfx {
                 at,
             );
             draws.push((self.life.gull(), Instance::tinted(m, brown)));
+        }
+    }
+
+    /// Gulls roosting in the nesting caves, a few more wheeling in and out of the mouth by
+    /// day.
+    fn nesting(
+        &self,
+        game: &Game,
+        play: &crate::play::Play,
+        t: f32,
+        draws: &mut Vec<(MeshId, Instance)>,
+    ) {
+        let cam = game.camera.pos;
+        let world = &game.sim.world;
+        let nests = self.nests.borrow();
+        for (k, spot) in crate::play::nests(play).into_iter().enumerate() {
+            if spot.mid.distance(Vec2::new(cam.x, cam.z)) > 700.0 {
+                continue;
+            }
+            let Some(nest) = nests.get(&k).filter(|n| n.ready) else {
+                continue;
+            };
+            let day = world.terrain.daylight(nest.mouth);
+            let tint = Vec4::new(1.0, 1.0, 1.0, day.max(0.25));
+            for (j, &(at, facing)) in nest.perches.iter().enumerate() {
+                // Sitting with wings folded, looking about now and then.
+                let look = ((t * 0.3 + j as f32 * 1.7).sin() * 3.0).clamp(-1.0, 1.0) * 0.6;
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::splat(2.2),
+                    Quat::from_rotation_y(facing + look),
+                    at,
+                );
+                draws.push((self.life.gull_sitting(), Instance::tinted(m, tint)));
+            }
+            if day < 0.4 {
+                continue;
+            }
+            let out = if nest.out.y > 0.5 { Vec3::X } else { nest.out };
+            let side = Vec3::new(-out.z, 0.0, out.x);
+            for j in 0..3u32 {
+                let s = (k as u32 * 7 + j) as f32;
+                let a = t * (0.45 + 0.08 * j as f32) + s * 2.1;
+                let reach = 14.0 + 4.0 * j as f32;
+                // Round and round over open ground, or out of the cave mouth and back.
+                let (at, fwd) = if nest.out.y > 0.5 {
+                    let at = nest.mouth
+                        + (out * a.cos() + side * a.sin()) * reach
+                        + Vec3::Y * (8.0 + 3.0 * j as f32 + (a * 2.0).sin() * 2.0);
+                    (at, -out * a.sin() + side * a.cos())
+                } else {
+                    let at = nest.mouth
+                        + out * (reach + a.cos() * reach * 0.8)
+                        + side * a.sin() * reach * 0.6
+                        + Vec3::Y * (2.0 + (a * 2.0).sin() * 2.0);
+                    (at, out * -a.sin() * 0.8 + side * a.cos() * 0.6)
+                };
+                let flap = 0.35 + 0.65 * (t * 9.0 + s).sin();
+                let m = Mat4::from_scale_rotation_translation(
+                    Vec3::new(1.0, flap, 1.0) * 1.3,
+                    Quat::from_rotation_y(fwd.x.atan2(fwd.z)),
+                    at,
+                );
+                draws.push((self.life.gull(), Instance::tinted(m, tint)));
+            }
         }
     }
 
@@ -1916,6 +2255,20 @@ impl Gfx {
                 heads[l.look as usize % 3],
                 Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, day)),
             ));
+            // A favor to ask shows from afar: a "!" bubble over their head, bigger the
+            // further off, so a town shows who would love some help.
+            let far = l.pos.distance(cam);
+            if l.ask && (12.0..300.0).contains(&far) {
+                let at = l.pos + Vec3::Y * (3.0 + far * 0.012) + Vec3::Y * (t * 2.5).sin() * 0.1;
+                let to = (cam - at).normalize_or(Vec3::Z);
+                let face = Quat::from_rotation_arc(
+                    Vec3::Z,
+                    Vec3::new(to.x, 0.0, to.z).normalize_or(Vec3::Z),
+                );
+                let size = 1.3 + far * 0.012;
+                let m = Mat4::from_scale_rotation_translation(Vec3::splat(size), face, at);
+                draws.push((self.bubbles[1], Instance::new(m)));
+            }
         }
         for item in &lost {
             if item.pos.distance(cam) > 300.0 {
@@ -2007,6 +2360,7 @@ impl Gfx {
             ));
         }
         self.set_effects(game, play, t, night, draws, fx);
+        self.nesting(game, play, t, draws);
         self.story_lamps(game, draws);
         // A carried thing rides in the dragon's arms.
         if let Some(kind) = carried {
@@ -2212,7 +2566,7 @@ impl Gfx {
             if last.distance(cam) > range + 20.0 {
                 continue;
             }
-            let p = traffic.pose(v, time);
+            let p = traffic.pose_of(i, time);
             if p.pos.distance(cam) > range {
                 continue;
             }
@@ -2254,6 +2608,55 @@ impl Gfx {
     }
 
     /// Fire, sparks and light shafts, and the point lights that go with them.
+    /// Walking on snow leaves footprints, left and right, that fill in over half a minute.
+    fn footprints(&self, game: &Game, t: f32, fx: &mut Vec<(MeshId, Instance)>) {
+        const LAST: f32 = 25.0;
+        let d = game.player_dragon();
+        let world = &game.sim.world;
+        let mut prints = self.prints.borrow_mut();
+        let feet = d.pos - Vec3::Y * game.sim.flight.stand_height;
+        let snowy = || {
+            let line = match world.terrain.climate(feet.x, feet.z) {
+                3 => 250.0,
+                1 => 880.0,
+                _ => 710.0,
+            };
+            let snowfield = world
+                .terrain
+                .cover(feet.x, feet.z)
+                .is_some_and(|c| c.kind == zawnabout_sim::terrain::CoverKind::Snow);
+            feet.y > line || snowfield
+        };
+        if d.mode == zawnabout_sim::Mode::Ground && d.riding.is_none() {
+            let far = prints.back().is_none_or(|(p, _, _)| p.distance(feet) > 1.1);
+            if far && snowy() {
+                let side = if prints.len().is_multiple_of(2) {
+                    0.45
+                } else {
+                    -0.45
+                };
+                let right = Vec3::new(d.heading.cos(), 0.0, -d.heading.sin());
+                let at = feet + right * side;
+                let y = world.support_still(at.x, at.z, at.y + 1.0);
+                prints.push_back((Vec3::new(at.x, y, at.z), d.heading, t));
+            }
+        }
+        while prints
+            .front()
+            .is_some_and(|(_, _, at)| t - at > LAST || *at > t)
+        {
+            prints.pop_front();
+        }
+        for (p, heading, at) in prints.iter() {
+            let fade = 1.0 - (t - at) / LAST;
+            let m = Mat4::from_rotation_translation(Quat::from_rotation_y(*heading), *p);
+            fx.push((
+                self.footprint,
+                Instance::tinted(m, Vec4::new(1.0, 1.0, 1.0, 0.55 * fade)),
+            ));
+        }
+    }
+
     fn effects(
         &self,
         game: &Game,
@@ -2350,17 +2753,118 @@ impl Gfx {
                 near.push((*lamp, 22.0, warm * 1.6 * on));
             }
         }
+        // Old ships' lanterns glow after dark, big enough to steer by from far off.
+        for &lamp in &self.ship_lamps {
+            let dist = lamp.distance(cam);
+            if night < 0.05 || dist > 6000.0 {
+                continue;
+            }
+            let size = 3.0 + dist * 0.006;
+            let halo = Mat4::from_scale_rotation_translation(
+                Vec3::new(size, 1.0, size),
+                Quat::from_rotation_arc(Vec3::Y, (cam - lamp).normalize_or(Vec3::Y)),
+                lamp,
+            );
+            fx.push((self.pool, Instance::tinted(halo, warm.extend(night))));
+            if dist < 250.0 {
+                near.push((lamp, 30.0, warm * 2.0 * night));
+            }
+        }
+        // Late in the evening every city lets off fireworks over its middle: a spark
+        // climbing, then a ball of colored stars spreading and falling as it fades.
+        let hour = game.sky().hour;
+        if night > 0.5 && (21.0..23.5).contains(&hour) {
+            const COLORS: [u32; 6] = [0xFF5A4A, 0xFFD24A, 0x6AD0FF, 0x9BFF7A, 0xFF8AE0, 0xFFFFFF];
+            let h = zawnabout_sim::shape::hash;
+            for (i, &c) in self.shows.iter().enumerate() {
+                let dist = c.distance(cam);
+                if dist > 5000.0 {
+                    continue;
+                }
+                let face = Quat::from_rotation_arc(Vec3::Y, (cam - c).normalize_or(Vec3::Y));
+                let size = 2.6 + dist * 0.005;
+                for b in 0..3u32 {
+                    let tt = t + b as f32 * 1.13 + i as f32 * 0.7;
+                    let cycle = (tt / 3.4).floor() as i32 as u32;
+                    let u = (tt / 3.4).fract();
+                    let seed = cycle.wrapping_mul(7919) ^ (i as u32 * 131 + b * 17);
+                    let at = c + Vec3::new(
+                        (h(seed) - 0.5) * 180.0,
+                        h(seed + 1) * 60.0,
+                        (h(seed + 2) - 0.5) * 180.0,
+                    );
+                    let col = linear(Rgb(COLORS[(h(seed + 3) * 6.0) as usize % 6]), 1.0) * 1.6;
+                    if u < 0.25 {
+                        let p = at - Vec3::Y * (1.0 - u / 0.25) * 110.0;
+                        let m = Mat4::from_scale_rotation_translation(
+                            Vec3::new(size * 0.5, 1.0, size * 0.5),
+                            face,
+                            p,
+                        );
+                        fx.push((self.pool, Instance::tinted(m, warm.extend(0.9))));
+                        continue;
+                    }
+                    let k = (u - 0.25) / 0.75;
+                    let fade = (1.0 - k).powf(1.5);
+                    for s in 0..20u32 {
+                        // Spread evenly over a ball.
+                        let y = 1.0 - (s as f32 + 0.5) / 10.0;
+                        let r = (1.0 - y * y).max(0.0).sqrt();
+                        let a = s as f32 * 2.3998;
+                        let dir = Vec3::new(a.cos() * r, y, a.sin() * r);
+                        let p = at + dir * k.sqrt() * 60.0 - Vec3::Y * k * k * 25.0;
+                        let m = Mat4::from_scale_rotation_translation(
+                            Vec3::new(size, 1.0, size),
+                            face,
+                            p,
+                        );
+                        fx.push((self.pool, Instance::tinted(m, col.extend(fade))));
+                    }
+                }
+            }
+        }
+        // Sky lanterns drift up through the night from temples and beaches.
+        if night > 0.3 {
+            let h = zawnabout_sim::shape::hash;
+            for (i, &spot) in self.lantern_spots.iter().enumerate() {
+                if spot.distance(cam) > 3000.0 {
+                    continue;
+                }
+                for k in 0..16u32 {
+                    let s = i as u32 * 61 + k * 7;
+                    let u = ((t + h(s) * 90.0) / 90.0).fract();
+                    let drift = Vec3::new(h(s + 1) - 0.3, 0.0, h(s + 2) - 0.5) * 90.0;
+                    let p = spot
+                        + Vec3::new((h(s + 3) - 0.5) * 30.0, 4.0, (h(s + 4) - 0.5) * 30.0)
+                        + drift * u
+                        + Vec3::Y * u * 280.0;
+                    let dist = p.distance(cam);
+                    let size = 0.9 + dist * 0.003;
+                    let m = Mat4::from_scale_rotation_translation(
+                        Vec3::new(size, 1.0, size),
+                        Quat::from_rotation_arc(Vec3::Y, (cam - p).normalize_or(Vec3::Y)),
+                        p,
+                    );
+                    let flick = 0.9 + (t * 5.0 + k as f32).sin() * 0.1;
+                    let alpha = (1.0 - u).sqrt() * (u * 30.0).min(1.0) * night * flick;
+                    fx.push((
+                        self.pool,
+                        Instance::tinted(m, (warm * Vec3::new(1.1, 0.75, 0.45)).extend(alpha)),
+                    ));
+                }
+            }
+        }
         // Headlights and tail lights on cars, buses and trains after dark.
         if night > 0.15 {
             use zawnabout_sim::town::Kind;
             let traffic = &world.traffic;
             let time = (game.sim.tick as f32 + game.alpha()) * zawnabout_sim::DT;
             let (head, tail) = (linear(Rgb(0xFFF2D0), 1.0), linear(Rgb(0xFF2A1A), 1.0));
-            for v in &traffic.vehicles {
+            for (i, v) in traffic.vehicles.iter().enumerate() {
                 if !matches!(v.kind, Kind::Car | Kind::Train) {
                     continue;
                 }
-                let p = traffic.pose(v, time);
+                let p = traffic.pose_of(i, time);
                 let dist = p.pos.distance(cam);
                 if dist > 600.0 {
                     continue;
@@ -2942,6 +3446,125 @@ fn light_shafts(
 const LOCAL_SHIRTS: [u32; 9] = [
     0x7FB069, 0xE07A5F, 0x3D5A80, 0xF2CC8F, 0x9C6ADE, 0x2A2E4A, 0x81B29A, 0xC8553D, 0x5B8E7D,
 ];
+
+/// A nesting cave or rock: where its gulls sit and which way they face, its mouth and the
+/// way out of it. Found a few columns a frame, so coming near never stalls a frame.
+#[derive(Default)]
+struct Nest {
+    perches: Vec<(Vec3, f32)>,
+    mouth: Vec3,
+    out: Vec3,
+    /// Columns searched so far, and the floor found in them.
+    searched: usize,
+    floors: Vec<Vec3>,
+    ready: bool,
+}
+
+/// Nest columns searched each frame, all nests together.
+const NEST_COLUMNS: usize = 16;
+
+impl Nest {
+    /// Searches up to `budget` more columns for floor inside the spot, under a roof when
+    /// it is a cave, and once all are done settles where the gulls sit.
+    fn search(
+        &mut self,
+        world: &zawnabout_sim::World,
+        spot: &crate::play::Nesting,
+        budget: &mut usize,
+    ) {
+        let (mid, r, lo, hi) = (spot.mid, spot.r, spot.lo, spot.hi);
+        let t = &world.terrain;
+        let open = |p: Vec3| t.sdf(p) > 0.4;
+        let n = (r / 2.0) as i32;
+        let side = (2 * n + 1) as usize;
+        while self.searched < side * side {
+            if *budget == 0 {
+                return;
+            }
+            let c = self.searched;
+            self.searched += 1;
+            {
+                let (i, j) = ((c % side) as i32 - n, (c / side) as i32 - n);
+                let xz = mid + Vec2::new(i as f32, j as f32) * 2.0;
+                if xz.distance(mid) > r {
+                    continue;
+                }
+                *budget -= 1;
+                // Open ground is searched only just round the ground's height.
+                let (mut y, hi) = if spot.cave {
+                    (lo.max(t.def.sea_level + 1.0), hi)
+                } else {
+                    let h = t.height(xz.x, xz.y);
+                    (h.max(t.def.sea_level + 1.0) - 1.0, h + 3.0)
+                };
+                while y < hi {
+                    let p = Vec3::new(xz.x, y, xz.y);
+                    // Flat floor: rock just under it and all round it.
+                    let floor = || {
+                        [Vec3::ZERO, Vec3::X, -Vec3::X, Vec3::Z, -Vec3::Z]
+                            .iter()
+                            .all(|d| t.sdf(p + *d * 0.8 - Vec3::Y * 1.2) < 0.2)
+                    };
+                    let roofed = || !spot.cave || (2..30).any(|k| !open(p + Vec3::Y * k as f32));
+                    if open(p) && floor() && roofed() {
+                        // Settled right down onto it.
+                        let mut q = p;
+                        while q.y > p.y - 1.5 && t.sdf(q) > 0.05 {
+                            q.y -= 0.1;
+                        }
+                        self.floors.push(q);
+                        break;
+                    }
+                    y += 1.0;
+                }
+            }
+        }
+        self.ready = true;
+        let spots = &mut self.floors;
+        let middle = spots.iter().fold(Vec3::ZERO, |a, p| a + *p) / spots.len().max(1) as f32;
+        let middle = if spots.is_empty() {
+            Vec3::new(mid.x, (lo + hi) * 0.5, mid.y)
+        } else {
+            middle + Vec3::Y
+        };
+        // The way out is the way with the longest run of open air, or up off open ground.
+        let run = |d: Vec3| (1..60).take_while(|k| open(middle + d * *k as f32)).count();
+        let out = (0..24)
+            .map(|k| {
+                let a = k as f32 / 24.0 * std::f32::consts::TAU;
+                Vec3::new(a.sin(), 0.0, a.cos())
+            })
+            .max_by_key(|d| run(*d))
+            .unwrap_or(Vec3::Z);
+        let (mouth, out) = if spot.cave {
+            (middle + out * run(out).min(40) as f32 * 0.5, out)
+        } else {
+            (middle, Vec3::Y)
+        };
+        // Near the mouth, where they can be seen, and spread out.
+        spots.sort_by(|a, b| a.distance(mouth).total_cmp(&b.distance(mouth)));
+        let mut perches: Vec<(Vec3, f32)> = Vec::new();
+        for (k, p) in spots.iter().enumerate() {
+            if perches.iter().any(|q| q.0.distance(*p) < 3.0) {
+                continue;
+            }
+            // Facing out of the cave, give or take, or any way on open ground.
+            let h = zawnabout_sim::shape::hash(k as u32 * 31 + 7);
+            let facing = if spot.cave {
+                out.x.atan2(out.z) + (h - 0.5) * 2.0
+            } else {
+                h * std::f32::consts::TAU
+            };
+            perches.push((*p, facing));
+            if perches.len() >= if spot.cave { 7 } else { 14 } {
+                break;
+            }
+        }
+        self.perches = perches;
+        self.mouth = mouth;
+        self.out = out;
+    }
+}
 
 /// Grass tufts kept around the camera: the tiles of them found so far, and this cell's
 /// tufts faded to the ring.

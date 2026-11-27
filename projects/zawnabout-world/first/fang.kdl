@@ -68,14 +68,16 @@ lake crater-lake level=775 {
 
 gorge mist-gorge w=120 {
     note "Notch in the south rim where the crater lake spills out, down to the sea."
-    p 0 200 depth=220
+    p 0 190 depth=20
+    p 20 420 depth=40
     p 50 500 depth=150
     p 0 800 depth=80
     p 100 1250 depth=30
 }
 river mist-river w=25 {
-    p 0 0
+    p 0 165
     p 0 230
+    p 20 420
     falls mist-falls h=300
     p 30 500
     p 0 800
@@ -165,6 +167,7 @@ route fang-chair-2 kind=chairlift {
 }
 road fang-road w=9 {
     note "Round the north shore from the stilt village, under the north spur and on to the cove, where the gondola goes up to the lodge."
+    p -1030 40
     p -1000 -150
     p -900 -550
     p -550 -880
@@ -197,7 +200,17 @@ dugout fang-nook-3 x=250 y=269 z=-730 facing=north r=22
 dugout fang-nook-4 x=550 y=31 z=-1185 facing=north r=22
 dugout fang-nook-5 x=-850 y=22 z=0 facing=north r=22
 dugout fang-nook-6 x=1100 y=60 z=-650 facing=east r=22
+dugout mist-cave x=28 y=350 z=470 facing=south r=30
 
+landmark ember-spring kind=hotspring x=150 y=200 z=-420 rot=0 {
+    note "A warm spring in the old lava chamber, steaming in the ember glow."
+}
+landmark ember-camp kind=campsite x=280 y=200 z=-330 rot=200 {
+    note "Cavers resting by the ember hall's spring."
+}
+landmark deep-shrooms kind=shroomfarm x=-200 y=-850 z=150 rot=40 {
+    note "Somebody grows glowing mushrooms down in the fang deep. Nobody knows who."
+}
 landmark deep-camp kind=campsite x=300 y=-800 z=300 rot=15 {
     note "A geologists' camp in the deep ember chamber."
 }

@@ -44,6 +44,8 @@ struct Walker {
     under: Option<f32>,
     /// The ground under the way, evenly from `a` to `b`, found once when the way is laid.
     ground: Vec<f32>,
+    /// From a block of flats or a tower in a city, where people are out late too.
+    city: bool,
 }
 
 /// A ski run beside a chairlift: from its top station down to its bottom one.
@@ -83,6 +85,28 @@ struct Pod {
     center: Vec2,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Act {
+    Queue,
+    Vendor,
+    Pick,
+    Bride,
+    Groom,
+    Guest,
+    /// Strumming a guitar for whoever stops to listen.
+    Busker,
+}
+
+/// One person in a scene, standing at `at` facing `face`, shuffling along `along` and
+/// back as they go.
+struct Scene {
+    at: Vec3,
+    face: f32,
+    along: Vec3,
+    seed: u32,
+    act: Act,
+}
+
 pub struct Life {
     rides: Vec<Ride>,
     /// Where someone sits fishing off the end of a pier, facing the water.
@@ -103,6 +127,18 @@ pub struct Life {
     /// Turbine hubs and the way their rotors face.
     turbines: Vec<(Vec3, Vec3)>,
     fires: Vec<Vec3>,
+    /// Each campsite's frame, for the campers on its logs.
+    camps: Vec<Mat4>,
+    /// Where pigeons peck about downtown.
+    pigeons: Vec<Vec3>,
+    /// Folk about their day at the landmarks: queues at ice cream vans, pickers in the
+    /// vines and orchards, wedding parties outside churches.
+    scenes: Vec<Scene>,
+    /// Someone waiting where they asked the dragon for their lost thing, by their own
+    /// number, so they are there when it is brought back.
+    pub waiting: std::cell::Cell<Option<(u32, Vec3)>>,
+    confetti: MeshId,
+    guitar: MeshId,
     /// Fairground wheels, rope swings and hot springs: each its landmark's frame.
     wheels: Vec<Mat4>,
     swings: Vec<Mat4>,
@@ -123,7 +159,12 @@ pub struct Life {
     steam: MeshId,
     rotor: MeshId,
     flame: MeshId,
+    /// The giant salamander curled by the ember hall's spring: where, body and head.
+    salamander: Option<Vec3>,
+    salamander_body: MeshId,
+    salamander_head: MeshId,
     gull: MeshId,
+    gull_sitting: MeshId,
     sheep: MeshId,
     cow: MeshId,
     horse: MeshId,
@@ -171,6 +212,11 @@ impl Life {
         self.gull
     }
 
+    /// A gull sitting with its wings folded.
+    pub fn gull_sitting(&self) -> MeshId {
+        self.gull_sitting
+    }
+
     /// A person seen from afar, standing in for body and head.
     pub fn person_far(&self) -> MeshId {
         self.body_far
@@ -181,7 +227,12 @@ impl Life {
     fn walker_at(&self, i: usize, time: f32, night: f32) -> Option<(Vec3, Vec2)> {
         let w = &self.walkers[i];
         let s = i as u32 * 31;
-        if night > 0.5 && hash(s + 1) < 0.7 {
+        if let Some((who, home)) = self.waiting.get()
+            && who == s
+        {
+            return Some((home, w.b - w.a));
+        }
+        if night > 0.5 && !w.city && hash(s + 1) < 0.4 {
             return None;
         }
         let len = w.a.distance(w.b);
@@ -199,6 +250,14 @@ impl Life {
         let y = w.ground[k] + (w.ground[k + 1] - w.ground[k]) * (at - k as f32);
         let bob = (time * 9.0 + s as f32).sin().abs() * 0.07;
         Some((Vec3::new(p.x, y + bob, p.y), toward))
+    }
+
+    /// Where cyclist `k` is: on the road, or stopped where they wait for the dragon.
+    fn cyclist_where(&self, r: &Ride, k: usize, time: f32) -> Vec3 {
+        match self.waiting.get() {
+            Some((who, home)) if who == cyclist_seed(k) => home,
+            _ => cyclist_at(r, k as u32 * 59, time).0,
+        }
     }
 
     /// The townsperson nearest `at` within `reach` meters, and a number that is theirs
@@ -223,9 +282,38 @@ impl Life {
                 let d = Vec2::new(p.x, p.z).distance(flat);
                 (d < reach && (p.y - at.y).abs() < 4.0).then_some((d, p, i as u32 * 31))
             })
+            .chain(
+                self.rides
+                    .iter()
+                    .enumerate()
+                    .filter(|_| night < 0.6)
+                    .map(|(k, r)| (self.cyclist_where(r, k, time), cyclist_seed(k)))
+                    .map(|(p, s)| (Vec2::new(p.x, p.z).distance(flat), p, s))
+                    .filter(|(d, p, _)| *d < reach && (p.y - at.y).abs() < 4.0),
+            )
             .min_by(|a, b| a.0.total_cmp(&b.0))
             .map(|(_, p, s)| (p, s))
     }
+}
+
+/// A cyclist's own number, kept apart from walkers'.
+fn cyclist_seed(k: usize) -> u32 {
+    (k as u32 * 59) | (1 << 30)
+}
+
+/// Where the cyclist on `r` is at `time`, by the curb, and which way they ride.
+fn cyclist_at(r: &Ride, s: u32, time: f32) -> (Vec3, Vec3) {
+    let len = r.len();
+    let u = (time * (4.0 + hash(s) * 2.0) + hash(s + 1) * len * 2.0).rem_euclid(len * 2.0);
+    let (along, back) = if u < len {
+        (u, false)
+    } else {
+        (len * 2.0 - u, true)
+    };
+    let (p, dir) = r.at(along);
+    let dir = if back { -dir } else { dir };
+    let right = Vec3::new(-dir.z, 0.0, dir.x).normalize_or(Vec3::X);
+    (p + right * r.curb, dir)
 }
 
 pub(crate) fn linear(c: Rgb) -> Vec3 {
@@ -294,7 +382,12 @@ impl Life {
         let homes: Vec<_> = world
             .buildings
             .iter()
-            .filter(|b| matches!(b.kind, Kind::House | Kind::Row))
+            .filter(|b| {
+                matches!(
+                    b.kind,
+                    Kind::House | Kind::Row | Kind::Flat | Kind::Tower | Kind::Skyscraper
+                )
+            })
             .collect();
         let mut walkers = Vec::new();
         for (i, w) in homes.windows(2).enumerate() {
@@ -309,9 +402,14 @@ impl Life {
                 Vec2::new(b.pos.x, b.pos.z) + out * (depth * 0.5 + 1.5)
             };
             let (a, b) = (door(w[0]), door(w[1]));
+            // City blocks: someone out between every pair, day and night.
+            let city = |b: &zawnabout_sim::town::Building| {
+                matches!(b.kind, Kind::Flat | Kind::Tower | Kind::Skyscraper)
+            };
+            let city = city(w[0]) && city(w[1]);
             let under = (w[0].style == zawnabout_sim::terrain::Style::Cavern)
                 .then(|| w[0].pos.y.max(w[1].pos.y) + 3.0);
-            // Cavern towns are busy at every hour, so they have twice the people.
+            // Cavern towns are busy at every hour, so a walker for every home there.
             // Only a way with nothing solid across it: no walking through walls.
             // and no sudden drop or climb, which they would float over.
             // The ground found along the way, when it is clear.
@@ -332,7 +430,7 @@ impl Life {
                 }
                 Some(ground)
             };
-            if (i % 4 == 0 || (under.is_some() && i % 2 == 0))
+            if (i % 3 == 0 || under.is_some() || city)
                 && a.distance(b) > 3.0
                 && a.distance(b) < 120.0
                 && let Some(ground) = clear(a, b)
@@ -343,8 +441,55 @@ impl Life {
                     kind: (hash(i as u32 * 17) * 3.0) as u8,
                     under,
                     ground,
+                    city,
                 });
             }
+        }
+        // Downtown, someone strolls up and down in front of each block of flats or tower,
+        // and pigeons peck about the pavement by every third.
+        let mut pigeons = Vec::new();
+        for (i, b) in homes.iter().enumerate() {
+            if !matches!(b.kind, Kind::Flat | Kind::Tower | Kind::Skyscraper)
+                || b.style == zawnabout_sim::terrain::Style::Cavern
+            {
+                continue;
+            }
+            let (f, axis) = (b.front(), b.axis);
+            let door = Vec2::new(b.pos.x, b.pos.z) + f * (b.size.z * 0.5 + 3.0);
+            let reach = (b.size.x * 0.4).clamp(4.0, 14.0);
+            let (a, e) = (door - axis * reach, door + axis * reach);
+            let n = (a.distance(e) / 0.8).ceil() as usize;
+            let ground: Option<Vec<f32>> = (0..=n)
+                .map(|k| {
+                    let p = a.lerp(e, k as f32 / n as f32);
+                    let y = world.support_still(p.x, p.y, world.terrain.height(p.x, p.y) + STEP_UP);
+                    (!world.in_building(Vec3::new(p.x, y + 1.0, p.y))
+                        && (y - world.terrain.height(p.x, p.y)).abs() < 2.0)
+                        .then_some(y)
+                })
+                .collect();
+            let Some(ground) = ground else { continue };
+            if ground.windows(2).any(|g| (g[0] - g[1]).abs() > 1.0) {
+                continue;
+            }
+            if i % 3 == 0 {
+                let spot = door + f * 3.5 + axis * reach * 0.5;
+                let y = world.support_still(spot.x, spot.y, ground[0] + STEP_UP);
+                if !world.in_building(Vec3::new(spot.x, y + 0.5, spot.y))
+                    && !world.afloat(spot.x, spot.y, y)
+                    && (y - ground[0]).abs() < 1.0
+                {
+                    pigeons.push(Vec3::new(spot.x, y, spot.y));
+                }
+            }
+            walkers.push(Walker {
+                a,
+                b: e,
+                kind: (hash(i as u32 * 29 + 5) * 3.0) as u8,
+                under: None,
+                ground,
+                city: true,
+            });
         }
         let beams: Vec<Vec3> = world
             .buildings
@@ -387,6 +532,7 @@ impl Life {
         };
         let of = |k: Kind| world.buildings.iter().filter(move |b| b.kind == k);
         let wheels = of(Kind::Ferris).map(frame).collect();
+        let camps = of(Kind::Campsite).map(frame).collect();
         let swings = of(Kind::Swing).map(frame).collect();
         let stacks = world
             .buildings
@@ -535,8 +681,24 @@ impl Life {
             steam: pool,
             turbines,
             fires,
+            camps,
+            pigeons,
+            scenes: scenes(world),
+            waiting: std::cell::Cell::new(None),
+            confetti: renderer.add_mesh(&models::confetti()),
+            guitar: renderer.add_mesh(&models::guitar()),
             rotor: renderer.add_mesh(&models::rotor()),
             flame: renderer.add_mesh(&models::flame()),
+            salamander: world
+                .buildings
+                .iter()
+                .find(|b| b.site == Some("fang/ember-spring"))
+                .map(|b| {
+                    let p = b.at(-24.0, 0.0, 10.0) + Vec3::Z * 30.0;
+                    Vec3::new(p.x, world.support_still(p.x, p.z, p.y + 25.0) - 0.4, p.z)
+                }),
+            salamander_body: renderer.add_mesh(&models::salamander_body()),
+            salamander_head: renderer.add_mesh(&models::salamander_head()),
             flocks,
             herds,
             walkers,
@@ -544,6 +706,7 @@ impl Life {
             beams,
             keepers,
             gull: renderer.add_mesh(&models::gull()),
+            gull_sitting: renderer.add_mesh(&models::gull_sitting()),
             sheep: renderer.add_mesh(&models::sheep()),
             cow: renderer.add_mesh(&models::cow()),
             horse: renderer.add_mesh(&models::horse()),
@@ -559,6 +722,27 @@ impl Life {
     }
 
     /// Everything alive near the camera this moment.
+    /// How far through a yawn the salamander is, 0 to 1, or 0 when not yawning. It only
+    /// yawns with the dragon close by, every nine seconds.
+    pub fn salamander_yawn(&self, dragon: Vec3, time: f32) -> f32 {
+        let Some(at) = self.salamander else {
+            return 0.0;
+        };
+        let u = (time / 9.0).fract();
+        if at.distance(dragon) < 45.0 && u < 0.3 {
+            u / 0.3
+        } else {
+            0.0
+        }
+    }
+
+    /// Whether the dragon is down among a flock of pigeons, scattering them.
+    pub fn pigeons_scared(&self, dragon: Vec3) -> bool {
+        self.pigeons.iter().any(|p| {
+            Vec2::new(dragon.x - p.x, dragon.z - p.z).length() < 8.0 && dragon.y - p.y < 12.0
+        })
+    }
+
     pub fn draw(
         &self,
         world: &World,
@@ -594,6 +778,83 @@ impl Life {
                     let flap = 0.35 + 0.65 * burst * (time * 9.0 + s as f32).sin();
                     let m = Mat4::from_scale_rotation_translation(
                         Vec3::new(1.0, flap, 1.0) * 1.4,
+                        Quat::from_rotation_y(heading) * Quat::from_rotation_z(0.35 * dir),
+                        pos,
+                    );
+                    draws.push((self.gull, Instance::new(m)));
+                }
+            }
+            // Geese in their V and the albatross, out on their long ways round.
+            for (i, v) in world.traffic.vehicles.iter().enumerate() {
+                let geese = v.kind == Kind::Geese;
+                if !geese && v.kind != Kind::Albatross {
+                    continue;
+                }
+                let p = world.traffic.pose_of(i, sim_time);
+                if !near(Vec2::new(p.pos.x, p.pos.z), 3000.0) {
+                    continue;
+                }
+                let fwd = Vec3::new(p.heading.sin(), 0.0, p.heading.cos());
+                let side = Vec3::new(fwd.z, 0.0, -fwd.x);
+                let slots: &[(f32, f32)] = if geese {
+                    &[
+                        (0.0, 0.0),
+                        (1.0, 1.0),
+                        (1.0, -1.0),
+                        (2.0, 2.0),
+                        (2.0, -2.0),
+                        (3.0, 3.0),
+                        (3.0, -3.0),
+                        (4.0, 4.0),
+                    ]
+                } else {
+                    &[(0.0, 0.0)]
+                };
+                for (k, &(back, out)) in slots.iter().enumerate() {
+                    let s = i as u32 * 31 + k as u32;
+                    let at = p.pos - fwd * back * 7.0
+                        + side * out * 6.0
+                        + Vec3::Y * ((time * 0.7 + k as f32).sin() * 0.4);
+                    let (scale, beat, tint) = if geese {
+                        (4.5, 5.0, Vec4::new(0.55, 0.5, 0.44, 1.0))
+                    } else {
+                        (8.0, 1.6, Vec4::ONE)
+                    };
+                    // The albatross mostly glides, a few slow beats now and then.
+                    let glide = if geese {
+                        1.0
+                    } else {
+                        ((time * 0.15 + hash(s)).sin()).max(0.0).powi(4)
+                    };
+                    let flap = 0.4 + 0.6 * glide * (time * beat + k as f32 * 0.6).sin();
+                    let m = Mat4::from_scale_rotation_translation(
+                        Vec3::new(1.0, flap, 1.0) * scale,
+                        Quat::from_rotation_y(p.heading),
+                        at,
+                    );
+                    draws.push((self.gull, Instance::tinted(m, tint)));
+                }
+            }
+            // Gulls wheel over the dolphin pod wherever it is, so it can be found from far
+            // off the way fishermen find one.
+            for (i, v) in world.traffic.vehicles.iter().enumerate() {
+                if v.kind != Kind::Dolphins {
+                    continue;
+                }
+                let pod = world.traffic.pose_of(i, sim_time).pos;
+                if !near(Vec2::new(pod.x, pod.z), 2500.0) {
+                    continue;
+                }
+                for b in 0..6u32 {
+                    let r = 9.0 + b as f32 * 2.5;
+                    let dir = if b % 2 == 0 { 1.0 } else { -1.0 };
+                    let a = time * 10.0 / r * dir + b as f32 * 1.7;
+                    let y = 14.0 + b as f32 * 3.0 + (time * 0.4 + b as f32).sin() * 2.0;
+                    let pos = pod + Vec3::new(a.cos() * r, y, a.sin() * r);
+                    let heading = (-a.sin() * dir).atan2(a.cos() * dir);
+                    let flap = 0.35 + 0.65 * (time * 8.0 + b as f32).sin();
+                    let m = Mat4::from_scale_rotation_translation(
+                        Vec3::new(1.0, flap, 1.0) * 1.6,
                         Quat::from_rotation_y(heading) * Quat::from_rotation_z(0.35 * dir),
                         pos,
                     );
@@ -756,17 +1017,16 @@ impl Life {
                     continue;
                 }
                 let s = k as u32 * 59;
-                let u =
-                    (time * (4.0 + hash(s) * 2.0) + hash(s + 1) * len * 2.0).rem_euclid(len * 2.0);
-                let (along, back) = if u < len {
-                    (u, false)
-                } else {
-                    (len * 2.0 - u, true)
-                };
-                let (p, dir) = r.at(along);
-                let dir = if back { -dir } else { dir };
-                let right = Vec3::new(-dir.z, 0.0, dir.x).normalize_or(Vec3::X);
-                let at = p + right * r.curb;
+                // Off on the dragon's back, bike left at home.
+                if riding == Some(cyclist_seed(k)) {
+                    continue;
+                }
+                let (mut at, mut dir) = cyclist_at(r, s, time);
+                if let Some((who, home)) = self.waiting.get()
+                    && who == cyclist_seed(k)
+                {
+                    (at, dir) = (home, Vec3::X);
+                }
                 if at.distance(cam) > 450.0 {
                     continue;
                 }
@@ -892,8 +1152,8 @@ impl Life {
                 draws.push((self.body, tint));
             }
             draws.push((self.heads[w.kind as usize % 3], Instance::new(m)));
-            // Underground, many carry a lantern, swinging as they go.
-            if w.under.is_some() && hash(s + 9) < 0.5 {
+            // Underground, and out after dark, many carry a lantern, swinging as they go.
+            if (w.under.is_some() || night > 0.5) && hash(s + 9) < 0.5 {
                 let swing = (time * 4.5 + s as f32).sin() * 0.06;
                 let hand = m * Mat4::from_translation(Vec3::new(0.32, 0.72 + swing, 0.12));
                 let face = Quat::from_rotation_arc(
@@ -971,6 +1231,80 @@ impl Life {
                 * Mat4::from_scale(Vec3::splat(zawnabout_sim::landmark::BLADE));
             draws.push((self.rotor, Instance::new(m)));
         }
+        // The ember hall's salamander dozes curled by the spring, breathing slow puffs of
+        // sparks. Come close and it lifts its head to watch you, eyes half open.
+        if let Some(at) = self.salamander
+            && at.distance(cam) < 500.0
+        {
+            let breath = (time * 0.5).sin();
+            const BIG: f32 = 1.7;
+            let body = Mat4::from_scale_rotation_translation(
+                Vec3::new(BIG, BIG * (1.0 + breath * 0.03), BIG),
+                Quat::IDENTITY,
+                at,
+            );
+            draws.push((self.salamander_body, Instance::new(body)));
+            // The neck, at the start of the ring, and which way it would face asleep.
+            let a = -0.55f32;
+            let neck = at + Vec3::new(a.cos() * 8.0, 1.6, a.sin() * 8.0) * BIG;
+            let rest = Vec2::new(a.sin(), -a.cos());
+            let to = Vec2::new(dragon.x - neck.x, dragon.z - neck.z);
+            let near_by = to.length() < 70.0 && (dragon.y - neck.y).abs() < 30.0;
+            let rest_yaw = rest.x.atan2(rest.y);
+            let look = if near_by {
+                let want = to.x.atan2(to.y);
+                rest_yaw + wrap_angle(want - rest_yaw).clamp(-1.2, 1.2)
+            } else {
+                rest_yaw + (time * 0.05).sin() * 0.15
+            };
+            let lift = if near_by { 1.2 } else { 0.0 };
+            // Very close, it gives a great slow yawn now and then, head thrown back.
+            let yawn = self.salamander_yawn(dragon, time);
+            let head = Mat4::from_scale_rotation_translation(
+                Vec3::splat(BIG),
+                Quat::from_rotation_y(look)
+                    * Quat::from_rotation_x(-lift * 0.2 - (yawn * PI).sin() * 0.6),
+                neck + Vec3::Y * (lift + breath * 0.1) * BIG,
+            );
+            draws.push((self.salamander_head, Instance::new(head)));
+            // The yawn ends in a big lazy plume of flame.
+            if yawn > 0.5 {
+                let u = (yawn - 0.5) / 0.5;
+                let nose = (head * Vec4::new(0.0, 0.6, 4.2, 1.0)).truncate();
+                for j in 0..8 {
+                    let up = Vec3::new(
+                        (j as f32 * 2.1).sin() * 1.2 * u,
+                        u * 9.0 + j as f32 * 0.9,
+                        (j as f32 * 1.3).cos() * 1.2 * u,
+                    );
+                    let m = Mat4::from_scale_rotation_translation(
+                        Vec3::splat(1.6 * (1.0 - u * 0.7)),
+                        Quat::from_rotation_y(time * 2.0 + j as f32),
+                        nose + up,
+                    );
+                    fx.push((self.flame, Instance::new(m)));
+                }
+            }
+            // A puff of sparks from the nostrils at the end of each breath out.
+            let puff = (time * 0.5 / TAU).fract();
+            if puff < 0.25 {
+                let u = puff / 0.25;
+                let nose = (head * Vec4::new(0.0, 0.4, 3.9, 1.0)).truncate();
+                for j in 0..4 {
+                    let drift = Vec3::new(
+                        (j as f32 * 2.1).sin() * 0.6,
+                        u * 3.0 + j as f32 * 0.3,
+                        (j as f32 * 1.3).cos() * 0.6,
+                    );
+                    let m = Mat4::from_scale_rotation_translation(
+                        Vec3::splat(0.5 * (1.0 - u)),
+                        Quat::from_rotation_y(time + j as f32),
+                        nose + drift,
+                    );
+                    fx.push((self.flame, Instance::new(m)));
+                }
+            }
+        }
         for (k, fire) in self.fires.iter().enumerate() {
             if fire.distance(cam) > 1500.0 {
                 continue;
@@ -984,6 +1318,137 @@ impl Life {
                     *fire + Vec3::new((j as f32 - 1.0) * 0.25, 0.0, 0.0),
                 );
                 fx.push((self.flame, Instance::new(m)));
+            }
+        }
+        // Pigeons peck about the city pavements by day, and flutter up out of the way
+        // when the dragon comes down among them.
+        if night < 0.6 {
+            for (i, mid) in self.pigeons.iter().enumerate() {
+                if !near(Vec2::new(mid.x, mid.z), 160.0) {
+                    continue;
+                }
+                let s = i as u32 * 7 + 3;
+                for j in 0..5u32 {
+                    let a = hash(s + j) * TAU;
+                    let r = 0.5 + hash(s + j + 20) * 1.5;
+                    let at = *mid + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
+                    let off = Vec2::new(dragon.x - at.x, dragon.z - at.z).length();
+                    let scare = ((9.0 - off) / 5.0).clamp(0.0, 1.0)
+                        * (1.0 - ((dragon.y - at.y - 8.0) / 8.0).clamp(0.0, 1.0));
+                    let grey = Vec4::new(0.55, 0.57, 0.62, 1.0);
+                    if scare > 0.0 {
+                        let up = Vec3::new(a.cos(), 0.0, a.sin()) * scare * 3.0
+                            + Vec3::Y * (scare * 4.0 + (time * 14.0 + j as f32).sin() * 0.1);
+                        let m = Mat4::from_scale_rotation_translation(
+                            Vec3::splat(0.3),
+                            Quat::from_rotation_y(a),
+                            at + up,
+                        );
+                        draws.push((self.gull, Instance::tinted(m, grey)));
+                    } else {
+                        // Peck, peck, look about.
+                        let turn = a + (time * 0.4 + j as f32).sin() * 1.2;
+                        let peck =
+                            (time * 3.0 + hash(s + j + 40) * 9.0).sin().max(0.0).powi(4) * 0.5;
+                        let m = Mat4::from_scale_rotation_translation(
+                            Vec3::splat(0.6),
+                            Quat::from_rotation_y(turn) * Quat::from_rotation_x(peck),
+                            at,
+                        );
+                        draws.push((self.gull_sitting, Instance::tinted(m, grey)));
+                    }
+                }
+            }
+        }
+        // Queues, pickers and wedding parties. All of them are about by day only.
+        if night < 0.4 {
+            for sc in &self.scenes {
+                if sc.at.distance(cam) > 260.0 {
+                    continue;
+                }
+                let s = sc.seed;
+                let t = time + hash(s) * 40.0;
+                let shuffle = (t * 0.07).sin();
+                let at = sc.at + sc.along * shuffle;
+                let mut turn = sc.face;
+                let mut bend = 0.0;
+                match sc.act {
+                    // Stooped over the vines, straightening now and then.
+                    Act::Pick => {
+                        bend = 0.25 + (t * 0.9).sin().max(0.0) * 0.45;
+                        if sc.along != Vec3::ZERO && (t * 0.07).cos() < 0.0 {
+                            turn += PI;
+                        }
+                    }
+                    Act::Queue | Act::Guest => turn += (t * 0.5).sin() * 0.25,
+                    // Swaying to the tune.
+                    Act::Busker => turn += (time * 2.2).sin() * 0.12,
+                    _ => {}
+                }
+                let m = Mat4::from_rotation_translation(
+                    Quat::from_rotation_y(turn) * Quat::from_rotation_x(bend),
+                    at,
+                );
+                let tint = match sc.act {
+                    Act::Bride => Vec3::splat(1.0),
+                    Act::Groom => Vec3::new(0.12, 0.13, 0.18),
+                    Act::Vendor => Vec3::new(1.0, 0.55, 0.7),
+                    _ => linear(SHIRTS[(hash(s + 3) * 8.0) as usize % 8]),
+                };
+                draws.push((self.body, Instance::tinted(m, tint.extend(1.0))));
+                draws.push((self.heads[(s % 3) as usize], Instance::new(m)));
+                if sc.act == Act::Busker {
+                    let strum = (time * 9.0).sin() * 0.04;
+                    let g = m * Mat4::from_rotation_translation(
+                        Quat::from_rotation_z(0.9 + strum),
+                        Vec3::new(0.05, 1.05, 0.32),
+                    );
+                    draws.push((self.guitar, Instance::new(g)));
+                }
+                // Every few seconds the guests throw a shower of confetti over the couple.
+                if sc.act == Act::Bride {
+                    let u = (time / 5.0 + hash(s + 1)).fract();
+                    for k in 0..18u32 {
+                        let a = k as f32 * 2.4 + hash(s + k) * 2.0;
+                        let r = 0.4 + hash(s + k + 50) * 2.2;
+                        let fall = 3.6 - u * 4.0 + (hash(s + k + 90) - 0.5);
+                        if fall < 0.05 {
+                            continue;
+                        }
+                        let p = at + Vec3::new(a.cos() * r, fall, a.sin() * r);
+                        let spin = Quat::from_rotation_y(time * 3.0 + a)
+                            * Quat::from_rotation_x(time * 5.0 + k as f32);
+                        let col = linear(SHIRTS[(k as usize + 2) % 8]);
+                        draws.push((
+                            self.confetti,
+                            Instance::tinted(
+                                Mat4::from_rotation_translation(spin, p),
+                                col.extend(1.0),
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        // Campers sit on the logs round each campfire, warming their hands and chatting.
+        for (k, f) in self.camps.iter().enumerate() {
+            if f.w_axis.truncate().distance(cam) > 300.0 {
+                continue;
+            }
+            for (j, (x, z)) in [(-0.5f32, 2.6f32), (0.7, -2.6), (-0.6, -2.6)]
+                .into_iter()
+                .enumerate()
+            {
+                let s = k as u32 * 41 + j as u32 + 7;
+                let lean = (time * 0.6 + s as f32).sin() * 0.05;
+                let seat = *f
+                    * Mat4::from_rotation_translation(
+                        Quat::from_rotation_y((-x).atan2(-z) + lean),
+                        Vec3::new(x, 0.45 - 0.8, z),
+                    );
+                let shirt = linear(SHIRTS[(hash(s) * 8.0) as usize % 8]);
+                draws.push((self.body, Instance::tinted(seat, shirt.extend(1.0))));
+                draws.push((self.heads[(s % 3) as usize], Instance::new(seat)));
             }
         }
         // Fairground wheels turn slowly on the sim's clock. Their cars are vehicles, which
@@ -1116,4 +1581,127 @@ impl Life {
             }
         }
     }
+}
+
+/// An angle brought into -pi..pi.
+fn wrap_angle(a: f32) -> f32 {
+    (a + PI).rem_euclid(TAU) - PI
+}
+
+/// The people of each scene, placed once on the ground where they stand.
+fn scenes(world: &World) -> Vec<Scene> {
+    let mut out = Vec::new();
+    let put = |b: &zawnabout_sim::town::Building,
+               (x, z): (f32, f32),
+               face: Vec2,
+               along: f32,
+               act: Act,
+               seed: u32|
+     -> Scene {
+        let p = b.at(x, 0.0, z);
+        let y = world.support_still(p.x, p.z, p.y + 4.0);
+        let f = b.at(face.x, 0.0, face.y) - b.pos;
+        let a = b.at(along, 0.0, 0.0) - b.pos;
+        Scene {
+            at: Vec3::new(p.x, y, p.z),
+            face: f.x.atan2(f.z),
+            along: Vec3::new(a.x, 0.0, a.z),
+            seed,
+            act,
+        }
+    };
+    let mut churches = 0;
+    for (i, b) in world.buildings.iter().enumerate() {
+        let s = i as u32 * 97;
+        match b.kind {
+            // Three or four waiting their turn at the hatch, and the one serving.
+            Kind::IceCream => {
+                for k in 0..4 {
+                    let z = 2.8 + k as f32 * 1.0;
+                    out.push(put(b, (-0.5, z), Vec2::NEG_Y, 0.0, Act::Queue, s + k));
+                }
+                let p = b.at(-0.5, 0.0, 0.9);
+                out.push(Scene {
+                    at: Vec3::new(p.x, b.pos.y + 1.0, p.z),
+                    face: {
+                        let f = b.at(0.0, 0.0, 1.0) - b.pos;
+                        f.x.atan2(f.z)
+                    },
+                    along: Vec3::ZERO,
+                    seed: s + 9,
+                    act: Act::Vendor,
+                });
+            }
+            // Pickers working along the rows of vines.
+            Kind::Vineyard => {
+                for (k, r) in [0u32, 2, 4, 6, 8, 9].into_iter().enumerate() {
+                    let z = -36.0 + r as f32 * 8.0;
+                    let x = -30.0 + hash(s + r) * 50.0;
+                    out.push(put(b, (x, z), Vec2::X, 12.0, Act::Pick, s + k as u32));
+                }
+            }
+            // Pickers under the apple trees, reaching in.
+            Kind::Orchard => {
+                for (k, (i, j)) in [(1u32, 1u32), (3, 2), (4, 0), (2, 4)]
+                    .into_iter()
+                    .enumerate()
+                {
+                    let (x, z) = (-30.0 + i as f32 * 12.0, -24.0 + j as f32 * 12.0);
+                    out.push(put(b, (x - 3.2, z), Vec2::X, 0.0, Act::Pick, s + k as u32));
+                }
+            }
+            // Diners round the tables of a skyscraper's roof restaurant.
+            Kind::Skyscraper if crate::town_mesh::rooftop_kind(b.seed) == 0 => {
+                let (w, d) = (b.size.x, b.size.z);
+                let y = b.pos.y + b.size.y + 0.12;
+                for (k, (x, z)) in crate::town_mesh::rooftop_tables(w, d)
+                    .into_iter()
+                    .enumerate()
+                {
+                    for (j, side) in [-1.0f32, 1.0].into_iter().enumerate() {
+                        let p = b.at(x + side * 1.1, 0.0, z);
+                        let f = b.at(-side, 0.0, 0.0) - b.pos;
+                        out.push(Scene {
+                            at: Vec3::new(p.x, y, p.z),
+                            face: f.x.atan2(f.z),
+                            along: Vec3::ZERO,
+                            seed: s + (k * 2 + j) as u32,
+                            act: Act::Guest,
+                        });
+                    }
+                }
+            }
+            // A busker at the edge of every market square and by fountains, a few
+            // stopped to listen.
+            Kind::Market | Kind::Fountain => {
+                let r = if b.kind == Kind::Market { 25.0 } else { 7.0 };
+                out.push(put(b, (r, 0.0), Vec2::NEG_X, 0.0, Act::Busker, s));
+                for k in 0..3u32 {
+                    let a = -0.8 + k as f32 * 0.8;
+                    let (x, z) = (r - a.cos() * 3.5, a.sin() * 3.5);
+                    let face = Vec2::new(r - x, -z);
+                    out.push(put(b, (x, z), face, 0.0, Act::Queue, s + 1 + k));
+                }
+            }
+            // A wedding outside every other church: the couple on the step, guests in a
+            // ring before them.
+            Kind::Church => {
+                churches += 1;
+                if churches % 2 != 1 {
+                    continue;
+                }
+                let door = b.size.x * 0.5 + 8.0;
+                out.push(put(b, (door, -0.6), Vec2::X, 0.0, Act::Bride, s));
+                out.push(put(b, (door, 0.6), Vec2::X, 0.0, Act::Groom, s + 1));
+                for k in 0..9u32 {
+                    let a = -1.1 + k as f32 * 0.275;
+                    let (x, z) = (door + a.cos() * 6.0, a.sin() * 6.0);
+                    let face = Vec2::new(door - x, -z);
+                    out.push(put(b, (x, z), face, 0.0, Act::Guest, s + 2 + k));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
 }

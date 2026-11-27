@@ -45,6 +45,15 @@ expect flown going-down
 ride speedboat
 wait 12
 expect flown speedboat-surfer
+ride dolphins
+wait 12
+expect flown dolphin-rider
+ride parasail
+wait 12
+expect flown parasail-perch
+ride waterski
+wait 12
+expect flown water-skier
 ride airliner
 wait 12
 expect flown jet-setter

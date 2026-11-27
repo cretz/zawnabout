@@ -12,6 +12,8 @@ use zawnabout_sim::shape::hash;
 use crate::models;
 use crate::render::{Instance, MeshId, Renderer};
 
+/// Where a whale always swims, out between the home island and the twins.
+pub const WHALE_ROAD: Vec2 = Vec2::new(-1480.0, -3100.0);
 /// How long a whale's breach lasts, as a share of its 60 s round.
 const BREACH: f32 = 0.09;
 
@@ -122,11 +124,38 @@ impl SeaLife {
                 }
             }
         }
+        // The whale road between the home island and the twins always has a whale, for
+        // its postcard.
+        s.whales.push(Spot {
+            at: WHALE_ROAD,
+            level: sea,
+        });
         s
     }
 
     /// Everything on the water near the camera this moment.
-    pub fn draw(&self, cam: Vec3, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
+    /// Where the whale nearest `at` is swimming at `time`, if one is in sight: within a
+    /// few hundred meters.
+    pub fn whale_near(&self, at: Vec3, time: f32) -> Option<Vec3> {
+        self.whales
+            .iter()
+            .enumerate()
+            .map(|(k, w)| {
+                let s = k as u32 * 71;
+                let cycle = time / 60.0 + hash(s);
+                let (phase, round) = (cycle.fract(), cycle.floor() as u32);
+                let a = hash(s + round) * TAU;
+                let dir = Vec2::new(a.cos(), a.sin());
+                let start =
+                    w.at + Vec2::new(hash(s + round * 3) - 0.5, hash(s + round * 5) - 0.5) * 120.0;
+                let p = start + dir * (phase / 0.35).min(1.0) * 60.0;
+                Vec3::new(p.x, w.level, p.y)
+            })
+            .filter(|p| p.distance(at) < 400.0)
+            .min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
+    }
+
+    pub fn draw(&self, cam: Vec3, dragon: Vec3, time: f32, draws: &mut Vec<(MeshId, Instance)>) {
         let near = |p: Vec2, r: f32| p.distance(Vec2::new(cam.x, cam.z)) < r;
         let splash = |draws: &mut Vec<(MeshId, Instance)>, at: Vec3, size: f32| {
             let m = Mat4::from_scale_rotation_translation(
@@ -197,7 +226,11 @@ impl SeaLife {
                 let u = phase / 0.35;
                 let p = start + dir * u * 60.0;
                 let rise = (u * PI).sin().min(0.25) * 4.0;
-                let y = w.level - 1.6 + rise;
+                // A dragon coming right up to her: she slips gently under, out of the way.
+                let off = Vec2::new(dragon.x - p.x, dragon.z - p.y).length();
+                let shy = ((16.0 - off) / 10.0).clamp(0.0, 1.0)
+                    * (1.0 - ((dragon.y - w.level - 10.0) / 10.0).clamp(0.0, 1.0));
+                let y = w.level - 1.6 + rise - shy * 7.0;
                 let m = Mat4::from_scale_rotation_translation(
                     Vec3::ONE,
                     Quat::from_rotation_y(heading)

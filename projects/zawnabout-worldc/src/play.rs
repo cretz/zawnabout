@@ -104,6 +104,9 @@ const NODES: &[(&str, &[Prop])] = &[
             ("z", 'n', true),
             ("r", 'n', false),
             ("aim", 'n', false),
+            ("face", 'n', false),
+            ("high", 'n', false),
+            ("nest", 's', false),
         ],
     ),
     (
@@ -146,6 +149,7 @@ const NODES: &[(&str, &[Prop])] = &[
             ("prize-kind", 's', true),
             ("prize-name", 's', true),
             ("prize-story", 's', true),
+            ("nest", 's', false),
         ],
     ),
     (
@@ -284,8 +288,8 @@ pub const KINDS: &[&str] = &[
 
 /// Stunt kinds: through a gate, a move, or a ride.
 const STUNTS: &[&str] = &[
-    "gap", "near", "dive", "comet", "skim", "glide", "high", "deep", "spin", "cling", "splash",
-    "fast", "ride",
+    "gap", "near", "perch", "dive", "shaft", "comet", "skim", "glide", "high", "deep", "spin",
+    "cling", "splash", "fast", "ride",
 ];
 
 /// Vehicles to ride or race, as the sim's kinds in lower case.
@@ -305,6 +309,9 @@ const VEHICLES: &[&str] = &[
     "sailboat",
     "dropring",
     "speedboat",
+    "dolphins",
+    "parasail",
+    "waterski",
     "motoryacht",
     "supply",
     "airliner",
@@ -674,7 +681,7 @@ pub fn compile(path: &Path) -> Result<String, String> {
             "postcard" => {
                 let _ = writeln!(
                     cards,
-                    "    PostcardDef {{ id: {id:?}, name: {:?}, line: {:?}, island: {:?}, x: {:.2}, y: {}, z: {:.2}, r: {:.2}, aim: {:.2} }},",
+                    "    PostcardDef {{ id: {id:?}, name: {:?}, line: {:?}, island: {:?}, x: {:.2}, y: {}, z: {:.2}, r: {:.2}, aim: {:.2}, face: {}, high: {}, nest: {:?} }},",
                     text(node, "name").unwrap_or_default(),
                     text(node, "line").unwrap_or_default(),
                     text(node, "island").unwrap_or_default(),
@@ -683,6 +690,9 @@ pub fn compile(path: &Path) -> Result<String, String> {
                     z.unwrap_or(0.0),
                     num(node, "r").unwrap_or(30.0),
                     num(node, "aim").unwrap_or(0.0),
+                    opt(num(node, "face")),
+                    opt(num(node, "high")),
+                    text(node, "nest").unwrap_or_default(),
                 );
             }
             "stunt" => {
@@ -696,7 +706,7 @@ pub fn compile(path: &Path) -> Result<String, String> {
                 } else if kind == "ride" && !VEHICLES.contains(&vehicle.as_str()) {
                     err(format!("unknown vehicle {vehicle}"));
                 }
-                let g = if kind == "gap" || kind == "near" {
+                let g = if ["gap", "near", "perch"].contains(&kind.as_str()) {
                     match gate(node) {
                         Ok(g) => format!("Some({g})"),
                         Err(e) => {
@@ -745,12 +755,13 @@ pub fn compile(path: &Path) -> Result<String, String> {
                 });
                 let _ = writeln!(
                     courses,
-                    "    CourseDef {{ id: {id:?}, name: {:?}, line: {:?}, rumor: {:?}, gold: {}, prize: {p}, gates: &[{}] }},",
+                    "    CourseDef {{ id: {id:?}, name: {:?}, line: {:?}, rumor: {:?}, gold: {}, prize: {p}, gates: &[{}], nest: {:?} }},",
                     text(node, "name").unwrap_or_default(),
                     text(node, "line").unwrap_or_default(),
                     text(node, "rumor").unwrap_or_default(),
                     num(node, "gold").unwrap_or(0.0) as u32,
                     gates.join(", "),
+                    text(node, "nest").unwrap_or_default(),
                 );
                 errors.extend(bad);
             }

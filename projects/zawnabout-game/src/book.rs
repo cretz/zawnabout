@@ -93,6 +93,13 @@ pub enum CardKind {
     Chore,
     /// Local `i` asks a favor.
     Offer(usize),
+    /// Local `i` reminds you of their favor under way, which you can let go.
+    Reminder(usize),
+    /// Asked in flight with nobody aboard: the favor being looked for, and how to let
+    /// it go if it can be.
+    Favor(Option<crate::play::LetGo>),
+    /// A driver offers a race to where their car is going.
+    Drive,
     /// Local `i` sees their lost thing in the hoard.
     Return(usize),
     /// Someone asks for help with story `s`.
@@ -326,6 +333,12 @@ pub enum Do {
     RiderMap,
     /// Let the passenger off here.
     HopOff,
+    /// Let local `i`'s favor go.
+    Drop(usize),
+    /// Stop looking for the favor shown.
+    StopLooking(crate::play::LetGo),
+    /// Race the car whose driver just offered.
+    CarRace,
 }
 
 /// Where the game's source code lives.
@@ -513,7 +526,10 @@ impl Book {
             CardKind::Offer(i) if yes => vec![Do::Accept(i)],
             CardKind::Return(i) if yes => vec![Do::GiveBack(i)],
             CardKind::Story(s) if yes => vec![Do::Begin(s)],
-            CardKind::Rider if yes => vec![Do::RiderMap],
+            CardKind::Rider | CardKind::Favor(_) if yes => vec![Do::RiderMap],
+            CardKind::Reminder(_) if yes => vec![],
+            CardKind::Drive if yes => vec![Do::CarRace],
+            CardKind::Reminder(i) => vec![Do::Drop(i)],
             CardKind::Kin(i, ask) if yes && ask != KinAsk::Chat => vec![Do::Kin(i, ask)],
             _ => vec![],
         }
@@ -523,6 +539,8 @@ impl Book {
     fn card_alt(&mut self) -> Vec<Do> {
         match self.cards.remove(0).kind {
             CardKind::Rider => vec![Do::HopOff],
+            CardKind::Favor(Some(what)) => vec![Do::StopLooking(what)],
+            CardKind::Reminder(_) => vec![Do::RiderMap],
             _ => vec![],
         }
     }
@@ -533,7 +551,14 @@ impl Book {
             return Some(match code {
                 "Enter" | "NumpadEnter" | "Space" => self.card_answer(true),
                 "Escape" | "Backspace" | "KeyP" => self.card_answer(false),
-                "KeyH" if self.cards[0].kind == CardKind::Rider => self.card_alt(),
+                "KeyH"
+                    if matches!(
+                        self.cards[0].kind,
+                        CardKind::Rider | CardKind::Favor(Some(_)) | CardKind::Reminder(_)
+                    ) =>
+                {
+                    self.card_alt()
+                }
                 _ => vec![],
             });
         }
@@ -2227,6 +2252,21 @@ fn draw_card(d: &mut Draw, card: &Card, ui: &Ui, hits: &mut Vec<(Vec2, Vec2, Hit
         CardKind::Carry => &[("Got it!", Hit::Yes)],
         CardKind::Chore => &[("Sure!", Hit::Yes), ("Not right now", Hit::No)],
         CardKind::Offer(_) => &[("I'll help!", Hit::Yes), ("Maybe later", Hit::No)],
+        CardKind::Reminder(_) => &[
+            ("I'm on it!", Hit::Yes),
+            ("Show me", Hit::Alt),
+            ("Never mind", Hit::No),
+        ],
+        CardKind::Drive => &[
+            ("Race you there!", Hit::Yes),
+            ("Just riding along", Hit::No),
+        ],
+        CardKind::Favor(Some(_)) => &[
+            ("Show me", Hit::Yes),
+            ("Stop looking", Hit::Alt),
+            ("Keep going", Hit::No),
+        ],
+        CardKind::Favor(None) => &[("Show me", Hit::Yes), ("Keep going", Hit::No)],
         CardKind::Return(_) => &[("Give it back", Hit::Yes), ("Keep it for now", Hit::No)],
         CardKind::Story(_) => &[("I'll light them!", Hit::Yes), ("Maybe later", Hit::No)],
         CardKind::Rider => &[
@@ -2315,11 +2355,13 @@ pub(crate) fn draw_toast(
 ) {
     let f = crate::font::get();
     let (w, h) = (d.size.x, d.size.y);
-    let px = (h / 34.0).min(w / 34.0).clamp(11.0, 26.0);
+    // A phone held upright is narrow but sharp: the width sets the size there, so the
+    // words stay readable, with a row more to fit them.
+    let px = (h / 34.0).min(w / 26.0).clamp(11.0, 40.0);
     let small = px * 0.9;
-    // Who or what over the line, the line wrapped to at most three rows.
+    // Who or what over the line, the line wrapped to at most four rows.
     let most = (w * 0.7).max(px * 16.0).min(w - 24.0 - px * 2.0);
-    let lines: Vec<String> = f.wrap(small, text, most).into_iter().take(3).collect();
+    let lines: Vec<String> = f.wrap(small, text, most).into_iter().take(4).collect();
     let tw = lines
         .iter()
         .map(|l| f.measure(small, l))

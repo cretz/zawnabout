@@ -83,6 +83,14 @@ spire lighthouse-rock x=1500 z=-3800 h=30 r=40 top=flat {
     note "Lone lighthouse between the twins and the crescent."
 }
 
+spire wanderer-reef x=2050 z=1100 h=-3 r=55 top=flat {
+    note "A reef hidden just under the empty middle of the sea, where a great old ship ran aground long ago."
+}
+spire wanderer-rocks x=2005 z=1140 h=2 r=9
+site old-wanderer kind=galleon x=2050 z=1100 {
+    note "The Old Wanderer, a three masted ship stuck fast on the reef. Her lantern still glows at night."
+}
+
 site wreck-shoal kind=wreck x=-4300 z=-800 {
     note "Shallow reef with an old wreck, between the atoll and home."
 }
@@ -95,9 +103,14 @@ caves sunken {
     note "Isolated. Only reachable through the drowned stack."
     mouth stack-hole kind=stack w=30 hidden=#true light=#true {
         p 1030 20 4930
-        p 1010 -40 4900
-        p 960 -180 4820
-        p 900 -330 4700
+        p 995 -100 4890
+        p 1010 -160 4760
+        p 1120 -190 4660
+        p 1050 -270 4540
+        p 930 -340 4560
+    }
+    cavern stack-grotto x=1120 y=-190 z=4660 w=110 h=50 d=90 rot=30 shape=hall glow=0.3 decor=crystal {
+        note "A crystal grotto halfway down the stack hole, to rest in before the long glide on down."
     }
     cavern sunken-hall x=820 y=-480 z=4500 w=1500 h=360 d=1200 rot=25 shape=dome glow=0.25 decor=crystal {
         spout sunken-spout x=600 z=4400 w=11
@@ -107,7 +120,19 @@ caves sunken {
         beacon sunken-beacon x=950 y=-600 z=4600
         ruin sunken-statue kind=statue x=1000 y=-560 z=4650
         ruin sunken-columns kind=columns x=880 y=-560 z=4700
+        site sunken-ship kind=wreck x=600 y=-590 z=4330
     }
+    mouth sea-chimney kind=stack w=26 hidden=#true light=#true {
+        note "The other way out: a chimney up through a little rock off to the west."
+        p 560 -340 4330
+        p 680 -260 4230
+        p 570 -170 4120
+        p 480 -110 4165
+        p 450 40 4200
+    }
+}
+spire sunken-chimney x=450 z=4200 h=40 r=70 top=flat {
+    note "A flat little rock with a hole in the top, straight down to the sunken hall."
 }
 
 // The long road under the sea joining the home caves to the crescent caves.
@@ -169,6 +194,48 @@ route grand-cruise kind=cruise {
     p -3000 3600
     p -2400 4560
     p -360 3840
+}
+route geese-skein kind=geese {
+    note "A skein of geese in a V on a long way round the coasts and over the lagoon. Tap them to fly alongside."
+    p -2600 200 2500
+    p -600 200 2900
+    p 1200 200 2500
+    p 2500 200 1500
+    p 2700 230 -600
+    p 2200 240 -1300
+    p 500 220 -1600
+    p -1000 220 -1900
+    p -3400 220 -1700
+    p -4300 200 500
+    p -3900 200 1800
+    p -2600 200 2500
+}
+route wanderer-albatross kind=albatross {
+    note "A lone albatross gliding round the empty sea by the Old Wanderer."
+    p 1100 70 300
+    p 3000 70 400
+    p 2900 70 1700
+    p 1000 70 1900
+    p 1100 70 300
+}
+route dolphin-pod kind=dolphins {
+    note "A pod of dolphins swimming the long way round the islands, the other way to the liner. Land among them and ride along."
+    p -385 4109
+    p -1450 5050
+    p -2568 4879
+    p -3210 3852
+    p -5008 1798
+    p -5008 -514
+    p -3082 -1798
+    p -385 -1284
+    p 578 -3210
+    p 770 -4879
+    p 4879 -4751
+    p 5778 -3210
+    p 5136 0
+    p 1798 0
+    p 1541 2440
+    p -385 4109
 }
 route seaplane-hop kind=seaplane {
     note "Crescent lagoon to home harbor to the atoll and back, round the coasts."
@@ -410,7 +477,7 @@ landmark stonehold-library kind=library x=-1400 z=-4250 rot=0 {
 landmark moon-police kind=police x=1700 z=-1350 rot=-44 {
     note "Moonharbor's police station, patrol cars out front."
 }
-landmark harbor-police kind=police x=-1650 z=1660 rot=10 {
+landmark harbor-police kind=police x=-1645 z=1652 rot=280 {
     note "Kettle Harbor's police station by the canal."
 }
 landmark south-gas kind=gasstation x=3100 z=-675 rot=0 {
@@ -471,6 +538,39 @@ landmark west-farm kind=farm x=-2980 z=1480 rot=-15 {
 }
 landmark brook-farm kind=farm x=-2900 z=2080 rot=25 {
     note "A farm down toward the south shore."
+}
+landmark poppy-vineyard kind=vineyard x=1250 z=-2790 rot=-20 {
+    note "Vines on the dry northwest arm of the crescent, poppies all round them."
+}
+landmark poppy-hives kind=beehives x=1455 z=-2860 rot=30 {
+    note "Beehives among the poppies."
+}
+landmark poppy-picnic kind=picnic x=1520 z=-2770 rot=-40 {
+    note "A picnic spot looking out over the poppy field."
+}
+landmark meadow-vineyard kind=vineyard x=-2760 z=1900 rot=15 {
+    note "Rows of vines between the farms, a little stone winery at the end, crates of grapes waiting."
+}
+landmark meadow-orchard kind=orchard x=-2750 z=1610 rot=-5 {
+    note "An apple orchard, ladders up the trees at picking time."
+}
+landmark launch-site kind=launchpad x=-3600 z=1750 rot=0 {
+    note "Out on the empty west plateau, far from everyone: a great rocket on its pad, ready to go."
+}
+landmark needle-temple kind=temple x=-4183 z=3927 rot=0 {
+    note "A pagoda on the Needles' high top, prayer flags strung out from its spire."
+}
+landmark fang-shrine kind=shrine x=2881 z=2592 rot=0 {
+    note "A tiny shrine by the north shore road, flowers left at its foot."
+}
+landmark spur-shrine kind=shrine x=-660 z=1215 rot=0 {
+    note "A tiny shrine where the spur road starts to climb."
+}
+landmark harbor-icecream kind=icecream x=-1340 z=1915 rot=200 {
+    note "An ice cream van parked up by the harbor beach, always a queue."
+}
+landmark moon-icecream kind=icecream x=2010 z=-1125 rot=40 {
+    note "An ice cream van on Moonharbor's beach."
 }
 landmark tidewater-port kind=port x=235 z=-4150 rot=90 {
     note "Tidewater's container port. Its cranes reach out over the water."
@@ -688,4 +788,119 @@ route lagoon-supply kind=supply {
     p 2700 -1500
     p 2330 -1330
     p 2120 -1170
+}
+
+// More to find on the high ground and the beaches, from the 2026-11-14 notes: camps, a
+// treehouse, lookouts where paragliders take off, grand houses with a view, and a day
+// at the beach below Kettle Light.
+landmark plateau-camp kind=campsite x=-3530 z=790 rot=40 {
+    note "Hikers' camp in the plateau pines, tents round a fire."
+}
+landmark plateau-treehouse kind=treehouse x=-3530 z=470 rot=200 {
+    note "A second treehouse in the plateau pines, rope ladder and all."
+}
+landmark woods-treehouse kind=treehouse x=-1080 z=920 rot=60 {
+    note "A treehouse in the tall woods below Terrace Hill."
+}
+landmark plateau-hives kind=beehives x=-3130 z=550 rot=10
+landmark plateau-picnic kind=picnic x=-3610 z=550 rot=80
+landmark plateau-scope kind=telescope x=-3130 z=910 rot=0 {
+    note "A little observatory dish on the plateau, pointed at the stars."
+}
+landmark plateau-lookout kind=lookout x=-3250 z=740 rot=30 {
+    note "A fire lookout over the plateau pines. Paragliders take off from the top."
+}
+landmark plateau-villa kind=mansion x=-3000 z=150 rot=250 {
+    note "A grand villa on the plateau's edge, its pool looking out to sea."
+}
+landmark plateau-manor kind=mansion x=-2600 z=100 rot=200 {
+    note "The plateau manor, with its gazebo and its fountain on the drive."
+}
+landmark spine-manor kind=mansion x=-800 z=-175 rot=150 {
+    note "A rich old manor high on the spine, its windows looking down both sides of the island."
+}
+landmark spine-villa kind=mansion x=-350 z=-25 rot=60 {
+    note "A white villa on the spine's sunny shoulder, with a pool that seems to spill into the sky."
+}
+landmark spine-lookout kind=lookout x=-496 z=-229 rot=20 {
+    note "A lookout on the high spine. Paragliders spiral down from here all day."
+}
+landmark spine-cairns kind=cairns x=-456 z=-189
+landmark spine-camp kind=campsite x=-536 z=-269 rot=110 {
+    note "A mountain camp on the spine, the whole island below."
+}
+landmark twins-manor kind=mansion x=-500 z=-4600 rot=180 {
+    note "A big house on the twins' high ground, looking down on Tidewater."
+}
+landmark kettle-umbrellas kind=umbrellas x=-716 z=2270 rot=0 {
+    note "The beach below Kettle Light: umbrellas, towels and swimmers."
+}
+landmark kettle-umbrellas-2 kind=umbrellas x=-860 z=2250 rot=10
+landmark harbor-umbrellas kind=umbrellas x=-1300 z=1958 rot=0 {
+    note "The little beach by Kettle Harbor's park: towels, umbrellas and a paddle."
+}
+landmark kettle-sandcastle kind=sandcastle x=-780 z=2262 rot=20
+landmark kettle-surf kind=surfshack x=-662 z=2264 rot=0 {
+    note "A surf shack on Kettle beach. Surfers ride in on the waves out front."
+}
+route north-speedboats kind=speedboat {
+    note "Laps of the open water off the north cliffs, clear of the north stack."
+    p -1500 -1500
+    p -900 -1300
+    p 200 -1350
+    p 300 -1900
+    p -700 -2100
+    p -1300 -2200
+    p -1700 -1700
+    p -1500 -1500
+}
+landmark balloon-sign kind=sign x=-300 z=1748 rot=0 text="BALLOONS" {
+    note "A sign at the meadow balloon field, so the colored landing spots make sense from the air."
+}
+
+// Fang, from the 2026-11-14 notes: things on the cliffs, the hidden forest, the empty
+// beaches and the open sea.
+landmark fang-crag-east kind=crag x=3940 z=2770 rot=90 {
+    note "A climbing crag on the east spur cliff. Climbers rope up and down its face all day."
+}
+landmark fang-crag-north kind=crag x=3780 z=3843 rot=270 {
+    note "The big north face. Only the bravest climb it."
+}
+landmark fang-goats kind=goats x=4100 z=2650 {
+    note "Mountain goats on the steep east slopes. Land by one and say hello."
+}
+landmark spur-goats kind=goats x=4500 z=2560
+landmark spine-goats kind=goats x=-700 z=-300 {
+    note "Goats on the home spine, nibbling between the rocks."
+}
+landmark fang-cliff-lookout kind=lookout x=3505 z=3755 rot=0 {
+    note "A lookout on the edge of Fang's great north cliff. Paragliders leap off and spiral down."
+}
+landmark hidden-treehouse kind=treehouse x=3045 z=4097 rot=120 {
+    note "A treehouse deep in the hidden forest, where nobody would think to look."
+}
+landmark hidden-gnomes kind=gnomes x=3030 z=4187 rot=30 {
+    note "A gnome gathering in the hidden forest. They seem to be having a meeting."
+}
+landmark hidden-camp kind=campsite x=2960 z=4052 rot=200
+landmark hidden-well kind=well x=2970 z=4120 rot=0
+landmark fang-beach-umbrellas kind=umbrellas x=3321 z=4334 rot=20 {
+    note "Fang's south beach, umbrellas and swimmers."
+}
+landmark fang-beach-sandcastle kind=sandcastle x=3342 z=4316 rot=10
+landmark fang-beach-surf kind=surfshack x=3298 z=4320 rot=30 {
+    note "A surf shack on Fang's south beach. Good waves here."
+}
+landmark east-cove-umbrellas kind=umbrellas x=4300 z=4160 rot=0
+landmark east-cove-picnic kind=picnic x=4414 z=4039 rot=70
+route fang-south-sail kind=yacht {
+    note "Yachts tacking about the open water south of Fang."
+    p 3000 5000
+    p 4500 5200
+    p 4800 5900
+    p 3300 6000
+    p 3000 5000
+}
+landmark cove-carpark kind=carpark x=4448 z=2476 rot=80 {
+    note "The car park at the end of the cove road, by the gondola's valley station."
 }

@@ -301,6 +301,7 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
 
   // Small, then big (a click picks a spot and asks to fly there), then the atlas.
   let size: "small" | "big" | "atlas" = "small";
+  let goalFirst = false;
   let pick: { x: number; z: number; label?: string } | null = null;
   let hover: Place | null = null;
   const ask = document.createElement("div");
@@ -370,6 +371,17 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
     legend.classList.toggle("hidden", size !== "atlas");
     if (size === "atlas" && !atlasBase) atlasBase = paint(ATLAS_PIXELS);
     if ((size === "atlas") !== (was === "atlas")) pause(size === "atlas");
+    if (size === "atlas" && was !== "atlas") {
+      // Opens on where the dragon is, close enough to see the way round, or on the goal
+      // when Show me opened it.
+      const [x, z] = (goalFirst && app.goal_marker().length ? app.goal_marker() : app.map_marker()) as unknown as number[];
+      goalFirst = false;
+      view.s = span / 3;
+      view.x = x - view.s / 2;
+      view.z = z - view.s / 2;
+      clampView();
+      wantDetail();
+    }
     if (size !== "small") {
       // Sit the buttons on the map's corner once it has grown.
       requestAnimationFrame(() => {
@@ -554,6 +566,12 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
   return {
     /** Whether the atlas is open, so the game stays paused under it. */
     atlas: () => size === "atlas",
+    /** Opens the atlas on the goal, for Show me. */
+    showGoal() {
+      if (size === "atlas") return;
+      goalFirst = true;
+      setSize("atlas");
+    },
     update(pins: number[]) {
       const now = performance.now();
       if (now - lairsAt > 2000) {
@@ -568,6 +586,7 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
       const w = shownView();
       const s = px / w.s;
       const [x, z, heading] = app.map_marker();
+      const goal = app.goal_marker();
       if (size !== "atlas") {
         const shows = [
           size,
@@ -577,6 +596,7 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
           pick ? `${pick.x},${pick.z}` : "",
           pins.join(","),
           home ? `${home.x},${home.z}` : "",
+          goal.map((g) => Math.round(g)).join(","),
         ].join(" ");
         if (shows === drawn) return;
         drawn = shows;
@@ -659,8 +679,44 @@ export function setupMinimap(app: App, touch: boolean, pause: (on: boolean) => v
         ctx.stroke();
       }
 
-      // Heading 0 faces +z, which is down on the map.
-      const r = px / (size === "atlas" ? 60 : 28);
+      // Where the red arrow points: a favor, a passenger's spot, a race's end.
+      if (goal.length === 2) {
+        const gr = px / (size === "atlas" ? 55 : 30);
+        ctx.beginPath();
+        ctx.arc(mx(goal[0]), mz(goal[1]), gr, 0, Math.PI * 2);
+        ctx.fillStyle = "#e0564a";
+        ctx.strokeStyle = "#fff8ec";
+        ctx.lineWidth = Math.max(1.5, px / 150);
+        ctx.fill();
+        ctx.stroke();
+        ctx.fillStyle = "#fff8ec";
+        ctx.font = `800 ${Math.round(gr * 1.4)}px ui-rounded, "Segoe UI", system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("!", mx(goal[0]), mz(goal[1]) + gr * 0.05);
+      }
+
+      // Heading 0 faces +z, which is down on the map. On the big map a ring and a name
+      // make the dragon easy to spot.
+      const r = px / (size === "atlas" ? 32 : 28);
+      if (size === "atlas") {
+        const dpr = px / canvas.clientWidth;
+        ctx.beginPath();
+        ctx.arc(mx(x), mz(z), r * 1.9, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(242, 132, 92, 0.22)";
+        ctx.strokeStyle = "rgba(255, 248, 236, 0.9)";
+        ctx.lineWidth = 2 * dpr;
+        ctx.fill();
+        ctx.stroke();
+        ctx.font = `800 ${Math.round(13 * dpr)}px ui-rounded, "Segoe UI", system-ui, sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 3 * dpr;
+        ctx.strokeStyle = "rgba(74, 59, 82, 0.8)";
+        ctx.fillStyle = "#fff8ec";
+        ctx.strokeText("You", mx(x), mz(z) - r * 2.6);
+        ctx.fillText("You", mx(x), mz(z) - r * 2.6);
+      }
       ctx.save();
       ctx.translate(mx(x), mz(z));
       ctx.rotate(-heading);

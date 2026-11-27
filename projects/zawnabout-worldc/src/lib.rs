@@ -993,6 +993,17 @@ impl Compiler {
                         "port",
                         "seadoors",
                         "basaltgate",
+                        "mansion",
+                        "crag",
+                        "goats",
+                        "carpark",
+                        "vineyard",
+                        "orchard",
+                        "temple",
+                        "shrine",
+                        "launchpad",
+                        "icecream",
+                        "chalkmoon",
                     ],
                     "stones",
                 );
@@ -1042,7 +1053,8 @@ impl Compiler {
                     b: [0.0; 3],
                     r: 0.0,
                     glow: 0.4,
-                    decor: "bare",
+                    // Something to find inside: crystals, mushrooms, glowworms.
+                    decor: "mixed",
                     light: false,
                 });
             }
@@ -1361,6 +1373,9 @@ impl Compiler {
                         "speedboat",
                         "motoryacht",
                         "supply",
+                        "dolphins",
+                        "geese",
+                        "albatross",
                     ],
                     "ferry",
                 );

@@ -3,7 +3,7 @@
 //! player has their own: a hoard and its lair for now, more layers later. What it keeps
 //! saves as text, a section a layer, keyed by the stable ids in `zawnabout-world/first/play.kdl`.
 
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use zawnabout_sim::dragon::{Dragon, Mode};
 use zawnabout_sim::world::World;
 
@@ -88,6 +88,13 @@ pub struct PostcardDef {
     /// Below zero, its picture looks up at it from below, as at a falls whose spot is
     /// at the top.
     pub aim: f32,
+    /// Which way the place looks (degrees, 0 along +z, 90 along +x), for a carving on
+    /// one side of a cliff: its picture is taken from out that way.
+    pub face: Option<f32>,
+    /// How high above the sea its picture aims, for a carving up a cliff.
+    pub high: Option<f32>,
+    /// What roosts there, `gull` or nothing.
+    pub nest: &'static str,
 }
 
 /// A keepsake given in thanks, added to the hoard.
@@ -244,6 +251,12 @@ pub enum ChoreKind {
     Deliver { card: usize, kind: &'static str },
 }
 
+/// Whether `me` is level enough with a postcard spot at `at` of reach `r`: a little below
+/// it, or further above, as on a tower's very top over its deck.
+fn card_level(r: f32, at: Vec3, me: Vec3) -> bool {
+    (-r.max(40.0)..r.max(70.0)).contains(&(me.y - at.y))
+}
+
 fn mix(mut x: u32) -> u32 {
     x ^= x >> 16;
     x = x.wrapping_mul(0x7FEB_352D);
@@ -274,6 +287,8 @@ pub enum Talk {
     Thanks,
     /// Still waiting: a reminder of where to look.
     Reminder,
+    /// They have a favor, but another is under way: come back after.
+    Later,
 }
 
 /// A find placed in the world.
@@ -327,6 +342,13 @@ pub struct Play {
     ride_left: bool,
     /// A townsperson's small ask, if one is going.
     pub chore: Option<Chore>,
+    /// Townspeople already helped this time round, who don't ask again.
+    pub helped: Vec<u32>,
+    /// Where drivers wait by broken-down cars, and sailors on becalmed boats, who always
+    /// want a lift.
+    pub stranded: Vec<Vec2>,
+    /// Which of those are sailors.
+    pub adrift: Vec<Vec2>,
     /// Which line each local says next.
     said: Vec<usize>,
     /// The lair the hoard is in, once one is picked.
@@ -410,14 +432,45 @@ impl Play {
             .iter()
             .map(|c| {
                 let below = c.y.map_or(5000.0, |y| y + 2.0);
-                Vec3::new(c.x, world.support_still(c.x, c.z, below), c.z)
+                let y = world.support_still(c.x, c.z, below);
+                // Out at sea, the spot is on the water, not the seabed far below.
+                let y = if c.y.is_none() {
+                    y.max(world.terrain.def.sea_level)
+                } else {
+                    y
+                };
+                Vec3::new(c.x, y, c.z)
             })
             .collect();
         let rest = |x: f32, y: Option<f32>, z: f32| {
             let below = y.map_or(5000.0, |y| y + 2.0);
             Vec3::new(x, world.support_still(x, z, below), z)
         };
-        let folk = def.locals.iter().map(|l| rest(l.x, l.y, l.z)).collect();
+        // Someone standing out in the open: if a house or a bridge has come to stand on
+        // their spot, they step to the nearest open ground close by.
+        let open = |p: Vec3| {
+            p.y - world.terrain.height(p.x, p.z).max(0.0) < 1.5
+                && !world.in_building(p + Vec3::Y)
+                && !world.afloat(p.x, p.z, p.y)
+                && world
+                    .terrain
+                    .road_spot(p.x, p.z, 3.0)
+                    .is_none_or(|r| !r.bridge)
+        };
+        let stand = |x: f32, y: Option<f32>, z: f32| {
+            let at = rest(x, y, z);
+            if y.is_some() || open(at) {
+                return at;
+            }
+            (1..10)
+                .flat_map(|k| {
+                    (0..12).map(move |a| (k as f32 * 4.0, a as f32 * std::f32::consts::FRAC_PI_6))
+                })
+                .map(|(r, a)| rest(x + a.cos() * r, None, z + a.sin() * r))
+                .find(|p| open(*p))
+                .unwrap_or(at)
+        };
+        let folk = def.locals.iter().map(|l| stand(l.x, l.y, l.z)).collect();
         let items = def
             .locals
             .iter()
@@ -501,6 +554,9 @@ impl Play {
             riding: None,
             ride_left: false,
             chore: None,
+            helped: Vec::new(),
+            stranded: Vec::new(),
+            adrift: Vec::new(),
             said: vec![0; n],
             cards,
             taken: vec![false; def.postcards.len()],
@@ -627,16 +683,14 @@ impl Play {
                 }
                 ChoreKind::Ride { card } if ch.aboard => {
                     let (c, at) = (&self.def.postcards[card], self.cards[card]);
-                    if (at.x - me.pos.x).hypot(at.z - me.pos.z) < c.r
-                        && (at.y - me.pos.y).abs() < c.r.max(40.0)
+                    if (at.x - me.pos.x).hypot(at.z - me.pos.z) < c.r && card_level(c.r, at, me.pos)
                     {
                         arrived = true;
                     }
                 }
                 ChoreKind::Deliver { card, .. } => {
                     let (c, at) = (&self.def.postcards[card], self.cards[card]);
-                    if (at.x - me.pos.x).hypot(at.z - me.pos.z) < c.r
-                        && (at.y - me.pos.y).abs() < c.r.max(40.0)
+                    if (at.x - me.pos.x).hypot(at.z - me.pos.z) < c.r && card_level(c.r, at, me.pos)
                     {
                         delivered = true;
                     }
@@ -644,12 +698,13 @@ impl Play {
                 _ => {}
             }
         }
+        if arrived || delivered {
+            self.finish_chore();
+        }
         if arrived {
-            self.chore = None;
             out.push(Event::ChoreArrived);
         }
         if delivered {
-            self.chore = None;
             out.push(Event::ChoreDelivered);
         }
         for (i, (l, at)) in self.def.lairs.iter().zip(&self.lairs).enumerate() {
@@ -693,14 +748,40 @@ impl Play {
     /// Whether the dragon stands within postcard spot `c`.
     fn near_card(&self, c: usize, me: &Dragon) -> bool {
         let (card, at) = (&self.def.postcards[c], self.cards[c]);
-        (at.x - me.pos.x).hypot(at.z - me.pos.z) < card.r
-            && (at.y - me.pos.y).abs() < card.r.max(40.0)
+        (at.x - me.pos.x).hypot(at.z - me.pos.z) < card.r && card_level(card.r, at, me.pos)
     }
 
     /// Lair `i` is not wanted now: it is offered again once the dragon has left and come
     /// back.
     pub fn decline(&mut self, i: usize) {
         self.offered = Some(i);
+    }
+
+    /// Whether someone standing at `at` is a driver waiting by a broken-down car.
+    pub fn is_stranded(&self, at: Vec3) -> bool {
+        self.stranded
+            .iter()
+            .any(|s| s.distance(Vec2::new(at.x, at.z)) < 4.0)
+    }
+
+    /// Whether someone at `at` is a sailor on a becalmed boat.
+    pub fn is_adrift(&self, at: Vec3) -> bool {
+        self.adrift
+            .iter()
+            .any(|s| s.distance(Vec2::new(at.x, at.z)) < 4.0)
+    }
+
+    /// The townsperson's small ask is done: they don't ask again.
+    pub fn finish_chore(&mut self) {
+        if let Some(c) = self.chore.take() {
+            self.helped.push(c.seed);
+        }
+    }
+
+    /// Whether a favor is under way, a local's or a townsperson's: one at a time, so
+    /// others wait until it is done.
+    pub fn busy(&self) -> bool {
+        self.chore.as_ref().is_some_and(|c| c.accepted) || self.errands.contains(&Errand::Accepted)
     }
 
     /// Whether the dragon's back is free for a passenger.
@@ -731,16 +812,32 @@ impl Play {
         rest: &dyn Fn(f32, f32) -> Vec3,
     ) -> Option<ChoreKind> {
         let h = mix(seed ^ 0xC0FF_EE11);
+        if self.helped.contains(&seed) {
+            return None;
+        }
+        // A driver by a broken-down car wants a lift to the nearest place worth going.
+        if self.is_stranded(home) {
+            return (0..self.cards.len())
+                .map(|c| (c, (self.cards[c] - home).length()))
+                .filter(|(_, d)| (250.0..2500.0).contains(d))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(card, _)| ChoreKind::Ride { card });
+        }
         if !h.is_multiple_of(2) {
             return None;
         }
+        let pick = (h / 2) % 3;
+        // A parcel goes to somewhere people live or work, not out to sea or to a whale.
+        let posted = |c: usize| {
+            let p = &self.def.postcards[c];
+            pick == 0 || (p.island != "sea" && p.id != "whales")
+        };
         let near: Vec<usize> = (0..self.cards.len())
             .filter(|c| {
                 let d = (self.cards[*c] - home).length();
-                (250.0..1800.0).contains(&d)
+                (250.0..1800.0).contains(&d) && posted(*c)
             })
             .collect();
-        let pick = (h / 2) % 3;
         if !near.is_empty() && pick < 2 {
             let card = near[(h / 8) as usize % near.len()];
             return Some(if pick == 0 {
@@ -885,6 +982,7 @@ impl Play {
                     line(&mut self.said)
                 }
             }
+            Errand::New if self.busy() => Talk::Later,
             Errand::New => Talk::Offer,
             Errand::Accepted if self.ready(i, lit) => {
                 self.errands[i] = Errand::Done;
@@ -899,6 +997,19 @@ impl Play {
     }
 
     /// Takes on local `i`'s request. A rider climbs aboard.
+    /// Lets local `i`'s favor go, as if never taken on: anything carried for it is put
+    /// back where it was found, and it can be asked for again.
+    pub fn drop_errand(&mut self, i: usize) {
+        if self.errands[i] != Errand::Accepted || self.riding == Some(i) {
+            return;
+        }
+        self.errands[i] = Errand::New;
+        if self.carrying == Some(i) {
+            self.carrying = None;
+        }
+        self.changed = true;
+    }
+
     pub fn accept(&mut self, i: usize) {
         self.errands[i] = Errand::Accepted;
         if self.def.locals[i]
@@ -1009,6 +1120,7 @@ impl Play {
         self.carrying = None;
         self.riding = None;
         self.chore = None;
+        self.helped.clear();
         self.lair = None;
         self.offered = None;
         self.hinted = None;
@@ -1109,6 +1221,10 @@ mod tests {
             }
             if w.in_building(p + Vec3::Y) {
                 bad.push(format!("{id} stands inside a building"));
+            }
+            // Under a bridge, by its piers, they would be drawn inside the stonework.
+            if w.terrain.road_spot(p.x, p.z, 3.0).is_some_and(|r| r.bridge) {
+                bad.push(format!("{id} stands under a bridge at {p}"));
             }
         };
         for (l, p) in PLAY.locals.iter().zip(&play.folk) {

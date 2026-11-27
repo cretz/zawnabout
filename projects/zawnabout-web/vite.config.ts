@@ -28,7 +28,8 @@ function sameOrigin(req: IncomingMessage): boolean {
   const origin = req.headers.origin;
   if (!origin) return true;
   try {
-    return new URL(origin).host === req.headers.host;
+    // HTTP/2, which the LAN mode's HTTPS uses, names the host in `:authority` instead.
+    return new URL(origin).host === (req.headers.host ?? req.headers[":authority"]);
   } catch {
     return false;
   }
