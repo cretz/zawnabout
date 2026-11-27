@@ -860,10 +860,10 @@ impl Game {
             let (i, lit) = sim.beacon(id)?;
             (!lit).then(|| world.beacons[i].flame)
         };
-        let Some(goal) = self
+        let Some((goal, letgo)) = self
             .play
             .as_ref()
-            .and_then(|p| crate::play::favor_goal(p, &beacon, me))
+            .and_then(|p| crate::play::favor_let_go(p, &beacon, me))
         else {
             return false;
         };
@@ -880,7 +880,7 @@ impl Game {
             title: goal.name,
             body: format!("Still looking for this one. {how}"),
             foot: "Favor under way".into(),
-            kind: crate::book::CardKind::Favor,
+            kind: crate::book::CardKind::Favor(letgo),
         });
         self.release_keys();
         true
@@ -1696,13 +1696,9 @@ impl Game {
                         self.car_race = Some(r);
                     }
                 }
-                Do::StopLooking => {
-                    let me = self.player_dragon().pos;
-                    let world = &self.sim.world;
-                    let beacon =
-                        |id: &str| world.beacons.iter().find(|b| b.id == id).map(|b| b.flame);
+                Do::StopLooking(what) => {
                     if let Some(play) = &mut self.play {
-                        crate::play::stop_looking(play, &beacon, me);
+                        crate::play::let_go(play, what);
                         self.asks.push(Ask::Save);
                     }
                 }

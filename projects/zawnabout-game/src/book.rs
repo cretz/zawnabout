@@ -95,8 +95,9 @@ pub enum CardKind {
     Offer(usize),
     /// Local `i` reminds you of their favor under way, which you can let go.
     Reminder(usize),
-    /// Asked in flight with nobody aboard: the favor being looked for.
-    Favor,
+    /// Asked in flight with nobody aboard: the favor being looked for, and how to let
+    /// it go if it can be.
+    Favor(Option<crate::play::LetGo>),
     /// A driver offers a race to where their car is going.
     Drive,
     /// Local `i` sees their lost thing in the hoard.
@@ -334,8 +335,8 @@ pub enum Do {
     HopOff,
     /// Let local `i`'s favor go.
     Drop(usize),
-    /// Stop looking for the nearest favor under way.
-    StopLooking,
+    /// Stop looking for the favor shown.
+    StopLooking(crate::play::LetGo),
     /// Race the car whose driver just offered.
     CarRace,
 }
@@ -525,7 +526,7 @@ impl Book {
             CardKind::Offer(i) if yes => vec![Do::Accept(i)],
             CardKind::Return(i) if yes => vec![Do::GiveBack(i)],
             CardKind::Story(s) if yes => vec![Do::Begin(s)],
-            CardKind::Rider | CardKind::Favor if yes => vec![Do::RiderMap],
+            CardKind::Rider | CardKind::Favor(_) if yes => vec![Do::RiderMap],
             CardKind::Reminder(_) if yes => vec![],
             CardKind::Drive if yes => vec![Do::CarRace],
             CardKind::Reminder(i) => vec![Do::Drop(i)],
@@ -538,7 +539,7 @@ impl Book {
     fn card_alt(&mut self) -> Vec<Do> {
         match self.cards.remove(0).kind {
             CardKind::Rider => vec![Do::HopOff],
-            CardKind::Favor => vec![Do::StopLooking],
+            CardKind::Favor(Some(what)) => vec![Do::StopLooking(what)],
             CardKind::Reminder(_) => vec![Do::RiderMap],
             _ => vec![],
         }
@@ -553,7 +554,7 @@ impl Book {
                 "KeyH"
                     if matches!(
                         self.cards[0].kind,
-                        CardKind::Rider | CardKind::Favor | CardKind::Reminder(_)
+                        CardKind::Rider | CardKind::Favor(Some(_)) | CardKind::Reminder(_)
                     ) =>
                 {
                     self.card_alt()
@@ -2260,11 +2261,12 @@ fn draw_card(d: &mut Draw, card: &Card, ui: &Ui, hits: &mut Vec<(Vec2, Vec2, Hit
             ("Race you there!", Hit::Yes),
             ("Just riding along", Hit::No),
         ],
-        CardKind::Favor => &[
+        CardKind::Favor(Some(_)) => &[
             ("Show me", Hit::Yes),
             ("Stop looking", Hit::Alt),
             ("Keep going", Hit::No),
         ],
+        CardKind::Favor(None) => &[("Show me", Hit::Yes), ("Keep going", Hit::No)],
         CardKind::Return(_) => &[("Give it back", Hit::Yes), ("Keep it for now", Hit::No)],
         CardKind::Story(_) => &[("I'll light them!", Hit::Yes), ("Maybe later", Hit::No)],
         CardKind::Rider => &[

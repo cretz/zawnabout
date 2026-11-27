@@ -347,14 +347,9 @@ impl Dragon {
 
         if let Some(target) = input.land_at.map(|t| world.perch_spot(t))
             && self.swoop.as_ref().is_none_or(|s| s.target != target)
+            && let Some(swoop) = Swoop::plan(world, self.pos, self.vel, target, p.stand_height)
         {
-            self.swoop = Some(Swoop::plan(
-                world,
-                self.pos,
-                self.vel,
-                target,
-                p.stand_height,
-            ));
+            self.swoop = Some(swoop);
             self.set_mode(Mode::Air);
         }
         let steering = input.pitch.abs() > 0.15

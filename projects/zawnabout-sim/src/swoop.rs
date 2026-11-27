@@ -53,22 +53,29 @@ fn bezier(p: &[Vec3; 4], t: f32) -> Vec3 {
 impl Swoop {
     /// Plans a flight from `pos` (body center, moving at `vel`) to feet at `target`. A
     /// flight that would pass through rock, such as from one cave to another, stops short
-    /// of the rock instead, on the ground where its way is still clear.
-    pub fn plan(world: &World, pos: Vec3, vel: Vec3, target: Vec3, stand_height: f32) -> Self {
+    /// of the rock instead, on the ground where its way is still clear. None when no clear
+    /// way is found.
+    pub fn plan(
+        world: &World,
+        pos: Vec3,
+        vel: Vec3,
+        target: Vec3,
+        stand_height: f32,
+    ) -> Option<Self> {
         let mut s = Self::plan_once(world, pos, vel, target, stand_height);
         // Out in the open the arc clears everything itself. Only a flight into or out
         // of a cave can find rock in its way.
         let covered = |p: Vec3| (1..=60).any(|k| world.solid_at(p + Vec3::Y * (k as f32 * 5.0)));
         if s.carrier.is_some() || !(covered(pos) || covered(target + Vec3::Y * 2.0)) {
-            return s;
+            return Some(s);
         }
         for _ in 0..4 {
             let Some(t) = s.through_rock(world) else {
-                break;
+                return Some(s);
             };
             let back = bezier(&s.points, (t - 0.08).max(0.0));
             if back.distance(pos) < 10.0 {
-                break;
+                return None;
             }
             let ground = world.support(back.x, back.z, back.y);
             s = Self::plan_once(
@@ -79,7 +86,7 @@ impl Swoop {
                 stand_height,
             );
         }
-        s
+        s.through_rock(world).is_none().then_some(s)
     }
 
     /// The first point along the flight, as a fraction, where the body is deep in rock.
@@ -302,7 +309,7 @@ mod tests {
             world.solid_at(Vec3::new(x, 200.0, z)),
             "the needle stands midway"
         );
-        let s = Swoop::plan(&world, from, Vec3::ZERO, to, stand);
+        let s = Swoop::plan(&world, from, Vec3::ZERO, to, stand).expect("a clear way");
         for i in 1..SAMPLES {
             let p = bezier(&s.points, i as f32 / SAMPLES as f32);
             assert!(!world.solid_at(p), "flies through rock at {p}");

@@ -709,6 +709,12 @@ impl Traffic {
                 1
             };
             for c in 0..copies {
+                // The second of two is another ordinary car.
+                let variant = if c == 0 {
+                    variant
+                } else {
+                    (variant + 1) % CAR_KINDS
+                };
                 push(
                     &mut t,
                     Vehicle {
@@ -729,11 +735,7 @@ impl Traffic {
                         },
                         lane: 0.0,
                         lead: 0.0,
-                        variant: if c == 0 {
-                            variant
-                        } else {
-                            (variant + 1) % CAR_KINDS
-                        },
+                        variant,
                     },
                 );
             }
@@ -1111,7 +1113,8 @@ impl Traffic {
         if path.stops.is_empty() {
             return None;
         }
-        let (s, _) = path.timetable(time + v.offset / v.speed, v.speed);
+        let lag = self.lag.get(i).copied().unwrap_or(0.0);
+        let (s, _) = path.timetable(time - lag + v.offset / v.speed, v.speed);
         let next = path
             .stops
             .iter()

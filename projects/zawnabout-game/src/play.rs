@@ -78,6 +78,13 @@ pub struct Rider {
     pub about: String,
 }
 
+/// Which favor under way can be let go: local `i`'s, or the townsperson's small ask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LetGo {
+    Local(usize),
+    Chore,
+}
+
 /// Where whoever or whatever the dragon carries is going: a passenger's spot, or the
 /// owner of a lost thing in its arms. Shown on screen the whole way.
 pub struct Goal {
@@ -1329,37 +1336,49 @@ mod on {
     /// beacon's flame is.
     /// Where to go for each favor under way: what to go and get, and who it goes back
     /// to. `beacon` says where a beacon's flame is.
-    pub fn favors(play: &Play, beacon: &dyn Fn(&str) -> Option<Vec3>) -> Vec<Goal> {
+    /// Every favor under way, and which can be let go.
+    pub fn favors(
+        play: &Play,
+        beacon: &dyn Fn(&str) -> Option<Vec3>,
+    ) -> Vec<(Goal, Option<LetGo>)> {
         let def = play.def;
-        let mark = |at: Vec3, _: bool, label: &str| Goal {
-            name: label.into(),
-            at,
-            r: 8.0,
-        };
         let mut favors = Vec::new();
         for (i, l) in def.locals.iter().enumerate() {
             let Some(r) = &l.request else { continue };
             let home = play.folk[i];
+            // A found thing to give back is no favor taken on, so nothing to let go.
+            let letgo = (play.errands[i] == Errand::Accepted && play.riding != Some(i))
+                .then_some(LetGo::Local(i));
+            let mut mark = |at: Vec3, _: bool, label: &str| {
+                favors.push((
+                    Goal {
+                        name: label.into(),
+                        at,
+                        r: 8.0,
+                    },
+                    letgo,
+                ))
+            };
             match play.errands[i] {
                 Errand::Accepted => match r.kind {
                     "fetch" => {
                         if play.carrying == Some(i) {
-                            favors.push(mark(home, false, &format!("Back to {}", l.name)));
+                            mark(home, false, &format!("Back to {}", l.name));
                         } else if let (Some(at), Some(item)) = (play.items[i], &r.item) {
-                            favors.push(mark(at, false, item.name));
+                            mark(at, false, item.name);
                         }
                     }
                     // `beacon` knows only beacons still dark: one lit means back to them.
                     "light" => match beacon(r.target) {
-                        Some(at) => favors.push(mark(at, false, "The beacon")),
-                        None => favors.push(mark(home, false, &format!("Back to {}", l.name))),
+                        Some(at) => mark(at, false, "The beacon"),
+                        None => mark(home, false, &format!("Back to {}", l.name)),
                     },
                     "postcard" | "ride" => {
                         if let Some(c) = def.postcards.iter().position(|c| c.id == r.target) {
                             if play.taken[c] && r.kind == "postcard" {
-                                favors.push(mark(home, false, &format!("Back to {}", l.name)));
+                                mark(home, false, &format!("Back to {}", l.name));
                             } else {
-                                favors.push(mark(play.cards[c], false, def.postcards[c].name));
+                                mark(play.cards[c], false, def.postcards[c].name);
                             }
                         }
                     }
@@ -1372,7 +1391,7 @@ mod on {
                         .position(|f| f.id == r.target)
                         .is_some_and(|f| play.found[f]);
                     if have {
-                        favors.push(mark(home, false, &format!("Back to {}", l.name)));
+                        mark(home, false, &format!("Back to {}", l.name));
                     }
                 }
                 _ => {}
@@ -1382,6 +1401,16 @@ mod on {
             && ch.accepted
         {
             let who = crate::talk::name(ch.seed);
+            let mark = |at: Vec3, _: bool, label: &str| {
+                (
+                    Goal {
+                        name: label.into(),
+                        at,
+                        r: 8.0,
+                    },
+                    Some(LetGo::Chore),
+                )
+            };
             match ch.kind {
                 ChoreKind::Fetch { at, kind } if !ch.aboard => {
                     favors.push(mark(at, false, &format!("{who}'s {}", thing_name(kind))))
@@ -1403,9 +1432,18 @@ mod on {
         beacon: &dyn Fn(&str) -> Option<Vec3>,
         me: Vec3,
     ) -> Option<Goal> {
+        favor_let_go(play, beacon, me).map(|(g, _)| g)
+    }
+
+    /// The nearest favor under way to `me`, and whether it can be let go.
+    pub fn favor_let_go(
+        play: &Play,
+        beacon: &dyn Fn(&str) -> Option<Vec3>,
+        me: Vec3,
+    ) -> Option<(Goal, Option<LetGo>)> {
         favors(play, beacon)
             .into_iter()
-            .min_by(|a, b| a.at.distance(me).total_cmp(&b.at.distance(me)))
+            .min_by(|a, b| a.0.at.distance(me).total_cmp(&b.0.at.distance(me)))
     }
 
     /// Lets local `i`'s favor go.
@@ -1413,23 +1451,15 @@ mod on {
         play.drop_errand(i);
     }
 
-    /// Stops looking for the nearest favor under way: a townsperson's small ask, or the
-    /// nearest local's favor.
-    pub fn stop_looking(play: &mut Play, beacon: &dyn Fn(&str) -> Option<Vec3>, me: Vec3) {
-        if play.chore.as_ref().is_some_and(|c| c.accepted) {
-            play.chore = None;
-            return;
-        }
-        let near = (0..play.def.locals.len())
-            .filter(|i| play.errands[*i] == Errand::Accepted && play.riding != Some(*i))
-            .min_by(|a, b| {
-                play.folk[*a]
-                    .distance(me)
-                    .total_cmp(&play.folk[*b].distance(me))
-            });
-        let _ = beacon;
-        if let Some(i) = near {
-            play.drop_errand(i);
+    /// Stops looking for the favor that was shown.
+    pub fn let_go(play: &mut Play, what: LetGo) {
+        match what {
+            LetGo::Chore => {
+                if play.chore.as_ref().is_some_and(|c| c.accepted) {
+                    play.chore = None;
+                }
+            }
+            LetGo::Local(i) => play.drop_errand(i),
         }
     }
 
@@ -1443,7 +1473,7 @@ mod on {
         };
         let favors: Vec<Mark> = favors(play, beacon)
             .into_iter()
-            .map(|g| mark(g.at, false, &g.name))
+            .map(|(g, _)| mark(g.at, false, &g.name))
             .collect();
         out.push(MarkGroup {
             key: "favors".into(),
@@ -2379,7 +2409,14 @@ mod on {
     pub fn drop_errand(play: &mut Play, _: usize) {
         match *play {}
     }
-    pub fn stop_looking(play: &mut Play, _: &dyn Fn(&str) -> Option<Vec3>, _: Vec3) {
+    pub fn favor_let_go(
+        play: &Play,
+        _: &dyn Fn(&str) -> Option<Vec3>,
+        _: Vec3,
+    ) -> Option<(Goal, Option<LetGo>)> {
+        match *play {}
+    }
+    pub fn let_go(play: &mut Play, _: LetGo) {
         match *play {}
     }
     pub fn riding_folk(play: &Play) -> Option<u32> {

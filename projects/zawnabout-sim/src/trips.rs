@@ -312,8 +312,19 @@ pub fn car_trips(terrain: &Terrain, places: &[Vec2]) -> Vec<Trip> {
             });
         }
     }
-    // Dead ends, road ends that join nothing, are stops too.
-    stops.extend((0..spots.len()).filter(|&i| node[i] == i && links[i].len() == 1));
+    // Dead ends, road ends that join nothing, are stops too, but only on a street among
+    // buildings, like the calls. The rest stay in the road net for the way there.
+    let street = |i: usize| {
+        on_road.iter().enumerate().any(|(r, list)| {
+            if w[r] >= 12.0 || !list.contains(&i) {
+                return false;
+            }
+            let p = point(&pts[r], spots[i].at);
+            let p = Vec2::new(p.x, p.z);
+            places.iter().filter(|q| q.distance(p) < 90.0).count() >= 6
+        })
+    };
+    stops.extend((0..spots.len()).filter(|&i| node[i] == i && links[i].len() == 1 && street(i)));
     let stops: Vec<usize> = stops.into_iter().map(|i| node[i]).collect();
     // Shortest ways from a node to every other.
     let ways = |from: usize| {
