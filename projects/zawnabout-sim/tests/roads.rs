@@ -749,14 +749,14 @@ fn vans() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(20.0);
-    for v in &w.traffic.vehicles {
+    for (i, v) in w.traffic.vehicles.iter().enumerate() {
         if v.kind != Kind::Car || v.variant != zawnabout_sim::traffic::VAN {
             continue;
         }
         for k in 0..400 {
             let t = from + k as f32 * 0.5;
             if w.traffic
-                .halted_for(v, t)
+                .halted_for(i, t)
                 .is_some_and(|h| (2.0..2.5).contains(&h))
             {
                 let p = w.traffic.pose(v, t);

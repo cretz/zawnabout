@@ -1100,9 +1100,12 @@ impl Traffic {
 
     /// Where vehicle `v` is at `time` seconds. The path is rounded off, so corners are
     /// curves and riders are never jolted.
-    /// How long `v` has been halted at a stop at `time`, if it is.
-    pub fn halted_for(&self, v: &Vehicle, time: f32) -> Option<f32> {
-        self.paths[v.path].halted_for(time + v.offset / v.speed, v.speed)
+    /// How long vehicle `i` has been halted at a stop at `time`, if it is, held back by
+    /// any queue like `pose_of`.
+    pub fn halted_for(&self, i: usize, time: f32) -> Option<f32> {
+        let v = &self.vehicles[i];
+        let lag = self.lag.get(i).copied().unwrap_or(0.0);
+        self.paths[v.path].halted_for(time - lag + v.offset / v.speed, v.speed)
     }
 
     /// Where vehicle `i` stops next, for a vehicle on a line with stops, such as a car

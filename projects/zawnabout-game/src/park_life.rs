@@ -2512,7 +2512,7 @@ impl ParkLife {
             if v.kind != Kind::Car || v.variant != VAN {
                 continue;
             }
-            let Some(t) = traffic.halted_for(v, sim_time) else {
+            let Some(t) = traffic.halted_for(i, sim_time) else {
                 continue;
             };
             let p = traffic.pose_of(i, sim_time);
